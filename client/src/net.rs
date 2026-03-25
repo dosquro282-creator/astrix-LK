@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use parking_lot::Mutex;
 
-pub const DEFAULT_API_BASE: &str = "http://astrix.astrix.crazedns.ru";
+pub const DEFAULT_API_BASE: &str = "http://104.128.136.203:8080";
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 

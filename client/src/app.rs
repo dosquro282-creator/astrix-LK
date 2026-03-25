@@ -53,6 +53,7 @@ pub struct AstrixApp {
 impl AstrixApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let settings = ui::Settings::load();
+        let api = ApiClient::new(Some(settings.api_base.clone()));
         let mut auth_state = ui::AuthState::default();
         if settings.remember_me {
             auth_state.username = settings.saved_username.clone();
@@ -69,7 +70,7 @@ impl AstrixApp {
                 dark_mode: settings.dark_mode,
                 ..Default::default()
             })),
-            api: ApiClient::new(None),
+            api,
             ws_events: new_event_queue(),
             ws_tx: None,
             egui_ctx: None,

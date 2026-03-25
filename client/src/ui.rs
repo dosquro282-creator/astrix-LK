@@ -67,11 +67,17 @@ use crate::voice::{VoiceCmd, VideoFrame, VideoFrames, VoiceSessionStats, video_f
 
 const SETTINGS_PATH: &str = "astrix_settings.json";
 
+fn default_api_base() -> String {
+    crate::net::DEFAULT_API_BASE.to_string()
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct Settings {
     pub(crate) remember_me: bool,
     pub(crate) saved_username: String,
     pub(crate) saved_password: String,
+    #[serde(default = "default_api_base")]
+    pub(crate) api_base: String,
     pub(crate) last_server: HashMap<String, i64>,
     #[serde(default)]
     pub(crate) dark_mode: bool,
@@ -95,6 +101,7 @@ impl Default for Settings {
             remember_me: false,
             saved_username: String::new(),
             saved_password: String::new(),
+            api_base: default_api_base(),
             last_server: HashMap::new(),
             dark_mode: false,
             voice_volume_by_user: HashMap::new(),
@@ -113,6 +120,9 @@ impl Settings {
         };
         if s.decode_path.is_empty() || (s.decode_path != "cpu" && s.decode_path != "mft") {
             s.decode_path = "mft".to_string();
+        }
+        if s.api_base.trim().is_empty() {
+            s.api_base = default_api_base();
         }
         s.video_decoder_gamma = s.video_decoder_gamma.clamp(0.0, 3.0);
         #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
