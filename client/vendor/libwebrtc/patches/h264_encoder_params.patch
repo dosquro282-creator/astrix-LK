@@ -1,0 +1,99 @@
+diff --git a/modules/video_coding/codecs/h264/h264_encoder_impl.cc b/modules/video_coding/codecs/h264/h264_encoder_impl.cc
+--- a/modules/video_coding/codecs/h264/h264_encoder_impl.cc
++++ b/modules/video_coding/codecs/h264/h264_encoder_impl.cc
+@@ -349,8 +349,10 @@ SEncParamExt H264EncoderImpl::CreateEncoderParams(size_t i) const {
+   // The following parameters are extension parameters (they're in SEncParamExt,
+   // not in SEncParamBase).
+ -  encoder_params.bEnableFrameSkip = configurations_[i].frame_dropping_on;
++  // Astrix: force frame skip for realtime (stabilizes FPS when bitrate exceeded).
++  encoder_params.bEnableFrameSkip = true;
+   // |uiIntraPeriod| - multiple of GOP size
+   // |keyFrameInterval| - number of frames
+-  encoder_params.uiIntraPeriod = configurations_[i].key_frame_interval;
++  // Astrix: 2-second keyframe interval for screen share (reduces IDR stalls).
++  encoder_params.uiIntraPeriod = static_cast<unsigned int>(
++      configurations_[i].max_frame_rate * 2);
+   // Reuse SPS id if possible. This helps to avoid reset of chromium HW decoder
+   // on each key-frame.
+   // Note that WebRTC resets encoder on resolution change which makes all
+@@ -358,7 +360,11 @@ SEncParamExt H264EncoderImpl::CreateEncoderParams(size_t i) const {
+   // EParameterSetStrategy modes except INCREASING_ID (default) essentially
+   // equivalent to CONSTANT_ID.
+   encoder_params.eSpsPpsIdStrategy = SPS_LISTING;
+-  encoder_params.uiMaxNalSize = 0;
++  // Astrix: limit NAL size to 1200 bytes to reduce keyframe decode stalls.
++  encoder_params.uiMaxNalSize = 1200;
++  // Astrix: single reference frame for low latency and reduced decode stalls.
++  encoder_params.iNumRefFrame = 1;
+   // Threading model: use auto.
+   // 0: auto (dynamic imp. internal encoder)
+   // 1: single thread (default value)
+   // >1: number of threads
+   encoder_params.iMultipleThreadIdc = NumberOfThreads(
+       encoder_params.iPicWidth, encoder_params.iPicHeight, number_of_cores_);
+   // The base spatial layer 0 is the only one we use.
+   encoder_params.sSpatialLayers[0].iVideoWidth = encoder_params.iPicWidth;
+   encoder_params.sSpatialLayers[0].iVideoHeight = encoder_params.iPicHeight;
+   encoder_params.sSpatialLayers[0].fFrameRate = encoder_params.fMaxFrameRate;
+   encoder_params.sSpatialLayers[0].iSpatialBitrate =
+       encoder_params.iTargetBitrate;
+   encoder_params.sSpatialLayers[0].iMaxSpatialBitrate =
+       encoder_params.iMaxBitrate;
+   encoder_params.iTemporalLayerNum = configurations_[i].num_temporal_layers;
+   if (encoder_params.iTemporalLayerNum > 1) {
+     encoder_params.iNumRefFrame = 1;
+   }
+   RTC_LOG(INFO) << "OpenH264 version is " << OPENH264_MAJOR << "."
+                 << OPENH264_MINOR;
+   switch (packetization_mode_) {
+   case H264PacketizationMode::SingleNalUnit:
+     // Limit the size of the packets produced.
+     encoder_params.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+     encoder_params.sSpatialLayers[0].sSliceArgument.uiSliceMode =
+         SM_SIZELIMITED_SLICE;
+     encoder_params.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint =
+         static_cast<unsigned int>(max_payload_size_);
+     RTC_LOG(INFO) << "Encoder is configured with NALU constraint: "
+                   << max_payload_size_ << " bytes";
+     break;
+@@ -553,9 +553,25 @@
+   case H264PacketizationMode::NonInterleaved:
+-    // When uiSliceMode = SM_FIXEDSLCNUM_SLICE, uiSliceNum = 0 means auto
++    // Astrix: multi-slice for parallel encode/decode (720p→2-3, 1080p→4, 1440p→6).
++    // Capped by iMultipleThreadIdc. bEnableAdaptiveQuant=false workaround for
++    // OpenH264 rate controller bug with uiSliceNum>1 (cisco/openh264#2591).
++    {
++      int pixels = encoder_params.iPicWidth * encoder_params.iPicHeight;
++      int max_threads = encoder_params.iMultipleThreadIdc;
++      int slice_num = 1;
++      float fps = configurations_[i].max_frame_rate;
++      if (pixels >= 2560 * 1440) {
++        // 1440p: 30→4, 60→6, 90→6
++        slice_num = (fps >= 60.0f) ? 6 : 4;
++      } else if (pixels >= 1920 * 1080) {
++        // 1080p: 30→4, 60→4, 120→6
++        slice_num = (fps >= 120.0f) ? 6 : 4;
++      } else if (pixels > 1280 * 720) {
++        // between 720p and 1080p (not used in current presets, safety)
++        slice_num = (fps >= 60.0f) ? 4 : 3;
++      } else if (pixels > 640 * 480) {
++        // 720p: 30→2, 60→3, 120→4
++        if (fps >= 120.0f) slice_num = 4;
++        else if (fps >= 60.0f) slice_num = 3;
++        else slice_num = 2;
++      }
++      if (slice_num > max_threads) {
++        slice_num = max_threads;
++      }
++      encoder_params.sSpatialLayers[0].sSliceArgument.uiSliceNum = slice_num;
++      if (slice_num > 1) {
++        encoder_params.bEnableAdaptiveQuant = false;
++      }
++    }
+-    // design it with cpu core number.
+-    // TODO(sprang): Set to 0 when we understand why the rate controller borks
+-    // when uiSliceNum > 1.
+-    encoder_params.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+     encoder_params.sSpatialLayers[0].sSliceArgument.uiSliceMode =
+         SM_FIXEDSLCNUM_SLICE;
+     break;

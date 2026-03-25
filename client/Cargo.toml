@@ -1,0 +1,56 @@
+[package]
+name = "astrix-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = { version = "0.28", default-features = false, features = ["glow"] }
+egui = "0.28"
+egui_glow = "0.28"
+egui_extras = { version = "0.28", features = ["image"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rand = "0.8"
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+reqwest = { version = "0.11", features = ["json", "rustls-tls", "stream"] }
+tokio = { version = "1.37", features = ["rt-multi-thread", "macros"] }
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+url = "2.5"
+parking_lot = "0.12"
+thiserror = "1.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+rfd = "0.14"
+livekit = { version = "0.7", features = ["default"] }
+webrtc-sys = { path = "vendor/rust-sdks/webrtc-sys", optional = true }
+cxx = { version = "1.0", optional = true }
+cpal = "0.15"
+xcap = "0.0.12"
+windows-capture = { version = "1.5", optional = true }
+windows = { version = "0.61", optional = true, features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",   # DXGI_FORMAT, VIEW_DESC (Phase 3)
+    "Win32_Graphics_OpenGL",        # wglGetProcAddress для WGL_NV_DX_interop2 (Phase 3.5)
+    "Win32_Graphics_Direct3D_Fxc",  # D3DCompile for HLSL (Phase 3)
+    # Phase 0.2: MFT H.264 encoder, IMFDXGIBuffer, D3D11VideoProcessor
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",             # VARIANT for ICodecAPI SetValue
+    "Win32_System_Variant",         # VARIANT::from(u32) for ICodecAPI (B-frames=0, low latency)
+    "Win32_System_Threading",       # SetThreadPriority for encoder thread (Phase 4.4)
+] }
+
+[features]
+default = ["wgc-capture"]
+wgc-capture = ["dep:windows-capture", "dep:windows", "dep:webrtc-sys", "dep:cxx"]
+
+# FramePool with 3 buffers (crate default is 1; with 1, pool overflows if on_frame_arrived doesn't take frame immediately).
+# Phase 1: livekit-rs fork for NativeEncodedVideoSource (zero-copy MFT H.264 pipeline)
+[patch.crates-io]
+windows-capture = { path = "vendor/windows-capture" }
+livekit = { path = "vendor/rust-sdks/livekit" }
+libwebrtc = { path = "vendor/rust-sdks/libwebrtc" }
+webrtc-sys = { path = "vendor/rust-sdks/webrtc-sys" }
+

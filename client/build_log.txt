@@ -1,0 +1,244 @@
+﻿cargo : warning: unexpected `cfg` condition value: `serde`
+C:\Users\Korya\AppData\Local\Temp\ps-script-1d7a06d1-c969-441f-9708-ca499eb6da86.ps1:82 знак:33
++ cd c:\MyProjects\Astrix\client; cargo build 2>&1 | Out-File -FilePath ...
++                                 ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unexpe... value: `serde`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  --> vendor\rust-sdks\livekit-protocol\src\lib.rs:25:7
+   |
+25 | #[cfg(feature = "serde")]
+   |       ^^^^^^^^^^^^^^^^^ help: remove the condition
+   |
+   = note: no expected values for `feature`
+   = help: consider adding `serde` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about chec
+king conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+
+   Compiling webrtc-sys v0.3.23 (C:\MyProjects\Astrix\client\vendor\rust-sdks\webrtc-sys)
+warning: `livekit-protocol` (lib) generated 1 warning
+warning: use of deprecated enum `services::sip::ListSIPTrunkFilter`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:260:17
+    |
+260 |         filter: ListSIPTrunkFilter,
+    |                 ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated function `base64::encode`: Use Engine::encode
+   --> vendor\rust-sdks\livekit-api\src\signal_client\signal_stream.rs:159:64
+    |
+159 |                         let auth = format!("Basic {}", base64::encode(auth));
+    |                                                                ^^^^^^
+
+warning: use of deprecated field `livekit_protocol::CreateIngressRequest::bypass_transcoding`
+  --> vendor\rust-sdks\livekit-api\src\services\ingress.rs:93:21
+   |
+93 |                     bypass_transcoding: options.bypass_transcoding,
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `livekit_protocol::UpdateIngressRequest::bypass_transcoding`
+   --> vendor\rust-sdks\livekit-api\src\services\ingress.rs:123:21
+    |
+123 |                     bypass_transcoding: options.bypass_transcoding,
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `livekit_protocol::CreateSipDispatchRuleRequest::name`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:356:21
+    |
+356 |                     name: options.name,
+    |                     ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `livekit_protocol::CreateSipDispatchRuleRequest::metadata`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:357:21
+    |
+357 |                     metadata: options.metadata,
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `livekit_protocol::CreateSipDispatchRuleRequest::trunk_ids`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:359:21
+    |
+359 |                     trunk_ids: options.trunk_ids.to_owned(),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `livekit_protocol::CreateSipDispatchRuleRequest::inbound_numbers`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:360:21
+    |
+360 |                     inbound_numbers: options.allowed_numbers.to_owned(),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `livekit_protocol::CreateSipDispatchRuleRequest::hide_phone_number`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:361:21
+    |
+361 |                     hide_phone_number: options.hide_phone_number,
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `livekit_protocol::CreateSipDispatchRuleRequest::rule`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:362:21
+    |
+362 |                     rule: Some(proto::SipDispatchRule { rule: Some(rule.to_owned()) }),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `livekit_protocol::CreateSipParticipantRequest::play_ringtone`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:450:21
+    |
+450 |                     play_ringtone: options.play_dialtone.unwrap_or(false),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `filter`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:260:9
+    |
+260 |         filter: ListSIPTrunkFilter,
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_filter`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `filter`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:283:9
+    |
+283 |         filter: ListSIPInboundTrunkFilter,
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_filter`
+
+warning: unused variable: `filter`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:308:9
+    |
+308 |         filter: ListSIPOutboundTrunkFilter,
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_filter`
+
+warning: unused variable: `filter`
+   --> vendor\rust-sdks\livekit-api\src\services\sip.rs:377:9
+    |
+377 |         filter: ListSIPDispatchRuleFilter,
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_filter`
+
+warning: fields `region` and `distance` are never read
+  --> vendor\rust-sdks\livekit-api\src\signal_client\region.rs:31:9
+   |
+30 | pub struct RegionUrlInfo {
+   |            ------------- fields in this struct
+31 |     pub region: String,
+   |         ^^^^^^
+32 |     pub url: String,
+33 |     pub distance: String,
+   |         ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `livekit-api` (lib) generated 16 warnings (run `cargo fix --lib -p livekit-api` to apply 4 suggestions)
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor\windows-capture\src\frame.rs:195:19
+    |
+195 |     pub fn buffer(&mut self) -> Result<FrameBuffer, Error> {
+    |                   ^^^^^^^^^            ^^^^^^^^^^^ the same lifetime is hidden here
+    |                   |
+    |                   the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+195 |     pub fn buffer(&mut self) -> Result<FrameBuffer<'_>, Error> {
+    |                                                   ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor\windows-capture\src\frame.rs:265:9
+    |
+265 |         &mut self,
+    |         ^^^^^^^^^ the lifetime is elided here
+...
+270 |     ) -> Result<FrameBuffer, Error> {
+    |                 ^^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+270 |     ) -> Result<FrameBuffer<'_>, Error> {
+    |                            ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor\windows-capture\src\frame.rs:357:37
+    |
+357 |     pub fn buffer_without_title_bar(&mut self) -> Result<FrameBuffer, Error> {
+    |                                     ^^^^^^^^^            ^^^^^^^^^^^ the same lifetime is hidden here
+    |                                     |
+    |                                     the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+357 |     pub fn buffer_without_title_bar(&mut self) -> Result<FrameBuffer<'_>, Error> {
+    |                                                                     ++++
+
+warning: `windows-capture` (lib) generated 3 warnings (run `cargo fix --lib -p windows-capture` to apply 3 suggestions)
+warning: webrtc-sys@0.3.23: ToolExecError: command did not execute successfully (status code exit code: 2): "C:\\Progra
+m Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\cl.exe" "-nolo
+go" "-MT" "-Z7" "-Brepro" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\webrtc-sys-13ffa41522a294a7\\out\
+\cxxbridge\\include" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\webrtc-sys-13ffa41522a294a7\\out\\cxxb
+ridge\\crate" "-I" "./include" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\scratch-2a0faabf5e80148f\\ou
+t\\livekit_webrtc\\livekit/win-x64-release-webrtc-0001d84-2/win-x64-release\\include" "-I" "C:\\MyProjects\\Astrix\\cli
+ent\\target\\debug\\build\\scratch-2a0faabf5e80148f\\out\\livekit_webrtc\\livekit/win-x64-release-webrtc-0001d84-2/win-
+x64-release\\include\\third_party/abseil-cpp/" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\scratch-2a0f
+aabf5e80148f\\out\\livekit_webrtc\\livekit/win-x64-release-webrtc-0001d84-2/win-x64-release\\include\\third_party/libyu
+v/include/" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\scratch-2a0faabf5e80148f\\out\\livekit_webrtc\\
+livekit/win-x64-release-webrtc-0001d84-2/win-x64-release\\include\\third_party/libc++/" "-I" "C:\\MyProjects\\Astrix\\c
+lient\\target\\debug\\build\\scratch-2a0faabf5e80148f\\out\\livekit_webrtc\\livekit/win-x64-release-webrtc-0001d84-2/wi
+n-x64-release\\include\\sdk/objc" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\scratch-2a0faabf5e80148f\
+\out\\livekit_webrtc\\livekit/win-x64-release-webrtc-0001d84-2/win-x64-release\\include\\sdk/objc/base" "-W0" "/std:c++
+20" "/EHsc" "-DWEBRTC_APM_DEBUG_DUMP=0" "-DUSE_AURA=1" "-D_HAS_NODISCARD" "-D_CRT_NONSTDC_NO_WARNINGS" "-D_WINSOCK_DEPR
+ECATED_NO_WARNINGS" "-D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS" "-D_SILENCE_ALL_CXX20_DEPRECATION_WARNINGS" "-D_LIBCPP_
+HARDENING_MODE=_LIBCPP_HARDENING_MODE_NONE" "-D_HAS_EXCEPTIONS=0" "-D__STD_C" "-D_CRT_RAND_S" "-D_CRT_SECURE_NO_DEPRECA
+TE" "-D_SCL_SECURE_NO_DEPRECATE" "-D_ATL_NO_OPENGL" "-D_WINDOWS" "-DCERT_CHAIN_PARA_HAS_EXTRA_FIELDS" "-DPSAPI_VERSION=
+2" "-DWIN32" "-D_SECURE_ATL" "-DWINAPI_FAMILY=WINAPI_FAMILY_DESKTOP_APP" "-DWIN32_LEAN_AND_MEAN" "-DNOMINMAX" "-D_UNICO
+DE" "-DUNICODE" "-DNTDDI_VERSION=NTDDI_WIN11_GE" "-D_WIN32_WINNT=0x0A00" "-DWINVER=0x0A00" "-DNDEBUG" "-DNVALGRIND" "-D
+DYNAMIC_ANNOTATIONS_ENABLED=0" "-DWEBRTC_ENABLE_PROTOBUF=0" "-DWEBRTC_STRICT_FIELD_TRIALS=0" "-DWEBRTC_INCLUDE_INTERNAL
+_AUDIO_DEVICE" "-DRTC_USE_LIBAOM_AV1_ENCODER" "-DRTC_ENABLE_VP9" "-DRTC_ENABLE_H265" "-DRTC_DAV1D_IN_INTERNAL_DECODER_F
+ACTORY" "-DWEBRTC_HAVE_SCTP" "-DWEBRTC_USE_H264" "-DWEBRTC_LIBRARY_IMPL" "-DPROTOBUF_ENABLE_DEBUG_LOGGING_MAY_LEAK_PII=
+0" "-DWEBRTC_ENABLE_AVX2" "-DRTC_ENABLE_WIN_WGC" "-DWEBRTC_NON_STATIC_TRACE_EVENT_HANDLERS=0" "-DWEBRTC_WIN" "-DWEBRTC_
+ALLOW_DEPRECATED_NAMESPACES" "-DABSL_ALLOCATOR_NOTHROW=1" "-D_ENABLE_EXTENDED_ALIGNED_STORAGE" "-DCHROMIUM" "-DLIBYUV_D
+ISABLE_NEON" "-DLIBYUV_DISABLE_SVE" "-DLIBYUV_DISABLE_SME" "-DLIBYUV_DISABLE_LSX" "-DLIBYUV_DISABLE_LASX" "-DUSE_MFT_VI
+DEO_CODEC=1" "-DLIVEKIT_TEST" "-FoC:\\MyProjects\\Astrix\\client\\target\\debug\\build\\webrtc-sys-13ffa41522a294a7\\ou
+t\\2f5298ad23247ff7-mft_h264_decoder_impl.o" "-c" "src/mft/mft_h264_decoder_impl.cpp"
+error: failed to run custom build command for `webrtc-sys v0.3.23 (C:\MyProjects\Astrix\client\vendor\rust-sdks\webrtc-
+sys)`
+
+Caused by:
+  process didn't exit successfully: `C:\MyProjects\Astrix\client\target\debug\build\webrtc-sys-34cef38c34e51a0a\build-s
+cript-build` (exit code: 1)
+  --- stderr
+
+  CXX include path:
+    C:\MyProjects\Astrix\client\target\debug\build\webrtc-sys-13ffa41522a294a7\out\cxxbridge\include
+    C:\MyProjects\Astrix\client\target\debug\build\webrtc-sys-13ffa41522a294a7\out\cxxbridge\crate
+
+
+  error occurred in cc-rs: command did not execute successfully (status code exit code: 2): "C:\\Program Files (x86)\\M
+icrosoft Visual Studio\\18\\BuildTools\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\cl.exe" "-nologo" "-MT" "-Z7" 
+"-Brepro" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\webrtc-sys-13ffa41522a294a7\\out\\cxxbridge\\incl
+ude" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\webrtc-sys-13ffa41522a294a7\\out\\cxxbridge\\crate" "-
+I" "./include" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\scratch-2a0faabf5e80148f\\out\\livekit_webrt
+c\\livekit/win-x64-release-webrtc-0001d84-2/win-x64-release\\include" "-I" "C:\\MyProjects\\Astrix\\client\\target\\deb
+ug\\build\\scratch-2a0faabf5e80148f\\out\\livekit_webrtc\\livekit/win-x64-release-webrtc-0001d84-2/win-x64-release\\inc
+lude\\third_party/abseil-cpp/" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\scratch-2a0faabf5e80148f\\ou
+t\\livekit_webrtc\\livekit/win-x64-release-webrtc-0001d84-2/win-x64-release\\include\\third_party/libyuv/include/" "-I"
+ "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\scratch-2a0faabf5e80148f\\out\\livekit_webrtc\\livekit/win-x64-
+release-webrtc-0001d84-2/win-x64-release\\include\\third_party/libc++/" "-I" "C:\\MyProjects\\Astrix\\client\\target\\d
+ebug\\build\\scratch-2a0faabf5e80148f\\out\\livekit_webrtc\\livekit/win-x64-release-webrtc-0001d84-2/win-x64-release\\i
+nclude\\sdk/objc" "-I" "C:\\MyProjects\\Astrix\\client\\target\\debug\\build\\scratch-2a0faabf5e80148f\\out\\livekit_we
+brtc\\livekit/win-x64-release-webrtc-0001d84-2/win-x64-release\\include\\sdk/objc/base" "-W0" "/std:c++20" "/EHsc" "-DW
+EBRTC_APM_DEBUG_DUMP=0" "-DUSE_AURA=1" "-D_HAS_NODISCARD" "-D_CRT_NONSTDC_NO_WARNINGS" "-D_WINSOCK_DEPRECATED_NO_WARNIN
+GS" "-D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS" "-D_SILENCE_ALL_CXX20_DEPRECATION_WARNINGS" "-D_LIBCPP_HARDENING_MODE=_
+LIBCPP_HARDENING_MODE_NONE" "-D_HAS_EXCEPTIONS=0" "-D__STD_C" "-D_CRT_RAND_S" "-D_CRT_SECURE_NO_DEPRECATE" "-D_SCL_SECU
+RE_NO_DEPRECATE" "-D_ATL_NO_OPENGL" "-D_WINDOWS" "-DCERT_CHAIN_PARA_HAS_EXTRA_FIELDS" "-DPSAPI_VERSION=2" "-DWIN32" "-D
+_SECURE_ATL" "-DWINAPI_FAMILY=WINAPI_FAMILY_DESKTOP_APP" "-DWIN32_LEAN_AND_MEAN" "-DNOMINMAX" "-D_UNICODE" "-DUNICODE" 
+"-DNTDDI_VERSION=NTDDI_WIN11_GE" "-D_WIN32_WINNT=0x0A00" "-DWINVER=0x0A00" "-DNDEBUG" "-DNVALGRIND" "-DDYNAMIC_ANNOTATI
+ONS_ENABLED=0" "-DWEBRTC_ENABLE_PROTOBUF=0" "-DWEBRTC_STRICT_FIELD_TRIALS=0" "-DWEBRTC_INCLUDE_INTERNAL_AUDIO_DEVICE" "
+-DRTC_USE_LIBAOM_AV1_ENCODER" "-DRTC_ENABLE_VP9" "-DRTC_ENABLE_H265" "-DRTC_DAV1D_IN_INTERNAL_DECODER_FACTORY" "-DWEBRT
+C_HAVE_SCTP" "-DWEBRTC_USE_H264" "-DWEBRTC_LIBRARY_IMPL" "-DPROTOBUF_ENABLE_DEBUG_LOGGING_MAY_LEAK_PII=0" "-DWEBRTC_ENA
+BLE_AVX2" "-DRTC_ENABLE_WIN_WGC" "-DWEBRTC_NON_STATIC_TRACE_EVENT_HANDLERS=0" "-DWEBRTC_WIN" "-DWEBRTC_ALLOW_DEPRECATED
+_NAMESPACES" "-DABSL_ALLOCATOR_NOTHROW=1" "-D_ENABLE_EXTENDED_ALIGNED_STORAGE" "-DCHROMIUM" "-DLIBYUV_DISABLE_NEON" "-D
+LIBYUV_DISABLE_SVE" "-DLIBYUV_DISABLE_SME" "-DLIBYUV_DISABLE_LSX" "-DLIBYUV_DISABLE_LASX" "-DUSE_MFT_VIDEO_CODEC=1" "-D
+LIVEKIT_TEST" "-FoC:\\MyProjects\\Astrix\\client\\target\\debug\\build\\webrtc-sys-13ffa41522a294a7\\out\\2f5298ad23247
+ff7-mft_h264_decoder_impl.o" "-c" "src/mft/mft_h264_decoder_impl.cpp"
+
+

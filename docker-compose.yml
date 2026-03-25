@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: astrix
+      POSTGRES_PASSWORD: astrix
+      POSTGRES_DB: astrix
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://astrix:astrix@db:5432/astrix?sslmode=disable
+      REDIS_ADDR: redis:6379
+      JWT_SECRET: "change_me_in_prod"
+      HTTP_ADDR: "0.0.0.0:8080"
+      # LiveKit: URL the client uses to connect (host:7880 with published ports; not http://livekit:7880)
+      # LIVEKIT_URL: "http://livekit.astrix.crazedns.ru"
+      LIVEKIT_URL: "http://localhost:7880"
+      LIVEKIT_API_KEY: "astrixkey"
+      LIVEKIT_API_SECRET: "astrixsecret"
+    depends_on:
+      - db
+      - redis
+      - livekit
+    ports:
+      - "8080:8080"
+
+  livekit:
+    image: livekit/livekit-server:latest
+    command: [--config, /etc/livekit.yaml]
+    environment:
+      - GOGC=200
+      - GODEBUG=gctrace=1
+      # SFU / Pion debug (short sessions only — huge logs, may add jitter):
+      # - PION_LOG_DEBUG=ice,dtls,srtp
+      # - PION_LOG_TRACE=all
+      # Raise livekit.yaml logging.level to debug or trace while testing.
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880"   # signal
+      - "7881:7881"   # RTC TCP fallback
+      - "40000-40100:40000-40100/udp"  # RTC UDP (narrow range for Windows; on VPS use 50000-60000)
+    depends_on:
+      - redis
+
+volumes:
+  db_data: {}
+

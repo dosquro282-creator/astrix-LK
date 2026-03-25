@@ -1,0 +1,15 @@
+# LiveKit: required for linking (see https://github.com/livekit/rust-sdks)
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+# libvpx: MSVC import library generated from MSYS2 ucrt64 build (libvpx 1.15.2)
+VPX_LIB_DIR     = "C:/vpx-msvc"
+VPX_INCLUDE_DIR = "C:/msys64/ucrt64/include"
+VPX_VERSION     = "1.13.0"
+
+# Phase 1: custom libwebrtc (prebuilt or built from source with H.264 multithreading)
+# Run scripts/build-webrtc-via-livekit.ps1 to build, then uncomment LK_CUSTOM_WEBRTC
+LK_CUSTOM_WEBRTC = { value = "webrtc-prebuilt/win-x64-release", relative = true }

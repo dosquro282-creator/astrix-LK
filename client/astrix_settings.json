@@ -1,0 +1,13 @@
+{
+  "remember_me": true,
+  "saved_username": "123",
+  "saved_password": "123",
+  "last_server": {
+    "2": 17,
+    "1": 17
+  },
+  "dark_mode": true,
+  "voice_volume_by_user": {},
+  "decode_path": "mft",
+  "video_decoder_gamma": 0.47
+}

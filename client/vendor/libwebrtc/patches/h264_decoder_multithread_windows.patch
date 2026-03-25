@@ -1,0 +1,30 @@
+diff --git a/modules/video_coding/codecs/h264/h264_decoder_impl.cc b/modules/video_coding/codecs/h264/h264_decoder_impl.cc
+--- a/modules/video_coding/codecs/h264/h264_decoder_impl.cc
++++ b/modules/video_coding/codecs/h264/h264_decoder_impl.cc
+@@ -154,8 +154,25 @@ int32_t H264DecoderImpl::InitDecode(const VideoCodec* codec_settings,
+   av_context_->extradata = nullptr;
+   av_context_->extradata_size = 0;
+ 
+-  // If this is ever increased, look at |av_context_->thread_safe_callbacks| and
+-  // make it possible to disable the thread checker in the frame buffer pool.
+-  av_context_->thread_count = 1;
++  // Multithreaded decoding for viewer (Windows). FFmpeg slice threading.
++  // If this is ever increased, look at |av_context_->thread_safe_callbacks| and
++  // make it possible to disable the thread checker in the frame buffer pool.
++#if defined(WEBRTC_WIN)
++  int thread_count = 1;
++  if (codec_settings && codec_settings->width > 0 && codec_settings->height > 0) {
++    int pixels = codec_settings->width * codec_settings->height;
++    if (pixels >= 1920 * 1080 && number_of_cores >= 6) {
++      thread_count = 4;
++    } else if (pixels > 1280 * 720 && number_of_cores >= 4) {
++      thread_count = 2;
++    }
++  }
++  av_context_->thread_count = thread_count;
++#else
++  av_context_->thread_count = 1;
++#endif
+   av_context_->thread_type = FF_THREAD_SLICE;
+ 
+   // Function used by FFmpeg to get buffers to store decoded frames in.

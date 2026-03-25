@@ -1,0 +1,27 @@
+diff --git a/modules/video_coding/codecs/h264/h264_encoder_impl.cc b/modules/video_coding/codecs/h264/h264_encoder_impl.cc
+--- a/modules/video_coding/codecs/h264/h264_encoder_impl.cc
++++ b/modules/video_coding/codecs/h264/h264_encoder_impl.cc
+@@ -81,6 +81,20 @@ int NumberOfThreads(std::optional<int> encoder_thread_limit,
+     return 1;  // 1 thread for VGA or less.
+   }
+   }
++  // On Windows, sandbox does not apply (crbug.com/583348 is Mac-specific).
++  // Use physical cores (OpenH264 scales poorly with logical/HT cores).
++  // Heuristic: even cores >= 4 likely means hyperthreading (e.g. 8c/16t -> 8).
++#if defined(WEBRTC_WIN)
++  int cores = (number_of_cores >= 4 && (number_of_cores % 2) == 0)
++                  ? (number_of_cores / 2)
++                  : number_of_cores;
++  if (width * height >= 1920 * 1080 && cores > 8) {
++    return 8;
++  } else if (width * height >= 1920 * 1080 && cores >= 6) {
++    return 6;
++  } else if (width * height > 1280 * 960 && cores >= 4) {
++    return 4;
++  } else if (width * height > 640 * 480 && cores >= 3) {
++    return 2;
++  }
++#endif
+   // TODO(sprang): Also check sSliceArgument.uiSliceNum on GetEncoderParams(),
+   // before enabling multithreading here.
+   return 1;

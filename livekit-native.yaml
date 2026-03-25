@@ -1,0 +1,46 @@
+# LiveKit server config for Astrix (Docker Compose)
+# Ports: 7880 (signal), 7881 (TCP fallback), UDP range for RTC media.
+# On Windows use 40000-40100 to avoid reserved ports; on Linux/VPS use 50000-60000.
+# Firewall: on VPS open UDP port_range (40000-40100 or 50000-60000), else media will not work.
+
+port: 7880
+
+# Suppress "adjusting first packet time, too big" INFO spam (RTP timestamp drift).
+# Set to "info" to debug; "debug"/"trace" for full rtpstats.
+logging:
+  level: warn
+
+redis:
+  address: localhost:6379
+
+rtc:
+  port_range_start: 40000
+  port_range_end: 40100
+  tcp_port: 7881
+  use_external_ip: true
+  # Moderate buffer: very small values (e.g. 55) increased jitter/bursts here; default 500 is safe.
+  # 100–200 is a reasonable low-latency compromise on LAN.
+  packet_buffer_size_video: 150
+
+# Room defaults (only fields supported by this LiveKit server version).
+room:
+  max_participants: 100
+  empty_timeout: 300
+  departure_timeout: 20
+  enable_remote_unmute: false
+  # Zero playout delay: receiver renders frames immediately without jitter buffer.
+  # Prevents the "latency grows, resets on keyframe, grows again" pattern.
+  playout_delay:
+    enabled: true
+    min: 0
+    max: 0
+
+# API keys: one key pair for token generation (Go server) and webhook verification
+keys:
+  astrixkey: astrixsecret
+
+# Webhook: source of truth for participant_joined / participant_left
+webhook:
+  api_key: astrixkey
+  urls:
+    - http://server:8080/voice/webhook
