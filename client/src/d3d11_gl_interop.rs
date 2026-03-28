@@ -22,9 +22,9 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use windows::core::{Interface, PCSTR};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 use windows::Win32::Graphics::OpenGL::wglGetProcAddress;
-use windows::core::{Interface, PCSTR};
 
 // ─── GL / WGL constants ───────────────────────────────────────────────────────
 
@@ -41,8 +41,8 @@ const WGL_ACCESS_READ_WRITE_NV: u32 = 0x0001;
 // ─── WGL extension function types ────────────────────────────────────────────
 // All WGL functions on Windows use stdcall calling convention.
 
-type FnOpen     = unsafe extern "stdcall" fn(dx_device: *mut c_void) -> *mut c_void;
-type FnClose    = unsafe extern "stdcall" fn(device: *mut c_void) -> i32;
+type FnOpen = unsafe extern "stdcall" fn(dx_device: *mut c_void) -> *mut c_void;
+type FnClose = unsafe extern "stdcall" fn(device: *mut c_void) -> i32;
 type FnRegister = unsafe extern "stdcall" fn(
     device: *mut c_void,
     dx_object: *mut c_void,
@@ -51,8 +51,10 @@ type FnRegister = unsafe extern "stdcall" fn(
     access: u32,
 ) -> *mut c_void;
 type FnUnregister = unsafe extern "stdcall" fn(device: *mut c_void, object: *mut c_void) -> i32;
-type FnLock       = unsafe extern "stdcall" fn(device: *mut c_void, count: i32, objects: *mut *mut c_void) -> i32;
-type FnUnlock     = unsafe extern "stdcall" fn(device: *mut c_void, count: i32, objects: *mut *mut c_void) -> i32;
+type FnLock =
+    unsafe extern "stdcall" fn(device: *mut c_void, count: i32, objects: *mut *mut c_void) -> i32;
+type FnUnlock =
+    unsafe extern "stdcall" fn(device: *mut c_void, count: i32, objects: *mut *mut c_void) -> i32;
 
 // ─── Global availability flag ─────────────────────────────────────────────────
 
@@ -100,11 +102,11 @@ pub struct D3d11GlInterop {
     /// Objects currently locked for GL access (held between lock_all / unlock_all).
     locked_objects: Vec<*mut c_void>,
 
-    fn_close:      FnClose,
-    fn_register:   FnRegister,
+    fn_close: FnClose,
+    fn_register: FnRegister,
     fn_unregister: FnUnregister,
-    fn_lock:       FnLock,
-    fn_unlock:     FnUnlock,
+    fn_lock: FnLock,
+    fn_unlock: FnUnlock,
 }
 
 // SAFETY: D3d11GlInterop is only used from the UI thread.
@@ -126,8 +128,7 @@ impl D3d11GlInterop {
                 .ok_or("WGL_NV_DX_interop2 unavailable: wglDXOpenDeviceNV not found")?
         };
         let fn_close = unsafe {
-            load_wgl_fn::<FnClose>(b"wglDXCloseDeviceNV\0")
-                .ok_or("wglDXCloseDeviceNV not found")?
+            load_wgl_fn::<FnClose>(b"wglDXCloseDeviceNV\0").ok_or("wglDXCloseDeviceNV not found")?
         };
         let fn_register = unsafe {
             load_wgl_fn::<FnRegister>(b"wglDXRegisterObjectNV\0")
@@ -138,8 +139,7 @@ impl D3d11GlInterop {
                 .ok_or("wglDXUnregisterObjectNV not found")?
         };
         let fn_lock = unsafe {
-            load_wgl_fn::<FnLock>(b"wglDXLockObjectsNV\0")
-                .ok_or("wglDXLockObjectsNV not found")?
+            load_wgl_fn::<FnLock>(b"wglDXLockObjectsNV\0").ok_or("wglDXLockObjectsNV not found")?
         };
         let fn_unlock = unsafe {
             load_wgl_fn::<FnUnlock>(b"wglDXUnlockObjectsNV\0")
@@ -258,7 +258,9 @@ impl D3d11GlInterop {
 
     /// Returns the GL texture ID and dimensions for a registered stream key, if any.
     pub fn get_gl_tex(&self, key: i64) -> Option<(u32, u32, u32)> {
-        self.entries.get(&key).map(|e| (e.gl_tex_id, e.width, e.height))
+        self.entries
+            .get(&key)
+            .map(|e| (e.gl_tex_id, e.width, e.height))
     }
 
     /// Lock all registered interop objects for GL access.
@@ -278,14 +280,20 @@ impl D3d11GlInterop {
         // ensures any UI-thread device operations are also submitted.
         unsafe { self.d3d11_context.Flush() };
 
-        let mut handles: Vec<*mut c_void> =
-            self.entries.values().map(|e| e.registered).collect();
+        let mut handles: Vec<*mut c_void> = self.entries.values().map(|e| e.registered).collect();
         let ok = unsafe {
-            (self.fn_lock)(self.interop_device, handles.len() as i32, handles.as_mut_ptr())
+            (self.fn_lock)(
+                self.interop_device,
+                handles.len() as i32,
+                handles.as_mut_ptr(),
+            )
         };
         if ok == 0 {
             let err = unsafe { windows::Win32::Foundation::GetLastError() };
-            eprintln!("[Phase 3.5] wglDXLockObjectsNV FAILED count={} GetLastError={err:?}", handles.len());
+            eprintln!(
+                "[Phase 3.5] wglDXLockObjectsNV FAILED count={} GetLastError={err:?}",
+                handles.len()
+            );
         }
         self.locked_objects = handles;
     }

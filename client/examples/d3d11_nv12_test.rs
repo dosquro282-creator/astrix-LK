@@ -9,10 +9,12 @@
 
 use parking_lot::Mutex;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_USAGE_STAGING, D3D11_BIND_RENDER_TARGET,
-    D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== D3d11BgraToNv12 Phase 3.7 Test ===\n");
@@ -24,7 +26,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let height = 128u32;
     let fps = 30u32;
 
-    println!("\nCreating D3d11BgraToNv12 ({}x{}, {} fps)...", width, height, fps);
+    println!(
+        "\nCreating D3d11BgraToNv12 ({}x{}, {} fps)...",
+        width, height, fps
+    );
     let converter = astrix_client::d3d11_nv12::D3d11BgraToNv12::new(
         &gpu.device,
         &gpu.context,
@@ -96,7 +101,10 @@ fn create_bgra_texture(
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_B8G8R8A8_UNORM.into(),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: windows::Win32::Graphics::Direct3D11::D3D11_USAGE_DEFAULT,
         BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
         CPUAccessFlags: 0,
@@ -122,7 +130,10 @@ fn readback_nv12(
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_NV12.into(),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: D3D11_USAGE_STAGING,
         BindFlags: 0,
         CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,

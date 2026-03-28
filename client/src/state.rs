@@ -150,9 +150,23 @@ impl AppState {
 
         let channel_categories_for_server: Vec<ChannelCategory> = categories
             .into_iter()
-            .filter(|c| c.channel_ids.iter().any(|&id| channels.iter().any(|ch| ch.id == id && ch.server_id == first_server_id)))
+            .filter(|c| {
+                c.channel_ids.iter().any(|&id| {
+                    channels
+                        .iter()
+                        .any(|ch| ch.id == id && ch.server_id == first_server_id)
+                })
+            })
             .map(|c| ChannelCategory {
-                channel_ids: c.channel_ids.into_iter().filter(|&id| channels.iter().any(|ch| ch.id == id && ch.server_id == first_server_id)).collect(),
+                channel_ids: c
+                    .channel_ids
+                    .into_iter()
+                    .filter(|&id| {
+                        channels
+                            .iter()
+                            .any(|ch| ch.id == id && ch.server_id == first_server_id)
+                    })
+                    .collect(),
                 ..c
             })
             .filter(|c| !c.channel_ids.is_empty())
@@ -165,12 +179,20 @@ impl AppState {
             .collect();
 
         let messages_for_channel = selected_channel_id
-            .map(|cid| messages.iter().filter(|m| m.channel_id == cid).cloned().collect::<Vec<_>>())
+            .map(|cid| {
+                messages
+                    .iter()
+                    .filter(|m| m.channel_id == cid)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         Self {
             screen: AppScreen::Main,
-            current_view: CurrentView::Guild { server_id: first_server_id },
+            current_view: CurrentView::Guild {
+                server_id: first_server_id,
+            },
             selected_channel_id,
             servers,
             channels: channels_for_server,
@@ -187,7 +209,11 @@ impl AppState {
 
     /// Возвращает каналы для выбранного сервера (для смены сервера вызывающий подставит нужный server_id и отфильтрует).
     pub fn channels_for_server(server_id: i64, all_channels: &[Channel]) -> Vec<Channel> {
-        all_channels.iter().filter(|c| c.server_id == server_id).cloned().collect()
+        all_channels
+            .iter()
+            .filter(|c| c.server_id == server_id)
+            .cloned()
+            .collect()
     }
 
     /// Возвращает категории для выбранного сервера (из полного списка категорий и каналов).
@@ -196,16 +222,27 @@ impl AppState {
         categories: &[ChannelCategory],
         all_channels: &[Channel],
     ) -> Vec<ChannelCategory> {
-        let server_channel_ids: std::collections::HashSet<i64> =
-            all_channels.iter().filter(|c| c.server_id == server_id).map(|c| c.id).collect();
+        let server_channel_ids: std::collections::HashSet<i64> = all_channels
+            .iter()
+            .filter(|c| c.server_id == server_id)
+            .map(|c| c.id)
+            .collect();
         categories
             .iter()
             .filter_map(|cat| {
-                let ids: Vec<i64> = cat.channel_ids.iter().filter(|id| server_channel_ids.contains(id)).copied().collect();
+                let ids: Vec<i64> = cat
+                    .channel_ids
+                    .iter()
+                    .filter(|id| server_channel_ids.contains(id))
+                    .copied()
+                    .collect();
                 if ids.is_empty() {
                     None
                 } else {
-                    Some(ChannelCategory { name: cat.name.clone(), channel_ids: ids })
+                    Some(ChannelCategory {
+                        name: cat.name.clone(),
+                        channel_ids: ids,
+                    })
                 }
             })
             .collect()
@@ -217,9 +254,21 @@ impl AppState {
 /// 3 сервера для мока.
 pub fn mock_servers() -> Vec<Server> {
     vec![
-        Server { id: 1, name: "Astrix Dev".to_string(), owner_id: 1 },
-        Server { id: 2, name: "Gaming".to_string(), owner_id: 2 },
-        Server { id: 3, name: "Art Club".to_string(), owner_id: 3 },
+        Server {
+            id: 1,
+            name: "Astrix Dev".to_string(),
+            owner_id: 1,
+        },
+        Server {
+            id: 2,
+            name: "Gaming".to_string(),
+            owner_id: 2,
+        },
+        Server {
+            id: 3,
+            name: "Art Club".to_string(),
+            owner_id: 3,
+        },
     ]
 }
 
@@ -227,38 +276,157 @@ pub fn mock_servers() -> Vec<Server> {
 pub fn mock_channels_and_categories() -> (Vec<Channel>, Vec<ChannelCategory>) {
     let channels = vec![
         // Сервер 1
-        Channel { id: 101, server_id: 1, name: "general".to_string(), r#type: "text".to_string() },
-        Channel { id: 102, server_id: 1, name: "random".to_string(), r#type: "text".to_string() },
-        Channel { id: 103, server_id: 1, name: "General".to_string(), r#type: "voice".to_string() },
-        Channel { id: 104, server_id: 1, name: "dev-talk".to_string(), r#type: "text".to_string() },
-        Channel { id: 105, server_id: 1, name: "Voice".to_string(), r#type: "voice".to_string() },
-        Channel { id: 106, server_id: 1, name: "announcements".to_string(), r#type: "text".to_string() },
+        Channel {
+            id: 101,
+            server_id: 1,
+            name: "general".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 102,
+            server_id: 1,
+            name: "random".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 103,
+            server_id: 1,
+            name: "General".to_string(),
+            r#type: "voice".to_string(),
+        },
+        Channel {
+            id: 104,
+            server_id: 1,
+            name: "dev-talk".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 105,
+            server_id: 1,
+            name: "Voice".to_string(),
+            r#type: "voice".to_string(),
+        },
+        Channel {
+            id: 106,
+            server_id: 1,
+            name: "announcements".to_string(),
+            r#type: "text".to_string(),
+        },
         // Сервер 2
-        Channel { id: 201, server_id: 2, name: "general".to_string(), r#type: "text".to_string() },
-        Channel { id: 202, server_id: 2, name: "clips".to_string(), r#type: "text".to_string() },
-        Channel { id: 203, server_id: 2, name: "Lobby".to_string(), r#type: "voice".to_string() },
-        Channel { id: 204, server_id: 2, name: "minecraft".to_string(), r#type: "text".to_string() },
-        Channel { id: 205, server_id: 2, name: "Games".to_string(), r#type: "voice".to_string() },
-        Channel { id: 206, server_id: 2, name: "off-topic".to_string(), r#type: "text".to_string() },
-        Channel { id: 207, server_id: 2, name: "Stream".to_string(), r#type: "voice".to_string() },
+        Channel {
+            id: 201,
+            server_id: 2,
+            name: "general".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 202,
+            server_id: 2,
+            name: "clips".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 203,
+            server_id: 2,
+            name: "Lobby".to_string(),
+            r#type: "voice".to_string(),
+        },
+        Channel {
+            id: 204,
+            server_id: 2,
+            name: "minecraft".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 205,
+            server_id: 2,
+            name: "Games".to_string(),
+            r#type: "voice".to_string(),
+        },
+        Channel {
+            id: 206,
+            server_id: 2,
+            name: "off-topic".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 207,
+            server_id: 2,
+            name: "Stream".to_string(),
+            r#type: "voice".to_string(),
+        },
         // Сервер 3
-        Channel { id: 301, server_id: 3, name: "general".to_string(), r#type: "text".to_string() },
-        Channel { id: 302, server_id: 3, name: "showcase".to_string(), r#type: "text".to_string() },
-        Channel { id: 303, server_id: 3, name: "Voice".to_string(), r#type: "voice".to_string() },
-        Channel { id: 304, server_id: 3, name: "feedback".to_string(), r#type: "text".to_string() },
-        Channel { id: 305, server_id: 3, name: "collab".to_string(), r#type: "text".to_string() },
-        Channel { id: 306, server_id: 3, name: "Stream".to_string(), r#type: "voice".to_string() },
+        Channel {
+            id: 301,
+            server_id: 3,
+            name: "general".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 302,
+            server_id: 3,
+            name: "showcase".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 303,
+            server_id: 3,
+            name: "Voice".to_string(),
+            r#type: "voice".to_string(),
+        },
+        Channel {
+            id: 304,
+            server_id: 3,
+            name: "feedback".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 305,
+            server_id: 3,
+            name: "collab".to_string(),
+            r#type: "text".to_string(),
+        },
+        Channel {
+            id: 306,
+            server_id: 3,
+            name: "Stream".to_string(),
+            r#type: "voice".to_string(),
+        },
     ];
 
     let categories = vec![
-        ChannelCategory { name: "General".to_string(), channel_ids: vec![101, 102, 103] },
-        ChannelCategory { name: "Development".to_string(), channel_ids: vec![104, 105] },
-        ChannelCategory { name: "Info".to_string(), channel_ids: vec![106] },
-        ChannelCategory { name: "Chat".to_string(), channel_ids: vec![201, 202, 206] },
-        ChannelCategory { name: "Voice".to_string(), channel_ids: vec![203, 205, 207] },
-        ChannelCategory { name: "Games".to_string(), channel_ids: vec![204] },
-        ChannelCategory { name: "General".to_string(), channel_ids: vec![301, 303] },
-        ChannelCategory { name: "Art".to_string(), channel_ids: vec![302, 304, 305, 306] },
+        ChannelCategory {
+            name: "General".to_string(),
+            channel_ids: vec![101, 102, 103],
+        },
+        ChannelCategory {
+            name: "Development".to_string(),
+            channel_ids: vec![104, 105],
+        },
+        ChannelCategory {
+            name: "Info".to_string(),
+            channel_ids: vec![106],
+        },
+        ChannelCategory {
+            name: "Chat".to_string(),
+            channel_ids: vec![201, 202, 206],
+        },
+        ChannelCategory {
+            name: "Voice".to_string(),
+            channel_ids: vec![203, 205, 207],
+        },
+        ChannelCategory {
+            name: "Games".to_string(),
+            channel_ids: vec![204],
+        },
+        ChannelCategory {
+            name: "General".to_string(),
+            channel_ids: vec![301, 303],
+        },
+        ChannelCategory {
+            name: "Art".to_string(),
+            channel_ids: vec![302, 304, 305, 306],
+        },
     ];
 
     (channels, categories)
@@ -267,24 +435,81 @@ pub fn mock_channels_and_categories() -> (Vec<Channel>, Vec<ChannelCategory>) {
 /// 10 пользователей (участников) для мока.
 pub fn mock_members() -> Vec<Member> {
     vec![
-        Member { user_id: 1, username: "astrix_user".to_string(), display_name: String::new(), is_owner: true },
-        Member { user_id: 2, username: "alice".to_string(), display_name: "Alice".to_string(), is_owner: false },
-        Member { user_id: 3, username: "bob".to_string(), display_name: String::new(), is_owner: false },
-        Member { user_id: 4, username: "charlie".to_string(), display_name: "Charlie".to_string(), is_owner: false },
-        Member { user_id: 5, username: "diana".to_string(), display_name: String::new(), is_owner: false },
-        Member { user_id: 6, username: "eve".to_string(), display_name: "Eve".to_string(), is_owner: false },
-        Member { user_id: 7, username: "frank".to_string(), display_name: String::new(), is_owner: false },
-        Member { user_id: 8, username: "grace".to_string(), display_name: "Grace".to_string(), is_owner: false },
-        Member { user_id: 9, username: "henry".to_string(), display_name: String::new(), is_owner: false },
-        Member { user_id: 10, username: "iris".to_string(), display_name: "Iris".to_string(), is_owner: false },
+        Member {
+            user_id: 1,
+            username: "astrix_user".to_string(),
+            display_name: String::new(),
+            is_owner: true,
+        },
+        Member {
+            user_id: 2,
+            username: "alice".to_string(),
+            display_name: "Alice".to_string(),
+            is_owner: false,
+        },
+        Member {
+            user_id: 3,
+            username: "bob".to_string(),
+            display_name: String::new(),
+            is_owner: false,
+        },
+        Member {
+            user_id: 4,
+            username: "charlie".to_string(),
+            display_name: "Charlie".to_string(),
+            is_owner: false,
+        },
+        Member {
+            user_id: 5,
+            username: "diana".to_string(),
+            display_name: String::new(),
+            is_owner: false,
+        },
+        Member {
+            user_id: 6,
+            username: "eve".to_string(),
+            display_name: "Eve".to_string(),
+            is_owner: false,
+        },
+        Member {
+            user_id: 7,
+            username: "frank".to_string(),
+            display_name: String::new(),
+            is_owner: false,
+        },
+        Member {
+            user_id: 8,
+            username: "grace".to_string(),
+            display_name: "Grace".to_string(),
+            is_owner: false,
+        },
+        Member {
+            user_id: 9,
+            username: "henry".to_string(),
+            display_name: String::new(),
+            is_owner: false,
+        },
+        Member {
+            user_id: 10,
+            username: "iris".to_string(),
+            display_name: "Iris".to_string(),
+            is_owner: false,
+        },
     ]
 }
 
 /// 30 сообщений в текстовых каналах (разные авторы, каналы, даты).
 pub fn mock_messages(channels: &[Channel], members: &[Member]) -> Vec<Message> {
-    let text_channel_ids: Vec<i64> = channels.iter().filter(|c| c.r#type == "text").map(|c| c.id).collect();
+    let text_channel_ids: Vec<i64> = channels
+        .iter()
+        .filter(|c| c.r#type == "text")
+        .map(|c| c.id)
+        .collect();
     let author_ids: Vec<i64> = members.iter().map(|m| m.user_id).collect();
-    let usernames: std::collections::HashMap<i64, String> = members.iter().map(|m| (m.user_id, m.username.clone())).collect();
+    let usernames: std::collections::HashMap<i64, String> = members
+        .iter()
+        .map(|m| (m.user_id, m.username.clone()))
+        .collect();
 
     let contents = [
         "Hey everyone!",
@@ -323,7 +548,10 @@ pub fn mock_messages(channels: &[Channel], members: &[Member]) -> Vec<Message> {
     for (i, content) in contents.iter().enumerate() {
         let channel_id = text_channel_ids[i % text_channel_ids.len()];
         let author_id = author_ids[i % author_ids.len()];
-        let author_username = usernames.get(&author_id).cloned().unwrap_or_else(|| "user".to_string());
+        let author_username = usernames
+            .get(&author_id)
+            .cloned()
+            .unwrap_or_else(|| "user".to_string());
         let day = 1 + (i % 28);
         let created_at = format!("2025-03-{:02}T12:00:00Z", day);
         messages.push(Message {

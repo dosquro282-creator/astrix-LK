@@ -17,7 +17,6 @@ use livekit::prelude::*;
 use livekit::track::{LocalAudioTrack, LocalTrack, LocalVideoTrack, RemoteTrack};
 use livekit::webrtc::audio_frame::AudioFrame;
 use livekit::webrtc::audio_source::native::NativeAudioSource;
-use xcap::{Monitor, Window};
 use livekit::webrtc::prelude::{AudioSourceOptions, RtcAudioSource};
 use livekit::webrtc::video_frame::{BoxVideoFrame, VideoFormatType, VideoFrame, VideoRotation};
 use livekit::webrtc::video_source::native::{NativeEncodedVideoSource, NativeVideoSource};
@@ -26,40 +25,45 @@ use livekit::webrtc::video_stream::native::NativeVideoStream;
 use parking_lot::Mutex;
 use std::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
+use xcap::{Monitor, Window};
 
-use crate::screen_encoder::box_scale_rgba;
-use crate::telemetry::{is_telemetry_enabled, PipelineTelemetry};
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::d3d11_i420::{D3d11RgbaToI420, D3d11RgbaToI420Scaled, GpuConvertTiming, I420Planes};
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::d3d11_nv12::D3d11BgraToNv12;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-use crate::dxgi_duplication::{DxgiDuplicationCapture, DxgiDuplicationError};
-#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-use crate::d3d11_rgba::{decode_gpu_failed, mark_decode_gpu_failed, D3d11I420ToRgba, D3d11Nv12ToRgba};
-#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-use webrtc_sys::video_frame_buffer::ffi::{
-    video_frame_buffer_get_d3d11_subresource, video_frame_buffer_get_d3d11_texture,
-    video_frame_buffer_is_d3d11, i420_to_yuv8, yuv8_to_yuv, VideoFrameBuffer,
+use crate::d3d11_rgba::{
+    decode_gpu_failed, mark_decode_gpu_failed, D3d11I420ToRgba, D3d11Nv12ToRgba,
 };
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use crate::dxgi_duplication::{DxgiDuplicationCapture, DxgiDuplicationError};
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::encoded_h264::{EncodedBackendKind, EncodedH264Encoder, EncodedH264EncoderError};
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::nvenc_d11::NvencD3d11Error;
+use crate::screen_encoder::box_scale_rgba;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-use crate::screen_encoder::{EncoderOutput, RawFrame, select_screen_encoder};
+use crate::screen_encoder::{select_screen_encoder, EncoderOutput, RawFrame};
+use crate::telemetry::{is_telemetry_enabled, PipelineTelemetry};
 use crate::voice::{
     decoder_threads_for_resolution, encoder_threads_for_resolution, video_frame_key,
-    video_preview_frame_key,
-    EncodingPath, ScreenPreset, StreamSourceTarget, StreamWindowInfo, VideoFrames, VoiceCmd,
-    VoiceSessionStats,
+    video_preview_frame_key, EncodingPath, ScreenPreset, StreamSourceTarget, StreamWindowInfo,
+    VideoFrames, VoiceCmd, VoiceSessionStats,
 };
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-use crate::windows_loopback::{capture_loopback_to_ring, LoopbackTarget};
+use crate::windows_loopback::{
+    capture_loopback_to_ring, sibling_current_image_process_ids, LoopbackTarget,
+};
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use webrtc_sys::video_frame_buffer::ffi::{
+    i420_to_yuv8, video_frame_buffer_get_d3d11_subresource, video_frame_buffer_get_d3d11_texture,
+    video_frame_buffer_is_d3d11, yuv8_to_yuv, VideoFrameBuffer,
+};
 
 const SAMPLE_RATE: u32 = 48_000;
 const SAMPLES_PER_10MS: usize = 480; // 10 ms at 48 kHz mono
 const STREAM_PREVIEW_TOPIC: &str = "astrix.stream-preview";
+const STREAM_KEYFRAME_REQUEST_TOPIC: &str = "astrix.stream-keyframe";
 const STREAM_PREVIEW_INTERVAL: Duration = Duration::from_secs(30);
 const STREAM_PREVIEW_MAX_DIM: u32 = 640;
 const STREAM_PREVIEW_JPEG_QUALITY: u8 = 55;
@@ -133,10 +137,16 @@ fn handle_publication_preference(
     let source = publication.source();
     if source == TrackSource::Screenshare {
         stream_video_publications.insert(user_id, publication.clone());
-        apply_publication_subscription(publication, desired_stream_subscriptions.contains(&user_id));
+        apply_publication_subscription(
+            publication,
+            desired_stream_subscriptions.contains(&user_id),
+        );
     } else if source == TrackSource::ScreenshareAudio {
         stream_audio_publications.insert(user_id, publication.clone());
-        apply_publication_subscription(publication, desired_stream_subscriptions.contains(&user_id));
+        apply_publication_subscription(
+            publication,
+            desired_stream_subscriptions.contains(&user_id),
+        );
     } else {
         apply_publication_subscription(publication, true);
     }
@@ -208,7 +218,9 @@ fn capture_source_image(source: &StreamSourceTarget) -> Option<image::RgbaImage>
         StreamSourceTarget::Window {
             window_id,
             process_id,
-        } => find_stream_window(*window_id, *process_id)?.capture_image().ok(),
+        } => find_stream_window(*window_id, *process_id)?
+            .capture_image()
+            .ok(),
     }
 }
 
@@ -282,12 +294,8 @@ fn start_stream_audio_capture(
         noise_suppression: false,
         auto_gain_control: false,
     };
-    let audio_source = NativeAudioSource::new(
-        source_options,
-        SAMPLE_RATE,
-        1,
-        SCREEN_AUDIO_QUEUE_MS,
-    );
+    let audio_source =
+        NativeAudioSource::new(source_options, SAMPLE_RATE, 1, SCREEN_AUDIO_QUEUE_MS);
     let track = LocalAudioTrack::create_audio_track(
         "screen-audio",
         RtcAudioSource::Native(audio_source.clone()),
@@ -299,17 +307,54 @@ fn start_stream_audio_capture(
     std::thread::Builder::new()
         .name("livekit-screen-audio-capture".into())
         .spawn(move || {
-            if let Err(err) = capture_loopback_to_ring(target, stop_for_capture, ring_for_capture)
-            {
+            if let Err(err) = capture_loopback_to_ring(target, stop_for_capture, ring_for_capture) {
                 eprintln!("[voice][screen][audio] capture error: {err}");
             }
         })
         .ok()?;
 
+    let mut sibling_rings: Vec<Arc<Mutex<VecDeque<i16>>>> = Vec::new();
+    if matches!(source, StreamSourceTarget::Monitor { .. }) {
+        let sibling_pids = sibling_current_image_process_ids();
+        if !sibling_pids.is_empty() {
+            eprintln!(
+                "[voice][screen][audio] excluding sibling Astrix processes from monitor stream: {:?}",
+                sibling_pids
+            );
+        }
+        for pid in sibling_pids {
+            let sibling_ring: Arc<Mutex<VecDeque<i16>>> =
+                Arc::new(Mutex::new(VecDeque::with_capacity(SAMPLES_PER_10MS * 50)));
+            let ring_for_capture = Arc::clone(&sibling_ring);
+            let stop_for_capture = Arc::clone(&stop_flag);
+            match std::thread::Builder::new()
+                .name(format!("livekit-screen-audio-exclude-{pid}"))
+                .spawn(move || {
+                    if let Err(err) = capture_loopback_to_ring(
+                        LoopbackTarget::IncludeProcessTree(pid),
+                        stop_for_capture,
+                        ring_for_capture,
+                    ) {
+                        eprintln!(
+                            "[voice][screen][audio] sibling Astrix capture error for pid {}: {}",
+                            pid, err
+                        );
+                    }
+                }) {
+                Ok(_) => sibling_rings.push(sibling_ring),
+                Err(err) => eprintln!(
+                    "[voice][screen][audio] failed to spawn sibling Astrix capture for pid {}: {}",
+                    pid, err
+                ),
+            }
+        }
+    }
+
     let handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(10));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut logged_non_silent_capture = false;
+        let mut logged_non_silent_sibling_exclusion = false;
         while !stop_flag.load(Ordering::Relaxed) {
             interval.tick().await;
             if stop_flag.load(Ordering::Relaxed) {
@@ -322,8 +367,26 @@ fn start_stream_audio_capture(
                     samples.push(guard.pop_front().unwrap_or(0));
                 }
             }
+            let mut subtracted_sibling_audio = false;
+            for sibling_ring in &sibling_rings {
+                let mut guard = sibling_ring.lock();
+                for sample in &mut samples {
+                    let sibling_sample = guard.pop_front().unwrap_or(0);
+                    if sibling_sample.unsigned_abs() > SCREEN_AUDIO_SIGNAL_THRESHOLD as u16 {
+                        subtracted_sibling_audio = true;
+                    }
+                    let mixed = (*sample as i32) - (sibling_sample as i32);
+                    *sample = mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                }
+            }
             if muted.load(Ordering::Relaxed) {
                 samples.fill(0);
+            }
+            if !logged_non_silent_sibling_exclusion && subtracted_sibling_audio {
+                logged_non_silent_sibling_exclusion = true;
+                eprintln!(
+                    "[voice][screen][audio] subtracting sibling Astrix playback from monitor stream"
+                );
             }
             if !logged_non_silent_capture
                 && samples
@@ -403,7 +466,11 @@ impl DxgiPushTraceStats {
     }
 
     fn avg_us(total: u64, count: u64) -> u64 {
-        if count == 0 { 0 } else { total / count }
+        if count == 0 {
+            0
+        } else {
+            total / count
+        }
     }
 
     fn maybe_log(
@@ -472,10 +539,7 @@ const VIDEO_RTP_CLOCK_HZ: u64 = 90_000;
 
 /// Runs the LiveKit voice engine: receives commands, on Start connects to the room,
 /// publishes mic, subscribes to remotes, updates speaking map. Exits on Stop or channel close.
-pub async fn run_engine(
-    mut rx: UnboundedReceiver<VoiceCmd>,
-    video_frames: VideoFrames,
-) {
+pub async fn run_engine(mut rx: UnboundedReceiver<VoiceCmd>, video_frames: VideoFrames) {
     loop {
         match rx.recv().await {
             None => break,
@@ -489,8 +553,17 @@ pub async fn run_engine(
                 receiver_telemetry,
                 ..
             }) => {
-                if let Err(e) =
-                    run_session(livekit_url, livekit_token, my_user_id, speaking, video_frames.clone(), session_stats, receiver_telemetry, &mut rx).await
+                if let Err(e) = run_session(
+                    livekit_url,
+                    livekit_token,
+                    my_user_id,
+                    speaking,
+                    video_frames.clone(),
+                    session_stats,
+                    receiver_telemetry,
+                    &mut rx,
+                )
+                .await
                 {
                     eprintln!("[voice][livekit] session error: {}", e);
                 }
@@ -537,11 +610,18 @@ async fn run_session(
     eprintln!(
         "[voice][livekit] mic: {} Hz{}",
         input_rate,
-        if need_resample_mic { ", resampling to 48 kHz" } else { "" }
+        if need_resample_mic {
+            ", resampling to 48 kHz"
+        } else {
+            ""
+        }
     );
 
     let output_sample_rate = get_output_sample_rate().unwrap_or(SAMPLE_RATE);
-    eprintln!("[voice][livekit] speaker output at {} Hz", output_sample_rate);
+    eprintln!(
+        "[voice][livekit] speaker output at {} Hz",
+        output_sample_rate
+    );
 
     // ── Publish local microphone ─────────────────────────────────────────────────────────────
     let source_options = AudioSourceOptions {
@@ -575,7 +655,7 @@ async fn run_session(
     let mic_stop = Arc::new(AtomicBool::new(false));
 
     // Input volume: scales mic samples before sending (SetInputVolume updates this).
-    let input_volume: Arc<Mutex<f32>> = Arc::new(Mutex::new(2.0));
+    let input_volume: Arc<Mutex<f32>> = Arc::new(Mutex::new(1.0));
     let input_vol_for_mic = Arc::clone(&input_volume);
 
     // Incoming video stats (viewer): frame count and resolution for estimated bitrate.
@@ -636,7 +716,7 @@ async fn run_session(
     let user_volumes: Arc<Mutex<HashMap<i64, f32>>> = Arc::new(Mutex::new(HashMap::new()));
     let stream_volumes: Arc<Mutex<HashMap<i64, f32>>> = Arc::new(Mutex::new(HashMap::new()));
     let output_muted: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-    let output_volume: Arc<Mutex<f32>> = Arc::new(Mutex::new(2.0));
+    let output_volume: Arc<Mutex<f32>> = Arc::new(Mutex::new(1.0));
     let (mixer_tx, mut mixer_rx) = tokio::sync::mpsc::unbounded_channel::<MixerFrameMsg>();
     let output_10ms_len = (output_sample_rate / 100).max(1) as usize;
     let output_buffer: Arc<Mutex<VecDeque<i16>>> = {
@@ -688,6 +768,7 @@ async fn run_session(
     let mut screen_audio_muted = false;
     // Stop flag for the screen capture OS thread; replaced on each StartScreen.
     let mut screen_stop_flag: Option<Arc<AtomicBool>> = None;
+    let mut screen_keyframe_requested: Option<Arc<AtomicBool>> = None;
     // Encoded-path -> CPU fallback: when the encoded H.264 backend hard-fails,
     // the encoder thread sends a Native track here.
     let mut screen_fallback_rx: Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>> = None;
@@ -790,6 +871,12 @@ async fn run_session(
                         participant,
                         ..
                     }) => {
+                        if topic.as_deref() == Some(STREAM_KEYFRAME_REQUEST_TOPIC) {
+                            if let Some(flag) = screen_keyframe_requested.as_ref() {
+                                flag.store(true, Ordering::Relaxed);
+                            }
+                            continue;
+                        }
                         if topic.as_deref() != Some(STREAM_PREVIEW_TOPIC) {
                             continue;
                         }
@@ -1257,6 +1344,8 @@ async fn run_session(
                         }
                         screen_audio_muted_flag = None;
                         screen_fallback_rx = None;
+                        let keyframe_requested = Arc::new(AtomicBool::new(false));
+                        screen_keyframe_requested = Some(Arc::clone(&keyframe_requested));
                         let stop_flag = Arc::new(AtomicBool::new(false));
                         screen_stop_flag = Some(Arc::clone(&stop_flag));
                         let (width, height, fps, bitrate) = preset.params();
@@ -1264,6 +1353,7 @@ async fn run_session(
                             source.clone(),
                             preset,
                             Arc::clone(&stop_flag),
+                            keyframe_requested,
                             Arc::clone(&session_stats),
                         );
                         screen_fallback_rx = fallback_rx;
@@ -1329,6 +1419,7 @@ async fn run_session(
                             } else {
                                 stop_flag.store(true, Ordering::Relaxed);
                                 screen_stop_flag = None;
+                                screen_keyframe_requested = None;
                             }
                         }
                     }
@@ -1354,6 +1445,7 @@ async fn run_session(
                             let _ = lp.unpublish_track(&sid).await;
                         }
                         screen_audio_muted_flag = None;
+                        screen_keyframe_requested = None;
                         // Keep last resolution/fps/bitrate visible; clear stream_fps so UI shows stream stopped.
                         {
                             let mut st = session_stats.lock();
@@ -1408,6 +1500,21 @@ async fn run_session(
                         }
                         if let Some(publication) = audio_publication.as_ref() {
                             apply_publication_subscription(publication, subscribed);
+                        }
+                        if subscribed {
+                            let packet = DataPacket {
+                                payload: vec![1],
+                                topic: Some(STREAM_KEYFRAME_REQUEST_TOPIC.to_string()),
+                                reliable: true,
+                                destination_identities: vec![ParticipantIdentity(user_id.to_string())],
+                            };
+                            if let Err(err) = lp.publish_data(packet).await {
+                                eprintln!(
+                                    "[voice][stream] failed to request keyframe from {}: {:?}",
+                                    user_id,
+                                    err
+                                );
+                            }
                         }
                     }
                     Some(VoiceCmd::SetScreenAudioMuted(muted)) => {
@@ -1491,7 +1598,9 @@ async fn run_session(
     }
     screen_audio_muted_flag = None;
     let mut room_stream_tasks = Vec::with_capacity(
-        video_stream_tasks.len().saturating_add(audio_stream_tasks.len()),
+        video_stream_tasks
+            .len()
+            .saturating_add(audio_stream_tasks.len()),
     );
     room_stream_tasks.extend(video_stream_tasks.drain().map(|(_, handle)| handle));
     room_stream_tasks.extend(audio_stream_tasks.drain().map(|(_, handle)| handle));
@@ -1579,7 +1688,15 @@ async fn run_remote_audio_mixer(
                 } else {
                     mixed
                 };
-                output_buffer.lock().extend(to_push);
+                let max_buffer_len = output_10ms_len * 24;
+                let mut out = output_buffer.lock();
+                out.extend(to_push);
+                if out.len() > max_buffer_len {
+                    let drop_count = out.len() - max_buffer_len;
+                    for _ in 0..drop_count {
+                        out.pop_front();
+                    }
+                }
             }
         }
     }
@@ -1595,9 +1712,13 @@ fn run_speaker_output(
     let device = host.default_output_device().ok_or("no output device")?;
     let config = preferred_output_config_48k(&device)?;
     let channels = config.channels as usize;
-    eprintln!("[voice][livekit] speaker: {} Hz, {} channel(s)", config.sample_rate.0, channels);
+    eprintln!(
+        "[voice][livekit] speaker: {} Hz, {} channel(s)",
+        config.sample_rate.0, channels
+    );
     let err_fn = |e| eprintln!("[voice][livekit] speaker error: {}", e);
     let buf = Arc::clone(&output_buffer);
+    let mut last_sample = 0.0f32;
     let stream = device
         .build_output_stream(
             &config,
@@ -1605,10 +1726,16 @@ fn run_speaker_output(
                 let mut guard = buf.lock();
                 let frames = data.len() / channels.max(1);
                 for i in 0..frames {
-                    let s = guard
-                        .pop_front()
-                        .map(|v| v as f32 / 32768.0)
-                        .unwrap_or(0.0);
+                    let s = if let Some(sample) = guard.pop_front() {
+                        last_sample = sample as f32 / 32768.0;
+                        last_sample
+                    } else {
+                        last_sample *= 0.85;
+                        if last_sample.abs() < 0.0005 {
+                            last_sample = 0.0;
+                        }
+                        last_sample
+                    };
                     for c in 0..channels {
                         data[i * channels + c] = s;
                     }
@@ -1629,7 +1756,10 @@ fn run_speaker_output(
 fn preferred_output_config_48k(device: &cpal::Device) -> Result<cpal::StreamConfig, String> {
     use cpal::traits::DeviceTrait;
     use cpal::SampleRate;
-    for range in device.supported_output_configs().map_err(|e| e.to_string())? {
+    for range in device
+        .supported_output_configs()
+        .map_err(|e| e.to_string())?
+    {
         if let Some(supported) = range.try_with_sample_rate(SampleRate(SAMPLE_RATE)) {
             return Ok(supported.config());
         }
@@ -1650,11 +1780,13 @@ fn get_output_sample_rate() -> Option<u32> {
 
 /// Cache for D3D11 I420→RGBA converter (decode path). One per (width, height); recreated when size changes.
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-static DECODE_CONVERTER: parking_lot::Mutex<Option<(u32, u32, D3d11I420ToRgba)>> = parking_lot::Mutex::new(None);
+static DECODE_CONVERTER: parking_lot::Mutex<Option<(u32, u32, D3d11I420ToRgba)>> =
+    parking_lot::Mutex::new(None);
 
 /// Phase 3.4: Cache for D3D11 NV12→RGBA converter (MFT hardware decode path).
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-static DECODE_CONVERTER_NV12: parking_lot::Mutex<Option<D3d11Nv12ToRgba>> = parking_lot::Mutex::new(None);
+static DECODE_CONVERTER_NV12: parking_lot::Mutex<Option<D3d11Nv12ToRgba>> =
+    parking_lot::Mutex::new(None);
 
 /// BT.709 limited-range CPU fallback for D3D11TextureVideoFrameBuffer (MFT hardware decode path).
 ///
@@ -1716,7 +1848,7 @@ fn d3d11_nv12_to_rgba_cpu(
             let g = (y - 0.1873 * u - 0.4681 * v).clamp(0.0, 255.0) as u8;
             let b = (y + 1.8556 * u).clamp(0.0, 255.0) as u8;
             let idx = (py * w + px) * 4;
-            rgba[idx]     = r;
+            rgba[idx] = r;
             rgba[idx + 1] = g;
             rgba[idx + 2] = b;
             rgba[idx + 3] = 255;
@@ -1827,13 +1959,12 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
                                 // Use the same D3D11 device as the MFT decoder so the NV12
                                 // texture (produced by that device) can be CopySubresourceRegion'd
                                 // directly without cross-device errors.
-                                let init_result =
-                                    crate::mft_device::get_shared_device()
-                                        .ok_or_else(|| "shared device not initialized".to_string())
-                                        .and_then(|dev| {
-                                            D3d11Nv12ToRgba::new(&dev, nv12_full_range)
-                                                .map_err(|e| format!("{:?}", e))
-                                        });
+                                let init_result = crate::mft_device::get_shared_device()
+                                    .ok_or_else(|| "shared device not initialized".to_string())
+                                    .and_then(|dev| {
+                                        D3d11Nv12ToRgba::new(&dev, nv12_full_range)
+                                            .map_err(|e| format!("{:?}", e))
+                                    });
                                 match init_result {
                                     Ok(c) => *conv_guard = Some(c),
                                     Err(e) => {
@@ -1842,8 +1973,13 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
                                         // kNative D3D11 buffer: NEVER call video_frame_to_rgba_cpu —
                                         // its to_argb() calls ToI420() which may return nullptr on
                                         // staging failure, causing a null-deref crash.
-                                        return d3d11_nv12_to_rgba_cpu(vfb_ptr, width, height, nv12_full_range)
-                                            .map(|v| (width, height, v, false, None));
+                                        return d3d11_nv12_to_rgba_cpu(
+                                            vfb_ptr,
+                                            width,
+                                            height,
+                                            nv12_full_range,
+                                        )
+                                        .map(|v| (width, height, v, false, None));
                                     }
                                 }
                             }
@@ -1873,8 +2009,13 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
                                 // kNative D3D11 buffer: NEVER call video_frame_to_rgba_cpu —
                                 // its to_argb() calls ToI420() which may return nullptr on
                                 // staging failure, causing a null-deref crash.
-                                return d3d11_nv12_to_rgba_cpu(vfb_ptr, width, height, nv12_full_range)
-                                    .map(|v| (width, height, v, false, None));
+                                return d3d11_nv12_to_rgba_cpu(
+                                    vfb_ptr,
+                                    width,
+                                    height,
+                                    nv12_full_range,
+                                )
+                                .map(|v| (width, height, v, false, None));
                             }
                         }
                     }
@@ -1885,8 +2026,16 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
                 let (y_plane, u_plane, v_plane) = i420.data();
                 let result = {
                     let conv_guard = DECODE_CONVERTER.lock();
-                    if conv_guard.as_ref().map(|t| t.0 == width && t.1 == height).unwrap_or(false) {
-                        conv_guard.as_ref().unwrap().2.convert(y_plane, u_plane, v_plane)
+                    if conv_guard
+                        .as_ref()
+                        .map(|t| t.0 == width && t.1 == height)
+                        .unwrap_or(false)
+                    {
+                        conv_guard
+                            .as_ref()
+                            .unwrap()
+                            .2
+                            .convert(y_plane, u_plane, v_plane)
                     } else {
                         drop(conv_guard);
                         let new_conv = match D3d11I420ToRgba::new(width, height) {
@@ -1894,11 +2043,17 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
                             Err(e) => {
                                 eprintln!("[voice][screen][viewer] D3D11 I420→RGBA init failed: {:?}, using CPU path", e);
                                 mark_decode_gpu_failed();
-                                return video_frame_to_rgba_cpu(buf, width, height).map(|(w, h, rgba)| (w, h, rgba, false, None));
+                                return video_frame_to_rgba_cpu(buf, width, height)
+                                    .map(|(w, h, rgba)| (w, h, rgba, false, None));
                             }
                         };
                         *DECODE_CONVERTER.lock() = Some((width, height, new_conv));
-                        DECODE_CONVERTER.lock().as_ref().unwrap().2.convert(y_plane, u_plane, v_plane)
+                        DECODE_CONVERTER
+                            .lock()
+                            .as_ref()
+                            .unwrap()
+                            .2
+                            .convert(y_plane, u_plane, v_plane)
                     }
                 };
                 match result {
@@ -1906,7 +2061,8 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
                     Err(e) => {
                         eprintln!("[voice][screen][viewer] D3D11 I420→RGBA failed: {:?}, falling back to CPU permanently", e);
                         mark_decode_gpu_failed();
-                        return video_frame_to_rgba_cpu(buf, width, height).map(|(w, h, rgba)| (w, h, rgba, false, None));
+                        return video_frame_to_rgba_cpu(buf, width, height)
+                            .map(|(w, h, rgba)| (w, h, rgba, false, None));
                     }
                 }
             }
@@ -1926,8 +2082,13 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
         if let Some(native) = buf.as_native() {
             let vfb_ptr = native.video_frame_buffer_unique_ptr();
             if video_frame_buffer_is_d3d11(vfb_ptr) {
-                return d3d11_nv12_to_rgba_cpu(vfb_ptr, width, height, select_nv12_full_range(frame))
-                    .map(|rgba| (width, height, rgba, false, None));
+                return d3d11_nv12_to_rgba_cpu(
+                    vfb_ptr,
+                    width,
+                    height,
+                    select_nv12_full_range(frame),
+                )
+                .map(|rgba| (width, height, rgba, false, None));
             }
         }
     }
@@ -1935,10 +2096,20 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
     video_frame_to_rgba_cpu(buf, width, height).map(|(w, h, rgba)| (w, h, rgba, false, None))
 }
 
-fn video_frame_to_rgba_cpu(buf: &dyn livekit::webrtc::video_frame::VideoBuffer, width: u32, height: u32) -> Option<(u32, u32, Vec<u8>)> {
+fn video_frame_to_rgba_cpu(
+    buf: &dyn livekit::webrtc::video_frame::VideoBuffer,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, Vec<u8>)> {
     let mut rgba = vec![0u8; (width * height * 4) as usize];
     let dst_stride = width * 4;
-    buf.to_argb(VideoFormatType::ABGR, &mut rgba, dst_stride, width as i32, height as i32);
+    buf.to_argb(
+        VideoFormatType::ABGR,
+        &mut rgba,
+        dst_stride,
+        width as i32,
+        height as i32,
+    );
     Some((width, height, rgba))
 }
 
@@ -1953,12 +2124,18 @@ fn run_camera_capture(source: NativeVideoSource, running: Arc<AtomicBool>) -> Re
         let mut i420 = I420Buffer::new(w, h);
         let (y, u, v) = i420.data_mut();
         for i in 0..(w * h) as usize {
-            if i < y.len() { y[i] = (i % 256) as u8; }
+            if i < y.len() {
+                y[i] = (i % 256) as u8;
+            }
         }
         let uv_len = ((w + 1) / 2) * ((h + 1) / 2);
         for i in 0..uv_len as usize {
-            if i < u.len() { u[i] = 128; }
-            if i < v.len() { v[i] = 128; }
+            if i < u.len() {
+                u[i] = 128;
+            }
+            if i < v.len() {
+                v[i] = 128;
+            }
         }
         frame_count += 1;
         let frame = VideoFrame {
@@ -2020,7 +2197,8 @@ impl XcapI420Buffers {
         dst_w: u32,
         dst_h: u32,
         frame_count: i64,
-    ) -> Option<livekit::webrtc::video_frame::VideoFrame<livekit::webrtc::video_frame::I420Buffer>> {
+    ) -> Option<livekit::webrtc::video_frame::VideoFrame<livekit::webrtc::video_frame::I420Buffer>>
+    {
         use livekit::webrtc::native::yuv_helper;
         use livekit::webrtc::video_frame::I420Buffer;
 
@@ -2047,14 +2225,7 @@ impl XcapI420Buffers {
                 dst_h as i32,
             );
         } else {
-            box_scale_rgba(
-                rgba,
-                src_w,
-                src_h,
-                &mut self.scaled_rgba,
-                dst_w,
-                dst_h,
-            );
+            box_scale_rgba(rgba, src_w, src_h, &mut self.scaled_rgba, dst_w, dst_h);
             yuv_helper::abgr_to_i420(
                 &self.scaled_rgba,
                 dst_w * 4,
@@ -2150,7 +2321,6 @@ fn convert_rgba_to_i420(
     }
 }
 
-
 /// Start screen capture using Windows Graphics Capture API (GPU-accelerated, low latency).
 ///
 /// Architecture (two-thread pipeline):
@@ -2169,8 +2339,12 @@ fn start_screen_capture_xcap(
     source_target: StreamSourceTarget,
     preset: ScreenPreset,
     stop_flag: Arc<AtomicBool>,
+    _keyframe_requested: Arc<AtomicBool>,
     session_stats: Arc<Mutex<VoiceSessionStats>>,
-) -> (Option<LocalVideoTrack>, Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>) {
+) -> (
+    Option<LocalVideoTrack>,
+    Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>,
+) {
     let (video_width, video_height, max_fps, bitrate) = preset.params();
     {
         let mut st = session_stats.lock();
@@ -2188,9 +2362,13 @@ fn start_screen_capture_xcap(
         st.encoder_threads = Some(encoder_threads_for_resolution(video_width, video_height));
     }
     let frame_interval_ms = (1000.0 / max_fps).round() as u64;
-    let resolution = VideoResolution { width: video_width, height: video_height };
+    let resolution = VideoResolution {
+        width: video_width,
+        height: video_height,
+    };
     let source = NativeVideoSource::new(resolution, true);
-    let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
+    let track =
+        LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
 
     if let StreamSourceTarget::Window {
         window_id,
@@ -2248,8 +2426,7 @@ fn start_screen_capture_xcap(
                             fps_window_frames as f32 / elapsed.as_secs_f32().max(0.001);
                         eprintln!(
                             "[voice][screen] xcap capture_frame rate: {:.1} fps (target {})",
-                            actual_fps,
-                            max_fps
+                            actual_fps, max_fps
                         );
                         fps_window_frames = 0;
                         fps_window_start = std::time::Instant::now();
@@ -2321,8 +2498,7 @@ fn start_screen_capture_xcap(
                     let actual_fps = fps_window_frames as f32 / elapsed.as_secs_f32().max(0.001);
                     eprintln!(
                         "[voice][screen] xcap capture_frame rate: {:.1} fps (target {})",
-                        actual_fps,
-                        max_fps
+                        actual_fps, max_fps
                     );
                     fps_window_frames = 0;
                     fps_window_start = std::time::Instant::now();
@@ -2345,13 +2521,23 @@ fn start_screen_capture(
     source_target: StreamSourceTarget,
     preset: ScreenPreset,
     stop_flag: Arc<AtomicBool>,
+    keyframe_requested: Arc<AtomicBool>,
     session_stats: Arc<Mutex<VoiceSessionStats>>,
-) -> (Option<LocalVideoTrack>, Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>) {
-    let capture_backend = std::env::var("ASTRIX_SCREEN_CAPTURE_BACKEND")
-        .unwrap_or_else(|_| "wgc".to_string());
+) -> (
+    Option<LocalVideoTrack>,
+    Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>,
+) {
+    let capture_backend =
+        std::env::var("ASTRIX_SCREEN_CAPTURE_BACKEND").unwrap_or_else(|_| "wgc".to_string());
     if capture_backend.eq_ignore_ascii_case("xcap") {
         eprintln!("[voice][screen] capture backend override: xcap");
-        return start_screen_capture_xcap(source_target, preset, stop_flag, session_stats);
+        return start_screen_capture_xcap(
+            source_target,
+            preset,
+            stop_flag,
+            keyframe_requested,
+            session_stats,
+        );
     }
     let use_dxgi = capture_backend.eq_ignore_ascii_case("dxgi")
         && matches!(&source_target, StreamSourceTarget::Monitor { .. });
@@ -2370,18 +2556,19 @@ fn start_screen_capture(
     };
     use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering};
     use windows::Win32::Graphics::Direct3D11::{
-        D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
-        D3D11_USAGE_DEFAULT, ID3D11Texture2D,
+        ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+        D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     };
     use windows_capture::{
         capture::{Context, GraphicsCaptureApiHandler},
         frame::Frame,
         graphics_capture_api::InternalCaptureControl,
         monitor::Monitor as WgcMonitor,
+        settings::{
+            ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
+            MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
+        },
         window::Window as WgcWindow,
-        settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings,
-                   DirtyRegionSettings, MinimumUpdateIntervalSettings,
-                   SecondaryWindowSettings, Settings},
     };
 
     let (video_width, video_height, max_fps, bitrate_bps) = preset.params();
@@ -2414,7 +2601,9 @@ fn start_screen_capture(
     }
     impl LatestSlot {
         fn new() -> Self {
-            Self { slot: AtomicU8::new(LATEST_SLOT_NONE) }
+            Self {
+                slot: AtomicU8::new(LATEST_SLOT_NONE),
+            }
         }
         /// WGC: after copy to texture[write_slot], call this. Returns the slot we wrote to.
         fn store(&self, write_slot: u8) {
@@ -2436,7 +2625,10 @@ fn start_screen_capture(
     // Warn early for demanding presets — software path may not sustain target fps.
     if matches!(
         preset,
-        ScreenPreset::P1440F60 | ScreenPreset::P720F120 | ScreenPreset::P1080F120 | ScreenPreset::P1440F90
+        ScreenPreset::P1440F60
+            | ScreenPreset::P720F120
+            | ScreenPreset::P1080F120
+            | ScreenPreset::P1440F90
     ) {
         eprintln!(
             "[voice][screen] WARNING: {:?} is demanding (high res/fps). If FPS drops, consider \
@@ -2445,7 +2637,10 @@ fn start_screen_capture(
         );
     }
 
-    let resolution = VideoResolution { width: video_width, height: video_height };
+    let resolution = VideoResolution {
+        width: video_width,
+        height: video_height,
+    };
 
     // Encode path — mft (force MFT), cpu (OpenH264 I420), auto (prefer NVENC D3D11 on NVIDIA,
     // then fall back to MFT, then to OpenH264 if encoded backends hard-fail).
@@ -2453,7 +2648,11 @@ fn start_screen_capture(
     // via ExternalH264Encoder → EncodedImageCallback → WebRTC RTP layer.
     // auto defaults to NVENC D3D11 → MFT hardware/software → CPU OpenH264 fallback chain.
     #[derive(Clone, Copy, PartialEq)]
-    enum EncodePath { Mft, Cpu, Auto }
+    enum EncodePath {
+        Mft,
+        Cpu,
+        Auto,
+    }
     let encode_path: EncodePath = match std::env::var("ASTRIX_SCREEN_CAPTURE_PATH").as_deref() {
         Ok("mft") => EncodePath::Mft,
         Ok("cpu") => EncodePath::Cpu,
@@ -2472,7 +2671,8 @@ fn start_screen_capture(
 
     if encode_path == EncodePath::Mft || encode_path == EncodePath::Auto {
         let encoded = NativeEncodedVideoSource::new(resolution.clone(), true);
-        track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Encoded(encoded.clone()));
+        track =
+            LocalVideoTrack::create_video_track("screen", RtcVideoSource::Encoded(encoded.clone()));
         source = None;
         encoded_source = Some(encoded);
         let (tx, rx) = tokio::sync::oneshot::channel::<LocalVideoTrack>();
@@ -2480,7 +2680,8 @@ fn start_screen_capture(
         fallback_rx_opt = Some(rx);
     } else {
         let native = NativeVideoSource::new(resolution.clone(), true);
-        track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(native.clone()));
+        track =
+            LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(native.clone()));
         source = Some(native);
         encoded_source = None;
         fallback_tx_opt = None;
@@ -2507,7 +2708,9 @@ fn start_screen_capture(
             if w.wrapping_sub(r) >= RING_SIZE {
                 let old = self.slots[r % RING_SIZE].swap(std::ptr::null_mut(), Ordering::AcqRel);
                 if !old.is_null() {
-                    unsafe { drop(Box::from_raw(old)); }
+                    unsafe {
+                        drop(Box::from_raw(old));
+                    }
                 }
                 self.read_idx.store(r.wrapping_add(1), Ordering::Release);
             }
@@ -2515,7 +2718,9 @@ fn start_screen_capture(
             let old = self.slots[slot].swap(ptr, Ordering::AcqRel);
             // Drop any previously unread frame (can happen when encoder lags at 60 fps).
             if !old.is_null() {
-                unsafe { drop(Box::from_raw(old)); }
+                unsafe {
+                    drop(Box::from_raw(old));
+                }
             }
             self.write_idx.store(w.wrapping_add(1), Ordering::Release);
         }
@@ -2527,12 +2732,18 @@ fn start_screen_capture(
             }
             let ptr = self.slots[r % RING_SIZE].swap(std::ptr::null_mut(), Ordering::AcqRel);
             self.read_idx.store(r.wrapping_add(1), Ordering::Release);
-            if ptr.is_null() { None } else { Some(ptr) }
+            if ptr.is_null() {
+                None
+            } else {
+                Some(ptr)
+            }
         }
         fn drain_drop(&self) {
             while let Some(ptr) = self.pop() {
                 if !ptr.is_null() {
-                    unsafe { drop(Box::from_raw(ptr)); }
+                    unsafe {
+                        drop(Box::from_raw(ptr));
+                    }
                 }
             }
         }
@@ -2629,9 +2840,9 @@ fn start_screen_capture(
                             && frame_timestamp_100ns > last_frame_timestamp_100ns
                             && frames > 1
                         {
-                            let compositor_elapsed_sec = (frame_timestamp_100ns - last_frame_timestamp_100ns)
-                                as f32
-                                / 10_000_000.0;
+                            let compositor_elapsed_sec =
+                                (frame_timestamp_100ns - last_frame_timestamp_100ns) as f32
+                                    / 10_000_000.0;
                             (frames - 1) as f32 / compositor_elapsed_sec.max(0.001)
                         } else {
                             callback_fps
@@ -2695,9 +2906,16 @@ fn start_screen_capture(
                                     std::array::from_fn(|_| None);
                                 for (i, slot) in textures.iter_mut().enumerate() {
                                     if let Err(e) = unsafe {
-                                        device_clone.CreateTexture2D(&our_desc, None, Some(std::ptr::from_mut(slot)))
+                                        device_clone.CreateTexture2D(
+                                            &our_desc,
+                                            None,
+                                            Some(std::ptr::from_mut(slot)),
+                                        )
                                     } {
-                                        eprintln!("[voice][screen] CreateTexture2D[{}] failed: {:?}", i, e);
+                                        eprintln!(
+                                            "[voice][screen] CreateTexture2D[{}] failed: {:?}",
+                                            i, e
+                                        );
                                         pool_fail.store(true, Ordering::Relaxed);
                                         return;
                                     }
@@ -2760,7 +2978,8 @@ fn start_screen_capture(
                             unsafe {
                                 context.CopyResource(&our_tex, texture);
                             }
-                            self.telemetry.set_capture(capture_start.elapsed().as_micros() as u64);
+                            self.telemetry
+                                .set_capture(capture_start.elapsed().as_micros() as u64);
                             self.latest_slot.store(write_slot);
                         }
                         // else: encoder still converting; drop frame so WGC thread never blocks
@@ -3000,10 +3219,7 @@ fn start_screen_capture(
         }
         eprintln!(
             "[voice][screen] WGC capturing window hwnd={} at {}x{} @ {}fps",
-            window_id,
-            video_width,
-            video_height,
-            max_fps
+            window_id, video_width, video_height, max_fps
         );
 
         let flags = WgcFlags {
@@ -3020,7 +3236,10 @@ fn start_screen_capture(
             telemetry: Arc::clone(&telemetry_sender),
         };
         let min_update_interval = if max_fps >= 55.0 {
-            eprintln!("[voice][screen] WGC MinUpdateInterval: 1000 Вµs (target {} fps)", max_fps);
+            eprintln!(
+                "[voice][screen] WGC MinUpdateInterval: 1000 Вµs (target {} fps)",
+                max_fps
+            );
             MinimumUpdateIntervalSettings::Custom(Duration::from_micros(1000))
         } else {
             MinimumUpdateIntervalSettings::Default
@@ -3047,61 +3266,67 @@ fn start_screen_capture(
             .ok();
     } else {
         let monitors = WgcMonitor::enumerate().unwrap_or_default();
-    if monitors.is_empty() {
-        eprintln!("[voice][screen] no monitors found");
-        return (None, None);
-    }
-    let idx = screen_index.unwrap_or(0).min(monitors.len() - 1);
-    let Some(monitor) = monitors.into_iter().nth(idx) else {
-        return (None, None);
-    };
-    eprintln!("[voice][screen] WGC capturing monitor {} at {}×{} @ {}fps", idx, video_width, video_height, max_fps);
+        if monitors.is_empty() {
+            eprintln!("[voice][screen] no monitors found");
+            return (None, None);
+        }
+        let idx = screen_index.unwrap_or(0).min(monitors.len() - 1);
+        let Some(monitor) = monitors.into_iter().nth(idx) else {
+            return (None, None);
+        };
+        eprintln!(
+            "[voice][screen] WGC capturing monitor {} at {}×{} @ {}fps",
+            idx, video_width, video_height, max_fps
+        );
 
-    let flags = WgcFlags {
-        ring: Arc::clone(&ring),
-        stop_flag: Arc::clone(&stop_flag),
-        latest_slot: Arc::clone(&latest_slot),
-        pool_ref: Arc::clone(&pool_ref),
-        gpu_encode_active: Arc::clone(&gpu_encode_active),
-        pool_creation_started: Arc::clone(&pool_creation_started),
-        pool_creation_failed: Arc::clone(&pool_creation_failed),
-        wgc_frame_count: Arc::clone(&wgc_frame_count),
-        wgc_source_fps_milli: Arc::clone(&wgc_source_fps_milli),
-        wgc_log_state: Arc::clone(&wgc_log_state),
-        telemetry: Arc::clone(&telemetry_sender),
-    };
-    // Request capture rate from WGC: Default can throttle to ~30 fps on some systems.
-    // MinUpdateInterval = minimum time between frames; smaller = higher max capture rate.
-    // Use 1 ms (doc: values >= 1 ms work; < 1 ms can cap at ~50 fps) so WGC can deliver 60+ fps;
-    // our encoder thread throttles to max_fps via next_frame_at.
-    // Try micros explicitly in case crate rounds millis to 33 ms on some code paths.
-    let min_update_interval = if max_fps >= 55.0 {
-        eprintln!("[voice][screen] WGC MinUpdateInterval: 1000 µs (target {} fps)", max_fps);
-        MinimumUpdateIntervalSettings::Custom(Duration::from_micros(1000))
-    } else {
-        MinimumUpdateIntervalSettings::Default
-    };
-    let settings = Settings::new(
-        monitor,
-        CursorCaptureSettings::Default,
-        DrawBorderSettings::Default,
-        SecondaryWindowSettings::Default,
-        min_update_interval,
-        DirtyRegionSettings::Default,
-        ColorFormat::Rgba8,
-        flags,
-    );
+        let flags = WgcFlags {
+            ring: Arc::clone(&ring),
+            stop_flag: Arc::clone(&stop_flag),
+            latest_slot: Arc::clone(&latest_slot),
+            pool_ref: Arc::clone(&pool_ref),
+            gpu_encode_active: Arc::clone(&gpu_encode_active),
+            pool_creation_started: Arc::clone(&pool_creation_started),
+            pool_creation_failed: Arc::clone(&pool_creation_failed),
+            wgc_frame_count: Arc::clone(&wgc_frame_count),
+            wgc_source_fps_milli: Arc::clone(&wgc_source_fps_milli),
+            wgc_log_state: Arc::clone(&wgc_log_state),
+            telemetry: Arc::clone(&telemetry_sender),
+        };
+        // Request capture rate from WGC: Default can throttle to ~30 fps on some systems.
+        // MinUpdateInterval = minimum time between frames; smaller = higher max capture rate.
+        // Use 1 ms (doc: values >= 1 ms work; < 1 ms can cap at ~50 fps) so WGC can deliver 60+ fps;
+        // our encoder thread throttles to max_fps via next_frame_at.
+        // Try micros explicitly in case crate rounds millis to 33 ms on some code paths.
+        let min_update_interval = if max_fps >= 55.0 {
+            eprintln!(
+                "[voice][screen] WGC MinUpdateInterval: 1000 µs (target {} fps)",
+                max_fps
+            );
+            MinimumUpdateIntervalSettings::Custom(Duration::from_micros(1000))
+        } else {
+            MinimumUpdateIntervalSettings::Default
+        };
+        let settings = Settings::new(
+            monitor,
+            CursorCaptureSettings::Default,
+            DrawBorderSettings::Default,
+            SecondaryWindowSettings::Default,
+            min_update_interval,
+            DirtyRegionSettings::Default,
+            ColorFormat::Rgba8,
+            flags,
+        );
 
-    // WGC capture thread: GPU→CPU copy only, then atomic swap into slot.
-    std::thread::Builder::new()
-        .name("livekit-screen-wgc".into())
-        .spawn(move || {
-            if let Err(e) = ScreenHandler::start(settings) {
-                eprintln!("[voice][screen] WGC error: {e}");
-            }
-            eprintln!("[voice][screen] WGC capture thread stopped");
-        })
-        .ok();
+        // WGC capture thread: GPU→CPU copy only, then atomic swap into slot.
+        std::thread::Builder::new()
+            .name("livekit-screen-wgc".into())
+            .spawn(move || {
+                if let Err(e) = ScreenHandler::start(settings) {
+                    eprintln!("[voice][screen] WGC error: {e}");
+                }
+                eprintln!("[voice][screen] WGC capture thread stopped");
+            })
+            .ok();
     }
 
     // ── Encoder thread ────────────────────────────────────────────────────────
@@ -3111,9 +3336,9 @@ fn start_screen_capture(
     let source_enc = source.clone();
     let mut encoded_source_enc = encoded_source.clone();
     let encode_path_enc = encode_path;
-            // Encoded-path fallback: if the encoded backend hard-fails, the encoder thread
-            // creates a Native track and sends it here
-            // so the async context can unpublish the Encoded track and republish the Native one.
+    // Encoded-path fallback: if the encoded backend hard-fails, the encoder thread
+    // creates a Native track and sends it here
+    // so the async context can unpublish the Encoded track and republish the Native one.
     // Capture tokio Handle so the encoder thread can create livekit objects (NativeVideoSource,
     // LocalVideoTrack) which internally require a Tokio reactor.
     let tokio_handle = tokio::runtime::Handle::current();
@@ -3127,6 +3352,7 @@ fn start_screen_capture(
     let gpu_encode_active_enc = Arc::clone(&gpu_encode_active);
     let stats_enc = Arc::clone(&session_stats);
     let telemetry_enc = Arc::clone(&telemetry_sender);
+    let keyframe_request_enc = Arc::clone(&keyframe_requested);
     // Phase 5.2: For MFT path we must use latest_slot (D3D11 textures). For CPU path, try GPU first.
     let capture_path_mft = encode_path == EncodePath::Mft || encode_path == EncodePath::Auto;
     if capture_path_mft {
@@ -3622,8 +3848,10 @@ fn start_screen_capture(
                             push_trace_stats.static_reencode_ticks =
                                 push_trace_stats.static_reencode_ticks.saturating_add(1);
                             let nv12_tex = b2n.output_texture();
+                            let force_keyframe_now =
+                                keyframe_request_enc.load(Ordering::Relaxed);
                             let reencode_start = std::time::Instant::now();
-                                match mft.encode(nv12_tex, ts_us, false) {
+                                match mft.encode(nv12_tex, ts_us, force_keyframe_now) {
                                 Ok(frames) => {
                                     let reencode_us = reencode_start.elapsed().as_micros() as u64;
                                     push_trace_stats.static_reencode_ok =
@@ -3641,7 +3869,9 @@ fn start_screen_capture(
                                         );
                                     }
                                     let send_start = std::time::Instant::now();
+                                    let mut sent_keyframe = false;
                                     for ef in frames.iter() {
+                                        sent_keyframe |= ef.key_frame;
                                         enc_src.push_frame(&ef.data, rtp_timestamp, capture_us, ef.key_frame);
                                         if telemetry_enabled {
                                             let now_us = enc_session_start.elapsed().as_micros() as i64;
@@ -3649,6 +3879,9 @@ fn start_screen_capture(
                                             last_send_capture_us = capture_us;
                                         }
                                         rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
+                                    }
+                                    if sent_keyframe {
+                                        keyframe_request_enc.store(false, Ordering::Relaxed);
                                     }
                                     push_trace_stats.send_calls =
                                         push_trace_stats.send_calls.saturating_add(1);
@@ -4090,7 +4323,10 @@ fn start_screen_capture(
                                         periodic_idr_secs
                                     );
                                 }
-                                let key_frame = frame_count < 3 || need_periodic_idr;
+                                let key_frame =
+                                    frame_count < 3
+                                        || need_periodic_idr
+                                        || keyframe_request_enc.load(Ordering::Relaxed);
                                 // The first frame already went through blocking encode(). In pipelined
                                 // mode, only keep a tiny blocking window for the next startup IDRs.
                                 // Using collect_blocking() for the full STARTUP_ACCEPT_FRAMES window
@@ -4187,7 +4423,9 @@ fn start_screen_capture(
                                                 );
                                             }
                                             let send_start = std::time::Instant::now();
+                                            let mut sent_keyframe = false;
                                             for ef in frames {
+                                                sent_keyframe |= ef.key_frame;
                                                 enc_src.push_frame(&ef.data, rtp_timestamp, cap_prev, ef.key_frame);
                                                 if telemetry_enabled {
                                                     let now_us = enc_session_start.elapsed().as_micros() as i64;
@@ -4196,6 +4434,9 @@ fn start_screen_capture(
                                                 }
                                                 collected_this += 1;
                                                 rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
+                                            }
+                                            if sent_keyframe {
+                                                keyframe_request_enc.store(false, Ordering::Relaxed);
                                             }
                                             push_trace_stats.send_calls =
                                                 push_trace_stats.send_calls.saturating_add(1);
@@ -4266,7 +4507,10 @@ fn start_screen_capture(
                                         periodic_idr_secs
                                     );
                                 }
-                                let key_frame = frame_count < 3 || need_periodic_idr;
+                                let key_frame =
+                                    frame_count < 3
+                                        || need_periodic_idr
+                                        || keyframe_request_enc.load(Ordering::Relaxed);
                                 let encode_start = std::time::Instant::now();
                                 if !startup_keyframe_done {
                                     eprintln!(
@@ -4325,7 +4569,9 @@ fn start_screen_capture(
                                     }
                                     let direct_frame_count = frames.len() as u64;
                                     let send_start = std::time::Instant::now();
+                                    let mut sent_keyframe = false;
                                     for ef in frames.into_iter() {
+                                        sent_keyframe |= ef.key_frame;
                                         if !startup_keyframe_done {
                                             eprintln!(
                                                 "[voice][screen] encoded backend startup: pushing first encoded frame bytes={} key={}",
@@ -4340,6 +4586,9 @@ fn start_screen_capture(
                                             last_send_capture_us = capture_us;
                                         }
                                         rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
+                                    }
+                                    if sent_keyframe {
+                                        keyframe_request_enc.store(false, Ordering::Relaxed);
                                     }
                                     let send_us = send_start.elapsed().as_micros() as u64;
                                     if !use_pipelined || direct_frame_count > 0 {
@@ -5074,8 +5323,12 @@ fn start_screen_capture(
     source_target: StreamSourceTarget,
     preset: ScreenPreset,
     stop_flag: Arc<AtomicBool>,
+    _keyframe_requested: Arc<AtomicBool>,
     session_stats: Arc<Mutex<VoiceSessionStats>>,
-) -> (Option<LocalVideoTrack>, Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>) {
+) -> (
+    Option<LocalVideoTrack>,
+    Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>,
+) {
     let (video_width, video_height, max_fps, bitrate) = preset.params();
     {
         let mut st = session_stats.lock();
@@ -5083,13 +5336,23 @@ fn start_screen_capture(
         st.stream_fps = Some(max_fps as f32);
         st.frames_per_second = Some(max_fps as f32);
         st.connection_speed_mbps = Some(bitrate as f32 / 1_000_000.0);
-        st.encoding_path = Some(EncodingPath::OpenH264 { threads: encoder_threads_for_resolution(video_width, video_height), gpu_capture: false }.to_display_string());
+        st.encoding_path = Some(
+            EncodingPath::OpenH264 {
+                threads: encoder_threads_for_resolution(video_width, video_height),
+                gpu_capture: false,
+            }
+            .to_display_string(),
+        );
         st.encoder_threads = Some(encoder_threads_for_resolution(video_width, video_height));
     }
     let frame_interval_ms = (1000.0 / max_fps).round() as u64;
-    let resolution = VideoResolution { width: video_width, height: video_height };
+    let resolution = VideoResolution {
+        width: video_width,
+        height: video_height,
+    };
     let source = NativeVideoSource::new(resolution, true);
-    let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
+    let track =
+        LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
 
     if let StreamSourceTarget::Window {
         window_id,
@@ -5125,7 +5388,12 @@ fn start_screen_capture(
                             let src_h = img.height();
                             let raw = img.as_raw();
                             if let Some(vf) = i420_buffers.rgba_to_i420_scaled_reuse(
-                                raw, src_w, src_h, video_width, video_height, frame_count,
+                                raw,
+                                src_w,
+                                src_h,
+                                video_width,
+                                video_height,
+                                frame_count,
                             ) {
                                 source.capture_frame(&vf);
                                 frame_count += 1;
@@ -5162,7 +5430,12 @@ fn start_screen_capture(
             }
             let idx = screen_index.unwrap_or(0).min(monitors.len() - 1);
             let monitor = monitors.into_iter().nth(idx).unwrap();
-            eprintln!("[voice][screen] xcap capturing monitor {} ({}×{})", idx, monitor.width(), monitor.height());
+            eprintln!(
+                "[voice][screen] xcap capturing monitor {} ({}×{})",
+                idx,
+                monitor.width(),
+                monitor.height()
+            );
 
             let mut frame_count: i64 = 0;
             let mut i420_buffers = XcapI420Buffers::new(video_width, video_height);
@@ -5174,7 +5447,12 @@ fn start_screen_capture(
                         let src_h = img.height();
                         let raw = img.as_raw();
                         if let Some(vf) = i420_buffers.rgba_to_i420_scaled_reuse(
-                            raw, src_w, src_h, video_width, video_height, frame_count,
+                            raw,
+                            src_w,
+                            src_h,
+                            video_width,
+                            video_height,
+                            frame_count,
                         ) {
                             source.capture_frame(&vf);
                             frame_count += 1;
@@ -5200,8 +5478,12 @@ fn start_screen_capture(
     _source_target: StreamSourceTarget,
     _preset: ScreenPreset,
     _stop_flag: Arc<AtomicBool>,
+    _keyframe_requested: Arc<AtomicBool>,
     _session_stats: Arc<Mutex<VoiceSessionStats>>,
-) -> (Option<LocalVideoTrack>, Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>) {
+) -> (
+    Option<LocalVideoTrack>,
+    Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>,
+) {
     (None, None)
 }
 
@@ -5222,8 +5504,8 @@ fn bgra_to_i420_scaled(
     dst_h: u32,
     frame_count: i64,
 ) -> Option<VideoFrame<livekit::webrtc::video_frame::I420Buffer>> {
-    use livekit::webrtc::video_frame::I420Buffer;
     use livekit::webrtc::native::yuv_helper;
+    use livekit::webrtc::video_frame::I420Buffer;
 
     if rgba.len() < (src_w * src_h * 4) as usize {
         return None;
@@ -5236,11 +5518,16 @@ fn bgra_to_i420_scaled(
         let (y_plane, u_plane, v_plane) = src_i420.data_mut();
         let (stride_y, stride_u, stride_v) = (src_w, (src_w + 1) / 2, (src_w + 1) / 2);
         yuv_helper::abgr_to_i420(
-            rgba, src_w * 4,
-            y_plane, stride_y,
-            u_plane, stride_u,
-            v_plane, stride_v,
-            src_w as i32, src_h as i32,
+            rgba,
+            src_w * 4,
+            y_plane,
+            stride_y,
+            u_plane,
+            stride_u,
+            v_plane,
+            stride_v,
+            src_w as i32,
+            src_h as i32,
         );
     }
 
@@ -5275,7 +5562,10 @@ fn capture_mic_to_ring(
     let config = preferred_input_config_48k(&device)?;
     let channels = config.channels as usize;
     let input_rate = config.sample_rate.0;
-    eprintln!("[voice][livekit] mic capture: {} Hz, {} ch", input_rate, channels);
+    eprintln!(
+        "[voice][livekit] mic capture: {} Hz, {} ch",
+        input_rate, channels
+    );
 
     let err_fn = |e| eprintln!("[voice][livekit] mic stream error: {}", e);
     // Cap the ring buffer at ~500 ms so we never grow unboundedly if the consumer stalls.
@@ -5314,12 +5604,17 @@ fn capture_mic_to_ring(
 fn preferred_input_config_48k(device: &cpal::Device) -> Result<cpal::StreamConfig, String> {
     use cpal::traits::DeviceTrait;
     use cpal::SampleRate;
-    for range in device.supported_input_configs().map_err(|e| e.to_string())? {
+    for range in device
+        .supported_input_configs()
+        .map_err(|e| e.to_string())?
+    {
         if let Some(supported) = range.try_with_sample_rate(SampleRate(SAMPLE_RATE)) {
             return Ok(supported.config());
         }
     }
-    eprintln!("[voice][livekit] 48 kHz not supported for input, using default (audio may be distorted)");
+    eprintln!(
+        "[voice][livekit] 48 kHz not supported for input, using default (audio may be distorted)"
+    );
     device
         .default_input_config()
         .map_err(|e| e.to_string())
@@ -5365,9 +5660,7 @@ mod benches {
         eprintln!("[bench] timing path 2 ({} iters)...", ITER);
         let t2 = std::time::Instant::now();
         for i in 0..ITER {
-            let _ = buffers.rgba_to_i420_scaled_reuse(
-                &rgba, SRC_W, SRC_H, DST_W, DST_H, i as i64,
-            );
+            let _ = buffers.rgba_to_i420_scaled_reuse(&rgba, SRC_W, SRC_H, DST_W, DST_H, i as i64);
         }
         let ns2 = t2.elapsed().as_nanos() / ITER as u128;
 
@@ -5375,8 +5668,14 @@ mod benches {
             "[bench] RGBA→I420 ({}×{} → {}×{}), {} iters:",
             SRC_W, SRC_H, DST_W, DST_H, ITER
         );
-        eprintln!("  current (I420 full then scale): {:>8} µs/frame", ns1 / 1000);
-        eprintln!("  xcap I420 (scale-first + reuse): {:>8} µs/frame", ns2 / 1000);
+        eprintln!(
+            "  current (I420 full then scale): {:>8} µs/frame",
+            ns1 / 1000
+        );
+        eprintln!(
+            "  xcap I420 (scale-first + reuse): {:>8} µs/frame",
+            ns2 / 1000
+        );
         if ns2 < ns1 {
             eprintln!(
                 "  → xcap I420 path is {:.1}% faster",

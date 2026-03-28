@@ -11,23 +11,22 @@ use thiserror::Error;
 use windows::core::Interface;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_9_1, D3D_FEATURE_LEVEL_9_2,
-    D3D_FEATURE_LEVEL_9_3, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0,
-    D3D_FEATURE_LEVEL_11_1,
+    D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1,
+    D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_9_1, D3D_FEATURE_LEVEL_9_2,
+    D3D_FEATURE_LEVEL_9_3,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG,
-    D3D11_SDK_VERSION, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ADAPTER_DESC1, IDXGIAdapter,
-    IDXGIAdapter1, IDXGIDevice, IDXGIFactory1,
+    CreateDXGIFactory1, IDXGIAdapter, IDXGIAdapter1, IDXGIDevice, IDXGIFactory1,
+    DXGI_ADAPTER_DESC1, DXGI_ADAPTER_FLAG_SOFTWARE,
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
 /// D3D11_CREATE_DEVICE_VIDEO_SUPPORT = 0x800 — required for ID3D11VideoProcessor (Phase 3).
-const D3D11_CREATE_DEVICE_VIDEO_SUPPORT: D3D11_CREATE_DEVICE_FLAG =
-    D3D11_CREATE_DEVICE_FLAG(0x800);
+const D3D11_CREATE_DEVICE_VIDEO_SUPPORT: D3D11_CREATE_DEVICE_FLAG = D3D11_CREATE_DEVICE_FLAG(0x800);
 
 /// Threshold (bytes) above which we consider adapter "discrete" (512 MB).
 const DISCRETE_VRAM_THRESHOLD: u64 = 512 * 1024 * 1024;
@@ -190,12 +189,12 @@ impl GpuDevice {
             )?;
         }
 
-        let device = device.ok_or(GpuDeviceError::DeviceCreation(
-            windows::core::Error::from(windows::core::HRESULT(-1)),
-        ))?;
-        let context = context.ok_or(GpuDeviceError::DeviceCreation(
-            windows::core::Error::from(windows::core::HRESULT(-1)),
-        ))?;
+        let device = device.ok_or(GpuDeviceError::DeviceCreation(windows::core::Error::from(
+            windows::core::HRESULT(-1),
+        )))?;
+        let context = context.ok_or(GpuDeviceError::DeviceCreation(windows::core::Error::from(
+            windows::core::HRESULT(-1),
+        )))?;
 
         if let Ok(multithread) = context.cast::<ID3D11Multithread>() {
             unsafe {
@@ -261,8 +260,7 @@ impl GpuDevice {
             };
 
             let name = String::from_utf16_lossy(
-                &desc.Description
-                    [..desc.Description.iter().position(|&c| c == 0).unwrap_or(0)],
+                &desc.Description[..desc.Description.iter().position(|&c| c == 0).unwrap_or(0)],
             )
             .trim_end_matches('\0')
             .to_string();
@@ -295,9 +293,7 @@ impl GpuDevice {
 
     /// Get adapter info from an existing D3D11 device (Phase 2.6: WGC reuse).
     /// Use to check if WGC's device matches our preferred adapter.
-    pub fn adapter_info_from_device(
-        device: &ID3D11Device,
-    ) -> Result<AdapterInfo, GpuDeviceError> {
+    pub fn adapter_info_from_device(device: &ID3D11Device) -> Result<AdapterInfo, GpuDeviceError> {
         let dxgi_device: IDXGIDevice = device.cast().map_err(GpuDeviceError::DeviceCreation)?;
         let adapter: IDXGIAdapter1 = unsafe { dxgi_device.GetAdapter()?.cast()? };
         let desc: DXGI_ADAPTER_DESC1 = unsafe { adapter.GetDesc1()? };

@@ -27,22 +27,21 @@ use std::time::Instant;
 
 use windows::core::{Interface, GUID};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11Texture2D,
+    ID3D11Device, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
 use windows::Win32::Media::MediaFoundation::{
-    ICodecAPI, IMFActivate, IMFAttributes, IMFMediaBuffer, IMFMediaEventGenerator, IMFSample,
-    IMFTransform, IMFDXGIDeviceManager, CODECAPI_AVEncCommonLowLatency,
-    CODECAPI_AVEncMPVDefaultBPictureCount, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer,
-    MFCreateMediaType, MFCreateSample, MFStartup, MFTEnumEx, MFVideoFormat_H264,
-    MFVideoFormat_NV12, MFMediaType_Video, MFVideoInterlace_Progressive,
-    MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER,
-    MFT_ENUM_FLAG_SYNCMFT, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER,
-    MFT_REGISTER_TYPE_INFO, MF_E_NOTACCEPTING, MF_E_TRANSFORM_NEED_MORE_INPUT,
-    MF_LOW_LATENCY as MF_LOW_LATENCY_ATTR, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE,
-    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
+    CODECAPI_AVEncCommonLowLatency, CODECAPI_AVEncMPVDefaultBPictureCount, ICodecAPI, IMFActivate,
+    IMFAttributes, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaEventGenerator, IMFSample,
+    IMFTransform, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
+    MFCreateSample, MFMediaType_Video, MFStartup, MFTEnumEx, MFVideoFormat_H264,
+    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFT_CATEGORY_VIDEO_ENCODER,
+    MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT,
+    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+    MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_REGISTER_TYPE_INFO, MF_E_NOTACCEPTING,
+    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY as MF_LOW_LATENCY_ATTR, MF_MT_AVG_BITRATE,
+    MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
     MF_TRANSFORM_ASYNC_UNLOCK, MF_VERSION,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
@@ -55,8 +54,7 @@ const CODECAPI_AVEncCommonMeanBitRate: GUID =
     GUID::from_u128(0xf7222374_2144_4815_b550_a37f8e12ee52);
 const CODECAPI_AVEncCommonQualityVsSpeed: GUID =
     GUID::from_u128(0x98332df8_03cd_476b_89fa_3f9e442dec9f);
-const CODECAPI_AVEncH264CABACEnable: GUID =
-    GUID::from_u128(0xee6cad62_d305_4248_a50e_e1b255f7caf6);
+const CODECAPI_AVEncH264CABACEnable: GUID = GUID::from_u128(0xee6cad62_d305_4248_a50e_e1b255f7caf6);
 const CODECAPI_AVEncNumWorkerThreads: GUID =
     GUID::from_u128(0xb0e5b3a0_7c50_4b44_85a2_c48bed9a9640);
 const CODECAPI_AVEncVideoIntraRefreshMode: GUID =
@@ -158,7 +156,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "encoder: {} ({}, async={})",
         probe.encoder_name,
-        if probe.is_hardware { "hardware" } else { "software" },
+        if probe.is_hardware {
+            "hardware"
+        } else {
+            "software"
+        },
         probe.event_gen.is_some()
     );
 
@@ -185,7 +187,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("not_accepting={}", stats.not_accepting);
     println!("stale_need_tokens={}", stats.stale_need_tokens);
     println!("max_inflight={}", stats.max_inflight);
-    println!("max_accepts_before_drain={}", stats.max_accepts_before_drain);
+    println!(
+        "max_accepts_before_drain={}",
+        stats.max_accepts_before_drain
+    );
     println!("max_need_buffered={}", stats.max_need_buffered);
     println!("max_have_buffered={}", stats.max_have_buffered);
     println!("total_output_bytes={}", stats.total_output_bytes);
@@ -233,9 +238,13 @@ impl ProbeMft {
             set_input_type_from_available(&transform, width, height, fps)?;
         } else {
             let mt_out = create_output_media_type(width, height, fps, bitrate_bps)?;
-            unsafe { transform.SetOutputType(0, &mt_out, 0)?; }
+            unsafe {
+                transform.SetOutputType(0, &mt_out, 0)?;
+            }
             let mt_in = create_input_media_type(width, height, fps)?;
-            unsafe { transform.SetInputType(0, &mt_in, 0)?; }
+            unsafe {
+                transform.SetInputType(0, &mt_in, 0)?;
+            }
         }
 
         unsafe {
@@ -252,14 +261,22 @@ impl ProbeMft {
                 .max(1);
             let gop = fps.saturating_mul(gop_secs);
             unsafe {
-                let _ = codec.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &VARIANT::from(0u32));
+                let _ =
+                    codec.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &VARIANT::from(0u32));
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonLowLatency, &VARIANT::from(1u32));
                 let rc_mode = if fps >= 60 { 0u32 } else { 4u32 };
-                let rc_ok = codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::from(rc_mode));
+                let rc_ok = codec.SetValue(
+                    &CODECAPI_AVEncCommonRateControlMode,
+                    &VARIANT::from(rc_mode),
+                );
                 if rc_ok.is_err() {
-                    let _ = codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::from(0u32));
+                    let _ =
+                        codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::from(0u32));
                 }
-                let _ = codec.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(bitrate_bps));
+                let _ = codec.SetValue(
+                    &CODECAPI_AVEncCommonMeanBitRate,
+                    &VARIANT::from(bitrate_bps),
+                );
                 let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(gop));
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonQualityVsSpeed, &VARIANT::from(100u32));
                 let _ = codec.SetValue(&CODECAPI_AVEncH264CABACEnable, &VARIANT::from(0u32));
@@ -338,7 +355,8 @@ impl ProbeMft {
                         stats.submitted += 1;
                         accepted_in_wave += 1;
                         next_frame += 1;
-                        stats.max_inflight = stats.max_inflight.max(stats.submitted - stats.drained);
+                        stats.max_inflight =
+                            stats.max_inflight.max(stats.submitted - stats.drained);
                         self.merge_events(self.poll_events_no_wait()?);
                         stats.max_need_buffered = stats.max_need_buffered.max(self.need_buffered);
                         stats.max_have_buffered = stats.max_have_buffered.max(self.have_buffered);
@@ -351,7 +369,11 @@ impl ProbeMft {
                         break;
                     }
                     Err(e) => {
-                        return Err(format!("ProcessInput failed at frame {}: {:?}", next_frame, e).into());
+                        return Err(format!(
+                            "ProcessInput failed at frame {}: {:?}",
+                            next_frame, e
+                        )
+                        .into());
                     }
                 }
 
@@ -360,8 +382,7 @@ impl ProbeMft {
                 }
             }
 
-            stats.max_accepts_before_drain =
-                stats.max_accepts_before_drain.max(accepted_in_wave);
+            stats.max_accepts_before_drain = stats.max_accepts_before_drain.max(accepted_in_wave);
 
             println!(
                 "wave {:>3}: accepted={} inflight={} need_buf={} have_buf={} submitted={} drained={}",
@@ -386,7 +407,10 @@ impl ProbeMft {
             }
 
             if self.have_buffered == 0 {
-                println!("timeout waiting for METransformHaveOutput after wave {}", wave);
+                println!(
+                    "timeout waiting for METransformHaveOutput after wave {}",
+                    wave
+                );
                 break;
             }
 
@@ -454,8 +478,7 @@ impl ProbeMft {
             } else {
                 println!(
                     "wait HaveOutput: skipped (already buffered), need_buf={} have_buf={}",
-                    self.need_buffered,
-                    self.have_buffered,
+                    self.need_buffered, self.have_buffered,
                 );
             }
 
@@ -478,7 +501,9 @@ impl ProbeMft {
             print_submit_attempt("F2 retry", &f2_retry);
 
             match f2_retry.state {
-                SubmitState::Ok => println!("\nPair probe result: effective in-flight depth is 1 frame."),
+                SubmitState::Ok => {
+                    println!("\nPair probe result: effective in-flight depth is 1 frame.")
+                }
                 SubmitState::NotAccepting => {
                     println!("\nPair probe result: even after one ProcessOutput, F2 is still NOT_ACCEPTING.")
                 }
@@ -551,8 +576,7 @@ impl ProbeMft {
                     }
                     Err(e) if e.code() == MF_E_NOTACCEPTING => {
                         self.merge_events(self.poll_events_no_wait()?);
-                        let drained =
-                            self.wait_and_drain_latency_output(wait_ms, &mut inflight)?;
+                        let drained = self.wait_and_drain_latency_output(wait_ms, &mut inflight)?;
                         print_latency_result(&drained);
                         results.push(drained);
                     }
@@ -644,7 +668,10 @@ impl ProbeMft {
         let mut output_buffers = [output_buffer];
         let mut status: u32 = 0;
 
-        let result = unsafe { self.transform.ProcessOutput(0, &mut output_buffers, &mut status) };
+        let result = unsafe {
+            self.transform
+                .ProcessOutput(0, &mut output_buffers, &mut status)
+        };
         match result {
             Ok(()) => {
                 let sample = unsafe { ManuallyDrop::take(&mut output_buffers[0].pSample) };
@@ -837,9 +864,8 @@ fn print_latency_summary(results: &[LatencyResult], wall_total_us: u64) {
 unsafe fn get_event_no_wait(
     event_gen: &IMFMediaEventGenerator,
 ) -> windows::core::Result<windows::Win32::Media::MediaFoundation::IMFMediaEvent> {
-    event_gen.GetEvent(
-        windows::Win32::Media::MediaFoundation::MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(1),
-    )
+    event_gen
+        .GetEvent(windows::Win32::Media::MediaFoundation::MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(1))
 }
 
 fn sample_total_len(sample: &IMFSample) -> Result<u32, Box<dyn std::error::Error>> {
@@ -894,7 +920,8 @@ fn create_mft(
                     let _ = attrs.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1);
                 }
 
-                let transform: IMFTransform = match unsafe { act.ActivateObject::<IMFTransform>() } {
+                let transform: IMFTransform = match unsafe { act.ActivateObject::<IMFTransform>() }
+                {
                     Ok(t) => t,
                     Err(_) => continue,
                 };
@@ -906,8 +933,11 @@ fn create_mft(
                 }
 
                 let ptr = unsafe { device_manager.as_raw() as usize };
-                let accepts_d3d =
-                    unsafe { transform.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, ptr).is_ok() };
+                let accepts_d3d = unsafe {
+                    transform
+                        .ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, ptr)
+                        .is_ok()
+                };
                 if accepts_d3d {
                     unsafe { CoTaskMemFree(Some(activates as *const _ as *mut _)) };
                     return Ok((transform, name, true));
@@ -991,7 +1021,9 @@ fn set_output_type_from_available(
         }
     }
     let mt = create_output_media_type(width, height, fps, bitrate_bps)?;
-    unsafe { transform.SetOutputType(0, &mt, 0)?; }
+    unsafe {
+        transform.SetOutputType(0, &mt, 0)?;
+    }
     Ok(())
 }
 
@@ -1024,7 +1056,9 @@ fn set_input_type_from_available(
         }
     }
     let mt = create_input_media_type(width, height, fps)?;
-    unsafe { transform.SetInputType(0, &mt, 0)?; }
+    unsafe {
+        transform.SetInputType(0, &mt, 0)?;
+    }
     Ok(())
 }
 
@@ -1076,7 +1110,10 @@ fn create_nv12_textures(
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_NV12.into(),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: D3D11_USAGE_DEFAULT,
         BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
         CPUAccessFlags: 0,

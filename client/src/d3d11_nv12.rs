@@ -14,34 +14,33 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use thiserror::Error;
 use windows::core::{Interface, BOOL};
 use windows::Win32::Foundation::RECT;
-use windows::Win32::Graphics::Direct3D::Fxc::{D3DCompile, D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_VALIDATION};
+use windows::Win32::Graphics::Direct3D::Fxc::{
+    D3DCompile, D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_VALIDATION,
+};
 use windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
-    D3D11_BIND_UNORDERED_ACCESS, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
-    D3D11_MAP_READ, D3D11_MAP_WRITE, D3D11_MAP_WRITE_DISCARD,
-    D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
-    D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
-    D3D11_USAGE_STAGING,
-    D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CAPS,
+    ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext, ID3D11Query,
+    ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11UnorderedAccessView, ID3D11VideoContext,
+    ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
+    ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView, D3D11_BIND_CONSTANT_BUFFER,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS,
+    D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_MAP_READ, D3D11_MAP_WRITE, D3D11_MAP_WRITE_DISCARD, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
+    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_SRV,
+    D3D11_TEX2D_UAV, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC,
+    D3D11_UAV_DIMENSION_TEXTURE2D, D3D11_UNORDERED_ACCESS_VIEW_DESC,
+    D3D11_UNORDERED_ACCESS_VIEW_DESC_0, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
+    D3D11_USAGE_STAGING, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CAPS,
     D3D11_VIDEO_PROCESSOR_COLOR_SPACE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
     D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
     D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_OPTIMAL_QUALITY, D3D11_VPIV_DIMENSION,
-    D3D11_VPOV_DIMENSION, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV,
-    D3D11_BUFFER_DESC, D3D11_MAPPED_SUBRESOURCE, D3D11_SHADER_RESOURCE_VIEW_DESC,
-    D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC,
-    D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC_0, D3D11_UAV_DIMENSION_TEXTURE2D,
-    D3D11_TEX2D_UAV,
-    ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView,
-    ID3D11Query, ID3D11Texture2D, ID3D11UnorderedAccessView, ID3D11VideoContext, ID3D11VideoDevice,
-    ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView,
-    ID3D11VideoProcessorOutputView,
+    D3D11_VPOV_DIMENSION,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_NV12,
-    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
-    DXGI_RATIONAL, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM, DXGI_RATIONAL,
+    DXGI_SAMPLE_DESC,
 };
 
 /// D3D11_VPIV_DIMENSION_UNKNOWN = 0, D3D11_VPIV_DIMENSION_TEXTURE2D = 1
@@ -233,12 +232,10 @@ impl D3d11BgraToNv12 {
             "[d3d11_nv12] NV12 output ring: {} surface(s)",
             output_ring_size
         );
-        let video_device: ID3D11VideoDevice = device
-            .cast()
-            .map_err(|_| D3d11Nv12Error::NoVideoDevice)?;
-        let video_context: ID3D11VideoContext = context
-            .cast()
-            .map_err(|_| D3d11Nv12Error::NoVideoContext)?;
+        let video_device: ID3D11VideoDevice =
+            device.cast().map_err(|_| D3d11Nv12Error::NoVideoDevice)?;
+        let video_context: ID3D11VideoContext =
+            context.cast().map_err(|_| D3d11Nv12Error::NoVideoContext)?;
 
         let rate = DXGI_RATIONAL {
             Numerator: fps,
@@ -264,33 +261,30 @@ impl D3d11BgraToNv12 {
             content_desc.InputFrameRate.Denominator
         );
 
-        let processor_enum = unsafe {
-            video_device.CreateVideoProcessorEnumerator(&content_desc)?
-        };
+        let processor_enum = unsafe { video_device.CreateVideoProcessorEnumerator(&content_desc)? };
 
-        let bgra_flags = unsafe {
-            processor_enum.CheckVideoProcessorFormat(DXGI_FORMAT_B8G8R8A8_UNORM.into())?
-        };
+        let bgra_flags =
+            unsafe { processor_enum.CheckVideoProcessorFormat(DXGI_FORMAT_B8G8R8A8_UNORM.into())? };
         eprintln!("[d3d11_nv12] BGRA format flags: 0x{:x}", bgra_flags);
         if bgra_flags == 0 {
             return Err(D3d11Nv12Error::BgraInputNotSupported);
         }
 
-        let rgba_flags = unsafe {
-            processor_enum.CheckVideoProcessorFormat(DXGI_FORMAT_R8G8B8A8_UNORM.into())?
-        };
+        let rgba_flags =
+            unsafe { processor_enum.CheckVideoProcessorFormat(DXGI_FORMAT_R8G8B8A8_UNORM.into())? };
         eprintln!("[d3d11_nv12] RGBA format flags: 0x{:x}", rgba_flags);
 
-        let nv12_flags = unsafe {
-            processor_enum.CheckVideoProcessorFormat(DXGI_FORMAT_NV12.into())?
-        };
+        let nv12_flags =
+            unsafe { processor_enum.CheckVideoProcessorFormat(DXGI_FORMAT_NV12.into())? };
         eprintln!("[d3d11_nv12] NV12 format flags: 0x{:x}", nv12_flags);
         if nv12_flags == 0 {
             return Err(D3d11Nv12Error::Nv12OutputNotSupported);
         }
 
         let mut vp_caps = D3D11_VIDEO_PROCESSOR_CAPS::default();
-        unsafe { processor_enum.GetVideoProcessorCaps(&mut vp_caps)?; }
+        unsafe {
+            processor_enum.GetVideoProcessorCaps(&mut vp_caps)?;
+        }
         eprintln!(
             "[d3d11_nv12] VideoProcessorCaps: RateConversionCapsCount={}, MaxInputStreams={}, InputFormatCaps=0x{:x}, FeatureCaps=0x{:x}",
             vp_caps.RateConversionCapsCount, vp_caps.MaxInputStreams,
@@ -301,11 +295,12 @@ impl D3d11BgraToNv12 {
         }
 
         let rate_conversion_index: u32 = 0;
-        eprintln!("[d3d11_nv12] Using rate conversion index: {} (RateConversionCapsCount={})",
-            rate_conversion_index, vp_caps.RateConversionCapsCount);
-        let processor = unsafe {
-            video_device.CreateVideoProcessor(&processor_enum, rate_conversion_index)?
-        };
+        eprintln!(
+            "[d3d11_nv12] Using rate conversion index: {} (RateConversionCapsCount={})",
+            rate_conversion_index, vp_caps.RateConversionCapsCount
+        );
+        let processor =
+            unsafe { video_device.CreateVideoProcessor(&processor_enum, rate_conversion_index)? };
 
         let (output_textures, output_views) = create_nv12_output_ring(
             device,
@@ -432,14 +427,17 @@ impl D3d11BgraToNv12 {
                 let needs_create = guard.as_ref().map_or(true, |tex| {
                     let mut d = D3D11_TEXTURE2D_DESC::default();
                     unsafe { tex.GetDesc(&mut d) };
-                    d.Width != input_desc.Width || d.Height != input_desc.Height
+                    d.Width != input_desc.Width
+                        || d.Height != input_desc.Height
                         || d.Format.0 != input_desc.Format.0
                 });
                 if needs_create {
                     eprintln!(
                         "[d3d11_nv12] Creating intermediate SRV|RTV texture {}x{} format={} \
                          (input bind=0x{:x}) — same format as input for valid CopyResource",
-                        input_desc.Width, input_desc.Height, input_desc.Format.0,
+                        input_desc.Width,
+                        input_desc.Height,
+                        input_desc.Format.0,
                         input_desc.BindFlags
                     );
                     let tex = create_intermediate_texture(
@@ -493,8 +491,14 @@ impl D3d11BgraToNv12 {
         if first_frame {
             eprintln!(
                 "[d3d11_nv12] SrcRect: {} {} {} {} | DstRect: {} {} {} {}",
-                src_rect.left, src_rect.top, src_rect.right, src_rect.bottom,
-                dst_rect.left, dst_rect.top, dst_rect.right, dst_rect.bottom
+                src_rect.left,
+                src_rect.top,
+                src_rect.right,
+                src_rect.bottom,
+                dst_rect.left,
+                dst_rect.top,
+                dst_rect.right,
+                dst_rect.bottom
             );
         }
 
@@ -550,16 +554,13 @@ impl D3d11BgraToNv12 {
             //                   bit3=YCbCr_xvYCC(0), bits4-5=Nominal_Range(01=16-235 limited range)
             // Nominal_Range=01 (bits4-5) requests studio-swing NV12 output. The receiver-side
             // shader expands this range back to full RGB before display.
-            let color_space = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: 0b0001_0100 };
-            self.video_context.VideoProcessorSetStreamColorSpace(
-                &self.processor,
-                0,
-                &color_space,
-            );
-            self.video_context.VideoProcessorSetOutputColorSpace(
-                &self.processor,
-                &color_space,
-            );
+            let color_space = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
+                _bitfield: 0b0001_0100,
+            };
+            self.video_context
+                .VideoProcessorSetStreamColorSpace(&self.processor, 0, &color_space);
+            self.video_context
+                .VideoProcessorSetOutputColorSpace(&self.processor, &color_space);
             self.video_context
                 .VideoProcessorBlt(&self.processor, &output_view, 0, &[stream])
                 .map_err(D3d11Nv12Error::Windows)?;
@@ -594,12 +595,20 @@ impl D3d11BgraToNv12 {
             let is_bgra = tex_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM.into();
             eprintln!(
                 "[d3d11_nv12] Input texture format: {:?} (is_bgra={}), src={}x{} → out={}x{}",
-                tex_desc.Format, is_bgra, self.input_width, self.input_height,
-                self.output_width, self.output_height
+                tex_desc.Format,
+                is_bgra,
+                self.input_width,
+                self.input_height,
+                self.output_width,
+                self.output_height
             );
             match D3d11BgraToNv12Cs::new(
-                &self._device, self.output_width, self.output_height,
-                self.input_width, self.input_height, is_bgra,
+                &self._device,
+                self.output_width,
+                self.output_height,
+                self.input_width,
+                self.input_height,
+                is_bgra,
             ) {
                 Ok(cs) => *guard = Some(cs),
                 Err(e) => {
@@ -631,12 +640,10 @@ impl D3d11BgraToNv12 {
         output_height: u32,
         fps: u32,
     ) -> Result<(), D3d11Nv12Error> {
-        let video_device: ID3D11VideoDevice = device
-            .cast()
-            .map_err(|_| D3d11Nv12Error::NoVideoDevice)?;
-        let video_context: ID3D11VideoContext = context
-            .cast()
-            .map_err(|_| D3d11Nv12Error::NoVideoContext)?;
+        let video_device: ID3D11VideoDevice =
+            device.cast().map_err(|_| D3d11Nv12Error::NoVideoDevice)?;
+        let video_context: ID3D11VideoContext =
+            context.cast().map_err(|_| D3d11Nv12Error::NoVideoContext)?;
 
         let rate = DXGI_RATIONAL {
             Numerator: fps,
@@ -653,19 +660,18 @@ impl D3d11BgraToNv12 {
             Usage: D3D11_VIDEO_USAGE_OPTIMAL_QUALITY,
         };
 
-        let processor_enum = unsafe {
-            video_device.CreateVideoProcessorEnumerator(&content_desc)?
-        };
+        let processor_enum = unsafe { video_device.CreateVideoProcessorEnumerator(&content_desc)? };
 
-        let nv12_flags = unsafe {
-            processor_enum.CheckVideoProcessorFormat(DXGI_FORMAT_NV12.into())?
-        };
+        let nv12_flags =
+            unsafe { processor_enum.CheckVideoProcessorFormat(DXGI_FORMAT_NV12.into())? };
         if nv12_flags == 0 {
             return Err(D3d11Nv12Error::Nv12OutputNotSupported);
         }
 
         let mut vp_caps = D3D11_VIDEO_PROCESSOR_CAPS::default();
-        unsafe { processor_enum.GetVideoProcessorCaps(&mut vp_caps)?; }
+        unsafe {
+            processor_enum.GetVideoProcessorCaps(&mut vp_caps)?;
+        }
         if vp_caps.RateConversionCapsCount == 0 {
             return Err(D3d11Nv12Error::NoRateConversionCaps);
         }
@@ -791,19 +797,24 @@ struct D3d11BgraToNv12Cs {
 impl D3d11BgraToNv12Cs {
     fn new(
         device: &ID3D11Device,
-        width: u32, height: u32,
-        src_width: u32, src_height: u32,
+        width: u32,
+        height: u32,
+        src_width: u32,
+        src_height: u32,
         is_bgra: bool,
     ) -> Result<Self, D3d11Nv12Error> {
         let cs = compile_cs_nv12(device).map_err(|e| {
-            eprintln!("[d3d11_nv12] CS compile failed: {:?}", e); e
+            eprintln!("[d3d11_nv12] CS compile failed: {:?}", e);
+            e
         })?;
         let cb_params = create_cb_params(device).map_err(|e| {
-            eprintln!("[d3d11_nv12] CS cb_params failed: {:?}", e); e
+            eprintln!("[d3d11_nv12] CS cb_params failed: {:?}", e);
+            e
         })?;
         let (tex_y, tex_uv, staging_y, staging_uv, staging_nv12, uav_y, uav_uv) =
             create_cs_textures_and_uavs(device, width, height).map_err(|e| {
-                eprintln!("[d3d11_nv12] CS textures/UAVs creation failed: {:?}", e); e
+                eprintln!("[d3d11_nv12] CS textures/UAVs creation failed: {:?}", e);
+                e
             })?;
 
         let is_bgra_u32 = if is_bgra { 1 } else { 0 };
@@ -837,7 +848,8 @@ impl D3d11BgraToNv12Cs {
         output: &ID3D11Texture2D,
     ) -> Result<(), D3d11Nv12Error> {
         let srv = create_srv_for_texture(device, input).map_err(|e| {
-            eprintln!("[d3d11_nv12] CS create_srv failed: {:?}", e); e
+            eprintln!("[d3d11_nv12] CS create_srv failed: {:?}", e);
+            e
         })?;
 
         let uavs = [Some(self.uav_y.clone()), Some(self.uav_uv.clone())];
@@ -854,9 +866,19 @@ impl D3d11BgraToNv12Cs {
             // Phase 0: Y plane — cbuffer is 32 bytes (8 x u32).
             let params: [u32; 8] = [w, h, 0, self.is_bgra, self.src_width, self.src_height, 0, 0];
             context
-                .Map(&self.cb_params, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
+                .Map(
+                    &self.cb_params,
+                    0,
+                    D3D11_MAP_WRITE_DISCARD,
+                    0,
+                    Some(&mut mapped),
+                )
                 .map_err(|e| D3d11Nv12Error::ComputeShaderFallback(e.to_string()))?;
-            std::ptr::copy_nonoverlapping(params.as_ptr() as *const u8, mapped.pData as *mut u8, 32);
+            std::ptr::copy_nonoverlapping(
+                params.as_ptr() as *const u8,
+                mapped.pData as *mut u8,
+                32,
+            );
             context.Unmap(&self.cb_params, 0);
 
             context.CSSetShader(Some(&self.cs), None);
@@ -866,9 +888,16 @@ impl D3d11BgraToNv12Cs {
             context.Dispatch((w + 15) / 16, (h + 15) / 16, 1);
 
             // Phase 1: UV plane
-            let params_uv: [u32; 8] = [w, h, 1, self.is_bgra, self.src_width, self.src_height, 0, 0];
+            let params_uv: [u32; 8] =
+                [w, h, 1, self.is_bgra, self.src_width, self.src_height, 0, 0];
             context
-                .Map(&self.cb_params, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
+                .Map(
+                    &self.cb_params,
+                    0,
+                    D3D11_MAP_WRITE_DISCARD,
+                    0,
+                    Some(&mut mapped),
+                )
                 .map_err(|e| D3d11Nv12Error::ComputeShaderFallback(e.to_string()))?;
             std::ptr::copy_nonoverlapping(
                 params_uv.as_ptr() as *const u8,
@@ -880,7 +909,12 @@ impl D3d11BgraToNv12Cs {
 
             let uavs_clear = [None, None];
             let counts_clear = [0u32; 2];
-            context.CSSetUnorderedAccessViews(0, 2, Some(uavs_clear.as_ptr()), Some(counts_clear.as_ptr()));
+            context.CSSetUnorderedAccessViews(
+                0,
+                2,
+                Some(uavs_clear.as_ptr()),
+                Some(counts_clear.as_ptr()),
+            );
             context.CSSetShaderResources(0, Some(&[None]));
             context.CSSetShader(None, None);
 
@@ -902,7 +936,13 @@ impl D3d11BgraToNv12Cs {
                 .Map(&self.staging_uv, 0, D3D11_MAP_READ, 0, Some(&mut mapped_uv))
                 .map_err(|e| D3d11Nv12Error::ComputeShaderFallback(e.to_string()))?;
             context
-                .Map(&self.staging_nv12, 0, D3D11_MAP_WRITE, 0, Some(&mut mapped_nv12))
+                .Map(
+                    &self.staging_nv12,
+                    0,
+                    D3D11_MAP_WRITE,
+                    0,
+                    Some(&mut mapped_nv12),
+                )
                 .map_err(|e| D3d11Nv12Error::ComputeShaderFallback(e.to_string()))?;
 
             let y_row = w as usize;
@@ -1056,52 +1096,71 @@ fn create_cs_textures_and_uavs(
     let uw = width / 2;
     let uh = height / 2;
 
-    let tex_desc = |w: u32, h: u32, fmt: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, bind: u32| {
-        D3D11_TEXTURE2D_DESC {
-            Width: w,
-            Height: h,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: fmt.into(),
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: bind,
-            CPUAccessFlags: 0,
-            MiscFlags: 0,
-        }
-    };
+    let tex_desc =
+        |w: u32, h: u32, fmt: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, bind: u32| {
+            D3D11_TEXTURE2D_DESC {
+                Width: w,
+                Height: h,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: fmt.into(),
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: bind,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            }
+        };
 
     let mut tex_y = None;
     let mut tex_uv = None;
     unsafe {
         device.CreateTexture2D(
-            &tex_desc(width, height, DXGI_FORMAT_R8_UNORM, D3D11_BIND_UNORDERED_ACCESS.0 as u32),
+            &tex_desc(
+                width,
+                height,
+                DXGI_FORMAT_R8_UNORM,
+                D3D11_BIND_UNORDERED_ACCESS.0 as u32,
+            ),
             None,
             Some(&mut tex_y),
         )?;
         device.CreateTexture2D(
-            &tex_desc(uw, uh, DXGI_FORMAT_R8G8_UNORM, D3D11_BIND_UNORDERED_ACCESS.0 as u32),
+            &tex_desc(
+                uw,
+                uh,
+                DXGI_FORMAT_R8G8_UNORM,
+                D3D11_BIND_UNORDERED_ACCESS.0 as u32,
+            ),
             None,
             Some(&mut tex_uv),
         )?;
     }
     let tex_y = tex_y.ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("tex_y null".into()))?;
-    let tex_uv = tex_uv.ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("tex_uv null".into()))?;
+    let tex_uv =
+        tex_uv.ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("tex_uv null".into()))?;
 
-    let staging_desc = |w: u32, h: u32, fmt: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT| {
-        D3D11_TEXTURE2D_DESC {
-            Width: w,
-            Height: h,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: fmt.into(),
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-            Usage: D3D11_USAGE_STAGING,
-            BindFlags: 0,
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-            MiscFlags: 0,
-        }
-    };
+    let staging_desc =
+        |w: u32, h: u32, fmt: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT| {
+            D3D11_TEXTURE2D_DESC {
+                Width: w,
+                Height: h,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: fmt.into(),
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            }
+        };
 
     let mut staging_y = None;
     let mut staging_uv = None;
@@ -1123,7 +1182,10 @@ fn create_cs_textures_and_uavs(
             MipLevels: 1,
             ArraySize: 1,
             Format: DXGI_FORMAT_NV12.into(),
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
             Usage: D3D11_USAGE_STAGING,
             BindFlags: 0,
             CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -1131,10 +1193,12 @@ fn create_cs_textures_and_uavs(
         };
         device.CreateTexture2D(&desc_nv12, None, Some(&mut staging_nv12))?;
     }
-    let staging_y = staging_y.ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("staging_y null".into()))?;
-    let staging_uv = staging_uv.ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("staging_uv null".into()))?;
-    let staging_nv12 =
-        staging_nv12.ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("staging_nv12 null".into()))?;
+    let staging_y =
+        staging_y.ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("staging_y null".into()))?;
+    let staging_uv = staging_uv
+        .ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("staging_uv null".into()))?;
+    let staging_nv12 = staging_nv12
+        .ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("staging_nv12 null".into()))?;
 
     let uav_desc = |fmt: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT| {
         D3D11_UNORDERED_ACCESS_VIEW_DESC {
@@ -1153,11 +1217,20 @@ fn create_cs_textures_and_uavs(
             tex_y.clone().cast().map_err(D3d11Nv12Error::Windows)?;
         let res_uv: windows::Win32::Graphics::Direct3D11::ID3D11Resource =
             tex_uv.clone().cast().map_err(D3d11Nv12Error::Windows)?;
-        device.CreateUnorderedAccessView(&res_y, Some(&uav_desc(DXGI_FORMAT_R8_UNORM)), Some(&mut uav_y))?;
-        device.CreateUnorderedAccessView(&res_uv, Some(&uav_desc(DXGI_FORMAT_R8G8_UNORM)), Some(&mut uav_uv))?;
+        device.CreateUnorderedAccessView(
+            &res_y,
+            Some(&uav_desc(DXGI_FORMAT_R8_UNORM)),
+            Some(&mut uav_y),
+        )?;
+        device.CreateUnorderedAccessView(
+            &res_uv,
+            Some(&uav_desc(DXGI_FORMAT_R8G8_UNORM)),
+            Some(&mut uav_uv),
+        )?;
     }
     let uav_y = uav_y.ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("uav_y null".into()))?;
-    let uav_uv = uav_uv.ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("uav_uv null".into()))?;
+    let uav_uv =
+        uav_uv.ok_or_else(|| D3d11Nv12Error::ComputeShaderFallback("uav_uv null".into()))?;
 
     Ok((
         tex_y,
@@ -1186,7 +1259,10 @@ fn create_intermediate_texture(
         MipLevels: 1,
         ArraySize: 1,
         Format: format,
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: D3D11_USAGE_DEFAULT,
         BindFlags: bind_flags,
         CPUAccessFlags: 0,
@@ -1198,7 +1274,9 @@ fn create_intermediate_texture(
         "[d3d11_nv12] Intermediate RTV texture created: {}x{} format={:?} bind=0x{:x}",
         width, height, format, bind_flags
     );
-    tex.ok_or_else(|| D3d11Nv12Error::Windows(windows::core::Error::from(windows::core::HRESULT(-1))))
+    tex.ok_or_else(|| {
+        D3d11Nv12Error::Windows(windows::core::Error::from(windows::core::HRESULT(-1)))
+    })
 }
 
 fn create_nv12_texture(
@@ -1228,7 +1306,9 @@ fn create_nv12_texture(
     };
     let mut texture = None;
     unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture))? };
-    texture.ok_or_else(|| D3d11Nv12Error::Windows(windows::core::Error::from(windows::core::HRESULT(-1))))
+    texture.ok_or_else(|| {
+        D3d11Nv12Error::Windows(windows::core::Error::from(windows::core::HRESULT(-1)))
+    })
 }
 
 fn create_nv12_output_ring(
@@ -1292,9 +1372,7 @@ fn create_input_view(
         )?;
     }
     view.ok_or_else(|| {
-        D3d11Nv12Error::Windows(windows::core::Error::from(
-            windows::core::HRESULT(-1),
-        ))
+        D3d11Nv12Error::Windows(windows::core::Error::from(windows::core::HRESULT(-1)))
     })
 }
 
@@ -1322,8 +1400,6 @@ fn create_output_view(
         )?;
     }
     view.ok_or_else(|| {
-        D3d11Nv12Error::Windows(windows::core::Error::from(
-            windows::core::HRESULT(-1),
-        ))
+        D3d11Nv12Error::Windows(windows::core::Error::from(windows::core::HRESULT(-1)))
     })
 }

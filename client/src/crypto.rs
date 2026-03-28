@@ -27,7 +27,10 @@ pub fn generate_channel_key() -> ChannelKey {
 }
 
 /// Шифрование текста в формате ciphertext + nonce.
-pub fn encrypt_message(key: &ChannelKey, plaintext: &str) -> Result<(Vec<u8>, [u8; NONCE_LEN]), CryptoError> {
+pub fn encrypt_message(
+    key: &ChannelKey,
+    plaintext: &str,
+) -> Result<(Vec<u8>, [u8; NONCE_LEN]), CryptoError> {
     use chacha20poly1305::{
         aead::{Aead, KeyInit},
         ChaCha20Poly1305, Key, Nonce,
@@ -62,4 +65,3 @@ pub fn decrypt_message(
         .map_err(|_| CryptoError::Decrypt)?;
     String::from_utf8(plaintext).map_err(|_| CryptoError::Decrypt)
 }
-

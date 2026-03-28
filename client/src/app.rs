@@ -9,17 +9,18 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 use crate::crypto::ChannelKey;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use crate::d3d11_gl_interop::{D3d11GlInterop, GL_INTEROP_AVAILABLE};
 use crate::net::{
-    ApiClient, AttachmentMeta, Channel, LoginRequest, Member, Message,
-    RegisterRequest, Server, VoiceParticipant,
-    WsClientMsg, WsEventQueue, new_event_queue, ws_task,
+    new_event_queue, ws_task, ApiClient, AttachmentMeta, Channel, LoginRequest, Member, Message,
+    RegisterRequest, Server, VoiceParticipant, WsClientMsg, WsEventQueue,
 };
 use crate::state::AppState;
 use crate::theme::Theme;
-use crate::ui::{self, State, auth_screen, main_screen, block_on, find_attachment_mime, process_background_loads};
-use crate::voice::{video_frame_key, video_preview_frame_key, VoiceCmd, VideoFrames};
-#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-use crate::d3d11_gl_interop::{D3d11GlInterop, GL_INTEROP_AVAILABLE};
+use crate::ui::{
+    self, auth_screen, block_on, find_attachment_mime, main_screen, process_background_loads, State,
+};
+use crate::voice::{video_frame_key, video_preview_frame_key, VideoFrames, VoiceCmd};
 
 // ─── App ───────────────────────────────────────────────────────────────────
 
@@ -68,7 +69,7 @@ impl AstrixApp {
                 screen: ui::Screen::Auth,
                 auth: auth_state,
                 settings: settings.clone(),
-                dark_mode: settings.dark_mode,
+                dark_mode: true,
                 ..Default::default()
             })),
             api,
@@ -115,11 +116,19 @@ impl AstrixApp {
         let payload = last_message_id
             .filter(|&id| id > 0)
             .map(|id| serde_json::json!({ "last_message_id": id }));
-        self.ws_send(WsClientMsg { kind: "channel.view".into(), channel_id: Some(channel_id), payload });
+        self.ws_send(WsClientMsg {
+            kind: "channel.view".into(),
+            channel_id: Some(channel_id),
+            payload,
+        });
     }
 
     fn ws_typing(&self, channel_id: i64) {
-        self.ws_send(WsClientMsg { kind: "typing".into(), channel_id: Some(channel_id), payload: None });
+        self.ws_send(WsClientMsg {
+            kind: "typing".into(),
+            channel_id: Some(channel_id),
+            payload: None,
+        });
     }
 
     fn process_ws_events(&mut self, ctx: &egui::Context) {
@@ -133,6 +142,11 @@ impl AstrixApp {
                 "message.created" => {
                     if let Some(payload) = &ev.payload {
                         if let Ok(msg) = serde_json::from_value::<Message>(payload.clone()) {
+                            if Some(msg.channel_id) != st.main.selected_channel
+                                && Some(msg.author_id) != st.user_id
+                            {
+                                st.main.unread_channels.insert(msg.channel_id);
+                            }
                             if !st.main.messages.iter().any(|m| m.id == msg.id) {
                                 st.main.messages.push(msg.clone());
                             } else {
@@ -145,7 +159,9 @@ impl AstrixApp {
                             }
                             for att in &msg.attachments {
                                 let mid = att.media_id;
-                                if !self.media_textures.contains_key(&mid) && !self.media_bytes.contains_key(&mid) {
+                                if !self.media_textures.contains_key(&mid)
+                                    && !self.media_bytes.contains_key(&mid)
+                                {
                                     self.media_pending.push_back(mid);
                                 }
                             }
@@ -171,7 +187,10 @@ impl AstrixApp {
                 }
                 "message.deleted" => {
                     if let Some(payload) = &ev.payload {
-                        let message_id = payload.get("id").or_else(|| payload.get("message_id")).and_then(|v| v.as_i64());
+                        let message_id = payload
+                            .get("id")
+                            .or_else(|| payload.get("message_id"))
+                            .and_then(|v| v.as_i64());
                         if let Some(mid) = message_id {
                             st.main.messages.retain(|m| m.id != mid);
                         }
@@ -206,13 +225,23 @@ impl AstrixApp {
                 }
                 "channel.deleted" => {
                     if let Some(payload) = &ev.payload {
-                        let channel_id = payload.get("id").or_else(|| payload.get("channel_id")).and_then(|v| v.as_i64());
+                        let channel_id = payload
+                            .get("id")
+                            .or_else(|| payload.get("channel_id"))
+                            .and_then(|v| v.as_i64());
                         if let Some(cid) = channel_id {
                             let server_id = payload.get("server_id").and_then(|v| v.as_i64());
-                            if server_id == st.main.selected_server || ev.server_id == st.main.selected_server.unwrap_or(0) {
+                            if server_id == st.main.selected_server
+                                || ev.server_id == st.main.selected_server.unwrap_or(0)
+                            {
                                 st.main.channels.retain(|c| c.id != cid);
                                 if st.main.selected_channel == Some(cid) {
-                                    let fallback = st.main.channels.iter().find(|c| c.r#type == "text").map(|c| c.id);
+                                    let fallback = st
+                                        .main
+                                        .channels
+                                        .iter()
+                                        .find(|c| c.r#type == "text")
+                                        .map(|c| c.id);
                                     st.main.selected_channel = fallback;
                                     st.main.messages.clear();
                                     st.main.messages_load_for = None;
@@ -226,7 +255,12 @@ impl AstrixApp {
                     if let Some(payload) = &ev.payload {
                         if let Ok(m) = serde_json::from_value::<Member>(payload.clone()) {
                             if Some(ev.server_id) == st.main.selected_server {
-                                if !st.main.server_members.iter().any(|x| x.user_id == m.user_id) {
+                                if !st
+                                    .main
+                                    .server_members
+                                    .iter()
+                                    .any(|x| x.user_id == m.user_id)
+                                {
                                     st.main.server_members.push(m);
                                 }
                             }
@@ -249,7 +283,12 @@ impl AstrixApp {
                     if let Some(payload) = &ev.payload {
                         if let Ok(m) = serde_json::from_value::<Member>(payload.clone()) {
                             if Some(ev.server_id) == st.main.selected_server {
-                                if let Some(existing) = st.main.server_members.iter_mut().find(|x| x.user_id == m.user_id) {
+                                if let Some(existing) = st
+                                    .main
+                                    .server_members
+                                    .iter_mut()
+                                    .find(|x| x.user_id == m.user_id)
+                                {
                                     existing.username = m.username.clone();
                                     existing.display_name = m.display_name.clone();
                                     existing.is_owner = m.is_owner;
@@ -264,7 +303,10 @@ impl AstrixApp {
                 "member.renamed" => {
                     if let Some(payload) = &ev.payload {
                         let user_id = payload.get("user_id").and_then(|v| v.as_i64());
-                        let display = payload.get("display_name").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let display = payload
+                            .get("display_name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
                         if let (Some(uid), Some(name)) = (user_id, display) {
                             for m in &mut st.main.server_members {
                                 if m.user_id == uid {
@@ -272,7 +314,9 @@ impl AstrixApp {
                                     break;
                                 }
                             }
-                            if Some(uid) == st.user_id && Some(ev.server_id) == st.main.selected_server {
+                            if Some(uid) == st.user_id
+                                && Some(ev.server_id) == st.main.selected_server
+                            {
                                 st.main.my_display_name = name;
                             }
                         }
@@ -281,7 +325,8 @@ impl AstrixApp {
                 }
                 "presence.init" => {
                     if let Some(payload) = &ev.payload {
-                        if let Some(arr) = payload.get("online_user_ids").and_then(|v| v.as_array()) {
+                        if let Some(arr) = payload.get("online_user_ids").and_then(|v| v.as_array())
+                        {
                             let ids: HashSet<i64> = arr.iter().filter_map(|v| v.as_i64()).collect();
                             st.main.online_users = ids;
                         }
@@ -305,10 +350,17 @@ impl AstrixApp {
                 "typing" => {
                     if let Some(payload) = &ev.payload {
                         let user_id = payload.get("user_id").and_then(|v| v.as_i64());
-                        let username = payload.get("username").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let username = payload
+                            .get("username")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
                         if let (Some(uid), Some(name)) = (user_id, username) {
                             if Some(ev.channel_id) == st.main.selected_channel {
-                                let entry = st.main.typing_users.iter_mut().find(|(id, _, _)| *id == uid);
+                                let entry = st
+                                    .main
+                                    .typing_users
+                                    .iter_mut()
+                                    .find(|(id, _, _)| *id == uid);
                                 if let Some(e) = entry {
                                     e.2 = Instant::now();
                                 } else {
@@ -322,11 +374,15 @@ impl AstrixApp {
                 "voice.participant_joined" => {
                     if let Some(payload) = &ev.payload {
                         if let Ok(p) = serde_json::from_value::<VoiceParticipant>(payload.clone()) {
-                            let vol = st.settings.voice_volume_by_user
+                            let vol = st
+                                .settings
+                                .voice_volume_by_user
                                 .get(&p.user_id.to_string())
                                 .copied()
                                 .unwrap_or(1.0);
-                            let stream_vol = st.settings.stream_volume_by_user
+                            let stream_vol = st
+                                .settings
+                                .stream_volume_by_user
                                 .get(&p.user_id.to_string())
                                 .copied()
                                 .unwrap_or(1.0);
@@ -334,7 +390,8 @@ impl AstrixApp {
                             st.main.voice.stream_volumes.insert(p.user_id, stream_vol);
                             if let Some(tx) = self.voice_engine_tx.as_ref() {
                                 tx.send(VoiceCmd::SetUserVolume(p.user_id, vol)).ok();
-                                tx.send(VoiceCmd::SetStreamVolume(p.user_id, stream_vol)).ok();
+                                tx.send(VoiceCmd::SetStreamVolume(p.user_id, stream_vol))
+                                    .ok();
                             }
                             if let Some(ch_id) = p.channel_id {
                                 let list = st.main.channel_voice.entry(ch_id).or_default();
@@ -343,7 +400,13 @@ impl AstrixApp {
                                 }
                             }
                             if st.main.voice.channel_id == p.channel_id {
-                                if !st.main.voice.participants.iter().any(|x| x.user_id == p.user_id) {
+                                if !st
+                                    .main
+                                    .voice
+                                    .participants
+                                    .iter()
+                                    .any(|x| x.user_id == p.user_id)
+                                {
                                     st.main.voice.participants.push(p);
                                 }
                             }
@@ -365,15 +428,23 @@ impl AstrixApp {
                             st.main.voice.locally_muted.remove(&uid);
                             st.main.voice.stream_muted.remove(&uid);
                             st.main.voice.stream_subscriptions.remove(&uid);
-                            st.main.voice_video_textures.remove(&video_frame_key(uid, true));
-                            st.main.voice_video_textures.remove(&video_preview_frame_key(uid));
-                            if let Some((egui_tex_id, _, _, _)) =
-                                st.main.voice_video_gpu_textures.remove(&video_frame_key(uid, true))
+                            st.main
+                                .voice_video_textures
+                                .remove(&video_frame_key(uid, true));
+                            st.main
+                                .voice_video_textures
+                                .remove(&video_preview_frame_key(uid));
+                            if let Some((egui_tex_id, _, _, _)) = st
+                                .main
+                                .voice_video_gpu_textures
+                                .remove(&video_frame_key(uid, true))
                             {
                                 st.main.voice_video_gpu_tex_pending_delete.push(egui_tex_id);
                             }
-                            if let Some((egui_tex_id, _, _, _)) =
-                                st.main.voice_video_gpu_textures.remove(&video_preview_frame_key(uid))
+                            if let Some((egui_tex_id, _, _, _)) = st
+                                .main
+                                .voice_video_gpu_textures
+                                .remove(&video_preview_frame_key(uid))
                             {
                                 st.main.voice_video_gpu_tex_pending_delete.push(egui_tex_id);
                             }
@@ -382,7 +453,9 @@ impl AstrixApp {
                                 st.main.fullscreen_stream_user = None;
                             }
                             if Some(uid) == st.user_id {
-                                if st.main.voice.channel_id == channel_id.or(st.main.voice.channel_id) {
+                                if st.main.voice.channel_id
+                                    == channel_id.or(st.main.voice.channel_id)
+                                {
                                     st.main.voice.channel_id = None;
                                     st.main.voice.server_id = None;
                                     st.main.voice.participants.clear();
@@ -399,19 +472,26 @@ impl AstrixApp {
                         if let Some(uid) = user_id {
                             let mut streaming_now = None;
                             let apply = |p: &mut VoiceParticipant| {
-                                if let Some(v) = payload.get("mic_muted").and_then(|v| v.as_bool()) {
+                                if let Some(v) = payload.get("mic_muted").and_then(|v| v.as_bool())
+                                {
                                     p.mic_muted = v;
                                 }
-                                if let Some(v) = payload.get("cam_enabled").and_then(|v| v.as_bool()) {
+                                if let Some(v) =
+                                    payload.get("cam_enabled").and_then(|v| v.as_bool())
+                                {
                                     p.cam_enabled = v;
                                 }
-                                if let Some(v) = payload.get("streaming").and_then(|v| v.as_bool()) {
+                                if let Some(v) = payload.get("streaming").and_then(|v| v.as_bool())
+                                {
                                     p.streaming = v;
                                 }
                             };
                             for p in &mut st.main.voice.participants {
                                 if p.user_id == uid {
-                                    streaming_now = payload.get("streaming").and_then(|v| v.as_bool()).or(Some(p.streaming));
+                                    streaming_now = payload
+                                        .get("streaming")
+                                        .and_then(|v| v.as_bool())
+                                        .or(Some(p.streaming));
                                     apply(p);
                                     break;
                                 }
@@ -421,7 +501,10 @@ impl AstrixApp {
                                     for p in list.iter_mut() {
                                         if p.user_id == uid {
                                             if streaming_now.is_none() {
-                                                streaming_now = payload.get("streaming").and_then(|v| v.as_bool()).or(Some(p.streaming));
+                                                streaming_now = payload
+                                                    .get("streaming")
+                                                    .and_then(|v| v.as_bool())
+                                                    .or(Some(p.streaming));
                                             }
                                             apply(p);
                                             break;
@@ -467,8 +550,14 @@ impl AstrixApp {
                                 }
                             }
                         } else {
-                            let server_id = payload.get("server_id").or_else(|| payload.get("id")).and_then(|v| v.as_i64());
-                            let name = payload.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            let server_id = payload
+                                .get("server_id")
+                                .or_else(|| payload.get("id"))
+                                .and_then(|v| v.as_i64());
+                            let name = payload
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
                             if let (Some(sid), Some(name)) = (server_id, name) {
                                 for s in &mut st.main.servers {
                                     if s.id == sid {
@@ -488,12 +577,25 @@ impl AstrixApp {
                                 st.main.servers.push(srv);
                             }
                         } else {
-                            let server_id = payload.get("server_id").or_else(|| payload.get("id")).and_then(|v| v.as_i64());
-                            let name = payload.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
-                            let owner_id = payload.get("owner_id").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let server_id = payload
+                                .get("server_id")
+                                .or_else(|| payload.get("id"))
+                                .and_then(|v| v.as_i64());
+                            let name = payload
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let owner_id = payload
+                                .get("owner_id")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0);
                             if let (Some(sid), Some(name)) = (server_id, name) {
                                 if !st.main.servers.iter().any(|s| s.id == sid) {
-                                    st.main.servers.push(Server { id: sid, name, owner_id });
+                                    st.main.servers.push(Server {
+                                        id: sid,
+                                        name,
+                                        owner_id,
+                                    });
                                 }
                             }
                         }
@@ -501,11 +603,23 @@ impl AstrixApp {
                     ctx.request_repaint();
                 }
                 "user.updated" => {
-                    let uid_opt = ev.payload.as_ref().and_then(|p| p.get("user_id").or_else(|| p.get("id")).and_then(|v| v.as_i64()));
-                    let username_opt = ev.payload.as_ref().and_then(|p| p.get("username").and_then(|v| v.as_str()).map(|s| s.to_string()));
+                    let uid_opt = ev.payload.as_ref().and_then(|p| {
+                        p.get("user_id")
+                            .or_else(|| p.get("id"))
+                            .and_then(|v| v.as_i64())
+                    });
+                    let username_opt = ev.payload.as_ref().and_then(|p| {
+                        p.get("username")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    });
                     // Only invalidate avatar cache when avatar_changed is explicitly true.
                     // Default to false to avoid constant re-fetches on other user.updated events (e.g. nickname).
-                    let avatar_changed = ev.payload.as_ref().and_then(|p| p.get("avatar_changed").and_then(|v| v.as_bool())).unwrap_or(false);
+                    let avatar_changed = ev
+                        .payload
+                        .as_ref()
+                        .and_then(|p| p.get("avatar_changed").and_then(|v| v.as_bool()))
+                        .unwrap_or(false);
                     if let Some(uid) = uid_opt {
                         if let Some(ref username) = username_opt {
                             for m in &mut st.main.server_members {
@@ -534,6 +648,9 @@ impl AstrixApp {
                         let reader_id = payload.get("reader_id").and_then(|v| v.as_i64());
                         let channel_id = payload.get("channel_id").and_then(|v| v.as_i64());
                         if let (Some(rid), Some(cid)) = (reader_id, channel_id) {
+                            if Some(rid) == st.user_id {
+                                st.main.unread_channels.remove(&cid);
+                            }
                             if st.main.messages_load_for == Some(cid) {
                                 for msg in &mut st.main.messages {
                                     if msg.author_id != rid && !msg.seen_by.contains(&rid) {
@@ -602,7 +719,9 @@ impl AstrixApp {
 
     fn process_media_downloads(&mut self, state: &mut State) {
         if let Some(media_id) = self.media_pending.pop_front() {
-            if self.media_bytes.contains_key(&media_id) || self.media_textures.contains_key(&media_id) {
+            if self.media_bytes.contains_key(&media_id)
+                || self.media_textures.contains_key(&media_id)
+            {
                 return;
             }
             if let Some(token) = state.access_token.clone() {
@@ -670,7 +789,9 @@ impl eframe::App for AstrixApp {
                         self.gl_interop = Some(interop);
                     }
                     Err(e) => {
-                        eprintln!("[Phase 3.5] WGL_NV_DX_interop2 unavailable: {e} — using CPU readback");
+                        eprintln!(
+                            "[Phase 3.5] WGL_NV_DX_interop2 unavailable: {e} — using CPU readback"
+                        );
                     }
                 }
             }
@@ -685,12 +806,9 @@ impl eframe::App for AstrixApp {
 
         let mut guard = self.state.lock();
 
-        if guard.dark_mode {
-            ctx.set_visuals(egui::Visuals::dark());
-        } else {
-            ctx.set_visuals(egui::Visuals::light());
-        }
-        guard.settings.dark_mode = guard.dark_mode;
+        guard.dark_mode = true;
+        self.theme.apply_egui_visuals(ctx);
+        guard.settings.dark_mode = true;
 
         if guard.main.selected_server != guard.main.ws_connected_server
             && guard.main.selected_server.is_some()
@@ -749,7 +867,9 @@ impl eframe::App for AstrixApp {
         }
 
         let now = Instant::now();
-        st.main.typing_users.retain(|(_, _, t)| now.duration_since(*t) < Duration::from_secs(3));
+        st.main
+            .typing_users
+            .retain(|(_, _, t)| now.duration_since(*t) < Duration::from_secs(3));
 
         if !st.main.new_message.is_empty() {
             let changed = st.main.new_message != st.main.prev_message;
@@ -827,5 +947,4 @@ impl eframe::App for AstrixApp {
             ctx.request_repaint();
         }
     }
-
 }

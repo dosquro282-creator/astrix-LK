@@ -15,27 +15,23 @@ use thiserror::Error;
 use windows::core::{Interface, GUID};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Media::MediaFoundation::{
-    ICodecAPI, IMFActivate, IMFAttributes, IMFMediaEventGenerator, IMFMediaType,
-    IMFSample, IMFTransform, IMFDXGIDeviceManager,
-    CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVEncCommonLowLatency,
-    MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
-    MFCreateSample, MFStartup, MF_VERSION,
-    MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER,
-    MFT_ENUM_FLAG_SYNCMFT, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-    MFT_MESSAGE_NOTIFY_START_OF_STREAM,
-    MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_REGISTER_TYPE_INFO,
-    MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
-    MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MFVideoFormat_H264, MFVideoFormat_NV12,
-    MFMediaType_Video, MFVideoInterlace_Progressive, MF_E_NOTACCEPTING,
-    MF_E_TRANSFORM_NEED_MORE_INPUT,
-    MF_TRANSFORM_ASYNC_UNLOCK, MFTEnumEx,
+    CODECAPI_AVEncCommonLowLatency, CODECAPI_AVEncMPVDefaultBPictureCount, ICodecAPI, IMFActivate,
+    IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType, IMFSample,
+    IMFTransform, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
+    MFCreateSample, MFMediaType_Video, MFStartup, MFTEnumEx, MFVideoFormat_H264,
+    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFT_CATEGORY_VIDEO_ENCODER,
+    MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT,
+    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+    MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_REGISTER_TYPE_INFO, MF_E_NOTACCEPTING,
+    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
+    MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_TRANSFORM_ASYNC_UNLOCK, MF_VERSION,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 use windows::Win32::System::Variant::VARIANT;
 
-
 /// MFT_ENUM_HARDWARE_URL_Attribute — presence indicates hardware MFT.
-const MFT_ENUM_HARDWARE_URL_Attribute: GUID = GUID::from_u128(0x2f66c0d6_0d75_4e3c_ae93_cf0d938d30a1);
+const MFT_ENUM_HARDWARE_URL_Attribute: GUID =
+    GUID::from_u128(0x2f66c0d6_0d75_4e3c_ae93_cf0d938d30a1);
 
 /// MF_LOW_LATENCY / CODECAPI_AVLowLatencyMode — reduces encoder/decoder buffering for real-time streaming.
 /// {9c27891a-ed7a-40e1-88e8-b22727a024ee}
@@ -47,15 +43,18 @@ const CODECAPI_AVEncMPVGOPSize: GUID = GUID::from_u128(0x95f31b26_95a4_41aa_9303
 
 /// CODECAPI_AVEncCommonRateControlMode — eAVEncCommonRateControlMode_LowDelayVBR = 4.
 /// {1c0608e9-370c-4710-8a58-cb6181c42423}
-const CODECAPI_AVEncCommonRateControlMode: GUID = GUID::from_u128(0x1c0608e9_370c_4710_8a58_cb6181c42423);
+const CODECAPI_AVEncCommonRateControlMode: GUID =
+    GUID::from_u128(0x1c0608e9_370c_4710_8a58_cb6181c42423);
 
 /// CODECAPI_AVEncCommonMeanBitRate — target bitrate in bps. Required for CBR/VBR rate control.
 /// {f7222374-2144-4815-b550-a37f8e12ee52}
-const CODECAPI_AVEncCommonMeanBitRate: GUID = GUID::from_u128(0xf7222374_2144_4815_b550_a37f8e12ee52);
+const CODECAPI_AVEncCommonMeanBitRate: GUID =
+    GUID::from_u128(0xf7222374_2144_4815_b550_a37f8e12ee52);
 
 /// CODECAPI_AVEncCommonQualityVsSpeed — 0–100, 100 = max speed. Phase 4.2.
 /// {98332df8-03cd-476b-89fa-3f9e442dec9f}
-const CODECAPI_AVEncCommonQualityVsSpeed: GUID = GUID::from_u128(0x98332df8_03cd_476b_89fa_3f9e442dec9f);
+const CODECAPI_AVEncCommonQualityVsSpeed: GUID =
+    GUID::from_u128(0x98332df8_03cd_476b_89fa_3f9e442dec9f);
 
 /// CODECAPI_AVEncH264CABACEnable — 0 = CAVLC (Baseline), 1 = CABAC (Main/High). Phase 4.2.
 /// {ee6cad62-d305-4248-a50e-e1b255f7caf6}
@@ -63,16 +62,19 @@ const CODECAPI_AVEncH264CABACEnable: GUID = GUID::from_u128(0xee6cad62_d305_4248
 
 /// CODECAPI_AVEncNumWorkerThreads — CPU threads for software MFT. Phase 4.2.
 /// {b0e5b3a0-7c50-4b44-85a2-c48bed9a9640}
-const CODECAPI_AVEncNumWorkerThreads: GUID = GUID::from_u128(0xb0e5b3a0_7c50_4b44_85a2_c48bed9a9640);
+const CODECAPI_AVEncNumWorkerThreads: GUID =
+    GUID::from_u128(0xb0e5b3a0_7c50_4b44_85a2_c48bed9a9640);
 
 /// CODECAPI_AVEncVideoIntraRefreshMode — GIR instead of IDR keyframes. Phase 4.7.
 /// eAVEncVideoIntraRefreshMode_Continuous = 2. Reduces encode peaks; software MFT often E_NOTIMPL.
 /// {dc2f837c-f78a-4b9d-a8d4-2e76a337c0f0}
-const CODECAPI_AVEncVideoIntraRefreshMode: GUID = GUID::from_u128(0xdc2f837c_f78a_4b9d_a8d4_2e76a337c0f0);
+const CODECAPI_AVEncVideoIntraRefreshMode: GUID =
+    GUID::from_u128(0xdc2f837c_f78a_4b9d_a8d4_2e76a337c0f0);
 
 /// CODECAPI_AVEncVideoForceKeyFrame — force next frame as IDR. Phase 4.7: periodic IDR for packet loss recovery.
 /// {398c1b98-8353-475a-9ef2-8f265d260345}
-const CODECAPI_AVEncVideoForceKeyFrame: GUID = GUID::from_u128(0x398c1b98_8353_475a_9ef2_8f265d260345);
+const CODECAPI_AVEncVideoForceKeyFrame: GUID =
+    GUID::from_u128(0x398c1b98_8353_475a_9ef2_8f265d260345);
 
 /// CODECAPI_AVEncVideoEncodeSliceSizeControlMode — eAVEncSliceControlMode_Constrained (2) asks the encoder
 /// to respect slice size limits where supported (hardware MFT may ignore). Smaller slices → smaller NAL units
@@ -150,7 +152,11 @@ struct SubmitDiagWindow {
 
 impl SubmitDiagWindow {
     fn avg_us(total: u64, count: u64) -> u64 {
-        if count == 0 { 0 } else { total / count }
+        if count == 0 {
+            0
+        } else {
+            total / count
+        }
     }
 
     fn maybe_log(&mut self, window_start: &mut std::time::Instant, encoder_name: &str) {
@@ -219,18 +225,16 @@ impl SubmitDiagWindow {
 unsafe fn get_event_no_wait(
     event_gen: &IMFMediaEventGenerator,
 ) -> windows::core::Result<windows::Win32::Media::MediaFoundation::IMFMediaEvent> {
-    event_gen.GetEvent(
-        windows::Win32::Media::MediaFoundation::MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(1),
-    )
+    event_gen
+        .GetEvent(windows::Win32::Media::MediaFoundation::MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(1))
 }
 
 /// Get event blocking (MF_EVENT_FLAG_NONE = 0). Blocks until an event fires or the MFT errors.
 unsafe fn get_event_blocking(
     event_gen: &IMFMediaEventGenerator,
 ) -> windows::core::Result<windows::Win32::Media::MediaFoundation::IMFMediaEvent> {
-    event_gen.GetEvent(
-        windows::Win32::Media::MediaFoundation::MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0),
-    )
+    event_gen
+        .GetEvent(windows::Win32::Media::MediaFoundation::MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))
 }
 
 /// Non-blocking: drain queued events until the target is found or the queue is empty.
@@ -266,8 +270,7 @@ fn poll_event_trace(
     target_type: u32,
     timeout_ms: u32,
 ) -> (PolledEvents, u32) {
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_millis(timeout_ms as u64);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64);
     let mut events = PolledEvents::default();
     let mut poll_loops: u32 = 0;
 
@@ -297,7 +300,11 @@ fn poll_event_trace(
     }
 }
 
-fn poll_event(event_gen: &IMFMediaEventGenerator, target_type: u32, timeout_ms: u32) -> PolledEvents {
+fn poll_event(
+    event_gen: &IMFMediaEventGenerator,
+    target_type: u32,
+    timeout_ms: u32,
+) -> PolledEvents {
     poll_event_trace(event_gen, target_type, timeout_ms).0
 }
 
@@ -418,9 +425,13 @@ impl MftH264Encoder {
         } else {
             // Software MFT: standard order (output first, then input)
             let mt_out = create_output_media_type(width, height, fps, bitrate_bps)?;
-            unsafe { transform.SetOutputType(0, &mt_out, 0)?; }
+            unsafe {
+                transform.SetOutputType(0, &mt_out, 0)?;
+            }
             let mt_in = create_input_media_type(width, height, fps)?;
-            unsafe { transform.SetInputType(0, &mt_in, 0)?; }
+            unsafe {
+                transform.SetInputType(0, &mt_in, 0)?;
+            }
         }
 
         // Enable low-latency mode: eliminates frame reordering, one input → one output.
@@ -443,23 +454,32 @@ impl MftH264Encoder {
                 .max(1);
             let gop = fps.saturating_mul(gop_secs);
             unsafe {
-                let _ = codec.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &VARIANT::from(0u32));
+                let _ =
+                    codec.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &VARIANT::from(0u32));
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonLowLatency, &VARIANT::from(1u32));
                 // Rate control: CBR (0) for ≥60fps (smooths encode peaks), LowDelayVBR (4) for ≤30fps.
                 // Phase 4.3: CBR gives predictable encode time; VBR spikes on complex scenes.
                 let rc_mode = if fps >= 60 { 0u32 } else { 4u32 }; // 0=CBR, 4=LowDelayVBR
-                let rc_ok = codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::from(rc_mode));
+                let rc_ok = codec.SetValue(
+                    &CODECAPI_AVEncCommonRateControlMode,
+                    &VARIANT::from(rc_mode),
+                );
                 if rc_ok.is_err() {
-                    let _ = codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::from(0u32));
+                    let _ =
+                        codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::from(0u32));
                 }
-                let _ = codec.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(bitrate_bps));
+                let _ = codec.SetValue(
+                    &CODECAPI_AVEncCommonMeanBitRate,
+                    &VARIANT::from(bitrate_bps),
+                );
                 let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(gop));
                 // Phase 4.2: speed tuning — software MFT ~20–50% faster, hardware typically ignores
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonQualityVsSpeed, &VARIANT::from(100u32));
                 let _ = codec.SetValue(&CODECAPI_AVEncH264CABACEnable, &VARIANT::from(0u32));
                 let _ = codec.SetValue(&CODECAPI_AVEncNumWorkerThreads, &VARIANT::from(4u32));
                 // Phase 4.7: GIR instead of IDR — smooth encode, no keyframe spikes. Hardware MFT supports; software often E_NOTIMPL.
-                let gir_ok = codec.SetValue(&CODECAPI_AVEncVideoIntraRefreshMode, &VARIANT::from(2u32));
+                let gir_ok =
+                    codec.SetValue(&CODECAPI_AVEncVideoIntraRefreshMode, &VARIANT::from(2u32));
                 if gir_ok.is_ok() {
                     eprintln!("[mft_encoder] ICodecAPI: GIR (Gradual Intra Refresh) enabled");
                 }
@@ -568,7 +588,10 @@ impl MftH264Encoder {
         let process_input = unsafe { self.transform.ProcessInput(0, &sample, 0) };
         if let Err(e) = process_input {
             if e.code() != MF_E_NOTACCEPTING {
-                return Err(MftEncoderError::Encode(format!("async ProcessInput: {:?}", e)));
+                return Err(MftEncoderError::Encode(format!(
+                    "async ProcessInput: {:?}",
+                    e
+                )));
             }
             if let Some(frame) =
                 self.drain_async_ready_output(original_timestamp_us, output_wait_ms)?
@@ -671,7 +694,10 @@ impl MftH264Encoder {
                         e,
                     );
                 }
-                return Err(MftEncoderError::Encode(format!("async ProcessInput: {:?}", e)));
+                return Err(MftEncoderError::Encode(format!(
+                    "async ProcessInput: {:?}",
+                    e
+                )));
             }
             // Some async MFTs can accept another input after METransformNeedInput
             // without having a completed output ready yet. Try that first to keep
@@ -766,8 +792,7 @@ impl MftH264Encoder {
                         retry_after_drain_state = "ok";
                     }
                     Err(err) if err.code() == MF_E_NOTACCEPTING => {
-                        retry_after_drain_us =
-                            retry_after_drain_start.elapsed().as_micros() as u64;
+                        retry_after_drain_us = retry_after_drain_start.elapsed().as_micros() as u64;
                         retry_after_drain_state = "not_accepting";
                         if self.submit_trace_verbose {
                             eprintln!(
@@ -806,8 +831,7 @@ impl MftH264Encoder {
                         ));
                     }
                     Err(err) => {
-                        retry_after_drain_us =
-                            retry_after_drain_start.elapsed().as_micros() as u64;
+                        retry_after_drain_us = retry_after_drain_start.elapsed().as_micros() as u64;
                         retry_after_drain_state = "err";
                         if self.submit_trace_verbose {
                             eprintln!(
@@ -861,8 +885,10 @@ impl MftH264Encoder {
         self.submit_diag.submits = self.submit_diag.submits.saturating_add(1);
         self.submit_diag.sample_us_total =
             self.submit_diag.sample_us_total.saturating_add(sample_us);
-        self.submit_diag.initial_us_total =
-            self.submit_diag.initial_us_total.saturating_add(initial_pi_us);
+        self.submit_diag.initial_us_total = self
+            .submit_diag
+            .initial_us_total
+            .saturating_add(initial_pi_us);
         match &initial_process_input {
             Ok(()) => self.submit_diag.initial_ok = self.submit_diag.initial_ok.saturating_add(1),
             Err(err) if err.code() == MF_E_NOTACCEPTING => {
@@ -872,8 +898,7 @@ impl MftH264Encoder {
             Err(_) => self.submit_diag.initial_err = self.submit_diag.initial_err.saturating_add(1),
         }
         if need_wait_used {
-            self.submit_diag.need_wait_calls =
-                self.submit_diag.need_wait_calls.saturating_add(1);
+            self.submit_diag.need_wait_calls = self.submit_diag.need_wait_calls.saturating_add(1);
             if need_wait_trace.found {
                 self.submit_diag.need_wait_found =
                     self.submit_diag.need_wait_found.saturating_add(1);
@@ -905,12 +930,18 @@ impl MftH264Encoder {
                 .after_need_us_total
                 .saturating_add(after_need_pi_us);
             match after_need_state {
-                "ok" => self.submit_diag.after_need_ok =
-                    self.submit_diag.after_need_ok.saturating_add(1),
-                "not_accepting" => self.submit_diag.after_need_not_accepting =
-                    self.submit_diag.after_need_not_accepting.saturating_add(1),
-                "err" => self.submit_diag.after_need_err =
-                    self.submit_diag.after_need_err.saturating_add(1),
+                "ok" => {
+                    self.submit_diag.after_need_ok =
+                        self.submit_diag.after_need_ok.saturating_add(1)
+                }
+                "not_accepting" => {
+                    self.submit_diag.after_need_not_accepting =
+                        self.submit_diag.after_need_not_accepting.saturating_add(1)
+                }
+                "err" => {
+                    self.submit_diag.after_need_err =
+                        self.submit_diag.after_need_err.saturating_add(1)
+                }
                 _ => {}
             }
         }
@@ -942,18 +973,20 @@ impl MftH264Encoder {
                     .retry_after_drain_us_total
                     .saturating_add(retry_after_drain_us);
                 match retry_after_drain_state {
-                    "ok" => self.submit_diag.retry_after_drain_ok = self
-                        .submit_diag
-                        .retry_after_drain_ok
-                        .saturating_add(1),
-                    "not_accepting" => self.submit_diag.retry_after_drain_not_accepting = self
-                        .submit_diag
-                        .retry_after_drain_not_accepting
-                        .saturating_add(1),
-                    "err" => self.submit_diag.retry_after_drain_err = self
-                        .submit_diag
-                        .retry_after_drain_err
-                        .saturating_add(1),
+                    "ok" => {
+                        self.submit_diag.retry_after_drain_ok =
+                            self.submit_diag.retry_after_drain_ok.saturating_add(1)
+                    }
+                    "not_accepting" => {
+                        self.submit_diag.retry_after_drain_not_accepting = self
+                            .submit_diag
+                            .retry_after_drain_not_accepting
+                            .saturating_add(1)
+                    }
+                    "err" => {
+                        self.submit_diag.retry_after_drain_err =
+                            self.submit_diag.retry_after_drain_err.saturating_add(1)
+                    }
                     _ => {}
                 }
             }
@@ -1020,14 +1053,21 @@ impl MftH264Encoder {
     }
 
     /// Phase 4.6: Collect encoded output from previous submit (non-blocking). Returns None if not ready.
-    pub fn collect(&mut self) -> Result<Option<(Vec<EncodedFrame>, u32, i64, u64)>, MftEncoderError> {
+    pub fn collect(
+        &mut self,
+    ) -> Result<Option<(Vec<EncodedFrame>, u32, i64, u64)>, MftEncoderError> {
         if !self.is_async {
             return Err(MftEncoderError::Encode(
                 "submit/collect only for async MFT; use encode() for sync".into(),
             ));
         }
         if let Some(pending) = self.pending_outputs.pop_front() {
-            return Ok(Some((vec![pending.frame], pending.rtp_ts, pending.capture_us, pending.encode_us)));
+            return Ok(Some((
+                vec![pending.frame],
+                pending.rtp_ts,
+                pending.capture_us,
+                pending.encode_us,
+            )));
         }
         let found = self.poll_async_event_no_wait(ME_TRANSFORM_HAVE_OUTPUT)?;
         if !found {
@@ -1038,14 +1078,22 @@ impl MftH264Encoder {
 
     /// Phase 4.6: Collect encoded output from previous submit (blocking). Waits up to timeout_ms for HaveOutput.
     /// Use after submit() to push frame in same iteration — avoids 1-frame delay that breaks stream startup.
-    pub fn collect_blocking(&mut self, timeout_ms: u32) -> Result<Option<(Vec<EncodedFrame>, u32, i64, u64)>, MftEncoderError> {
+    pub fn collect_blocking(
+        &mut self,
+        timeout_ms: u32,
+    ) -> Result<Option<(Vec<EncodedFrame>, u32, i64, u64)>, MftEncoderError> {
         if !self.is_async {
             return Err(MftEncoderError::Encode(
                 "submit/collect only for async MFT; use encode() for sync".into(),
             ));
         }
         if let Some(pending) = self.pending_outputs.pop_front() {
-            return Ok(Some((vec![pending.frame], pending.rtp_ts, pending.capture_us, pending.encode_us)));
+            return Ok(Some((
+                vec![pending.frame],
+                pending.rtp_ts,
+                pending.capture_us,
+                pending.encode_us,
+            )));
         }
         let found = self.wait_async_event(ME_TRANSFORM_HAVE_OUTPUT, timeout_ms)?;
         if !found {
@@ -1054,7 +1102,9 @@ impl MftH264Encoder {
         self.collect_inner()
     }
 
-    fn collect_inner(&mut self) -> Result<Option<(Vec<EncodedFrame>, u32, i64, u64)>, MftEncoderError> {
+    fn collect_inner(
+        &mut self,
+    ) -> Result<Option<(Vec<EncodedFrame>, u32, i64, u64)>, MftEncoderError> {
         let Some(frame) = self.drain_output_once(0)? else {
             return Ok(None);
         };
@@ -1079,7 +1129,10 @@ impl MftH264Encoder {
         Ok(())
     }
 
-    fn drain_output(&mut self, original_timestamp_us: i64) -> Result<Vec<EncodedFrame>, MftEncoderError> {
+    fn drain_output(
+        &mut self,
+        original_timestamp_us: i64,
+    ) -> Result<Vec<EncodedFrame>, MftEncoderError> {
         let mut frames = Vec::new();
         loop {
             match self.drain_output_once(original_timestamp_us) {
@@ -1092,7 +1145,10 @@ impl MftH264Encoder {
     }
 
     /// Try to pull one encoded frame. Returns Ok(None) when the MFT needs more input.
-    fn drain_output_once(&mut self, original_timestamp_us: i64) -> Result<Option<EncodedFrame>, MftEncoderError> {
+    fn drain_output_once(
+        &mut self,
+        original_timestamp_us: i64,
+    ) -> Result<Option<EncodedFrame>, MftEncoderError> {
         let mut output_buffer = MFT_OUTPUT_DATA_BUFFER {
             dwStreamID: 0,
             pSample: ManuallyDrop::new(None),
@@ -1103,13 +1159,18 @@ impl MftH264Encoder {
         let mut status: u32 = 0;
 
         let result = unsafe {
-            self.transform.ProcessOutput(0, &mut output_buffers, &mut status)
+            self.transform
+                .ProcessOutput(0, &mut output_buffers, &mut status)
         };
 
         match result {
             Ok(()) => {
                 if let Some(ref sample) = *output_buffers[0].pSample {
-                    return extract_h264_from_sample(sample, &mut self.output_buf, original_timestamp_us);
+                    return extract_h264_from_sample(
+                        sample,
+                        &mut self.output_buf,
+                        original_timestamp_us,
+                    );
                 }
                 Ok(None)
             }
@@ -1117,7 +1178,10 @@ impl MftH264Encoder {
                 if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT {
                     return Ok(None);
                 }
-                Err(MftEncoderError::Encode(format!("ProcessOutput failed: {:?}", e)))
+                Err(MftEncoderError::Encode(format!(
+                    "ProcessOutput failed: {:?}",
+                    e
+                )))
             }
         }
     }
@@ -1352,7 +1416,8 @@ fn create_mft(
                     let _ = act_attrs.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1);
                 }
 
-                let transform: IMFTransform = match unsafe { act.ActivateObject::<IMFTransform>() } {
+                let transform: IMFTransform = match unsafe { act.ActivateObject::<IMFTransform>() }
+                {
                     Ok(t) => t,
                     Err(_) => continue,
                 };
@@ -1367,17 +1432,27 @@ fn create_mft(
                 // Test SET_D3D_MANAGER with the permanent device_manager
                 let ptr = unsafe { device_manager.as_raw() as usize };
                 let accepts_d3d = unsafe {
-                    transform.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, ptr).is_ok()
+                    transform
+                        .ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, ptr)
+                        .is_ok()
                 };
 
                 if accepts_d3d {
-                    eprintln!("[mft_encoder] Selected hardware MFT: {} (accepts D3D manager)", name);
+                    eprintln!(
+                        "[mft_encoder] Selected hardware MFT: {} (accepts D3D manager)",
+                        name
+                    );
                     chosen = Some((transform, name));
                     // Do NOT ShutdownObject on the chosen activate — it would invalidate the transform.
                     break;
                 } else {
-                    eprintln!("[mft_encoder] Skipping hardware MFT: {} (rejected D3D manager)", name);
-                    unsafe { let _ = act.ShutdownObject(); }
+                    eprintln!(
+                        "[mft_encoder] Skipping hardware MFT: {} (rejected D3D manager)",
+                        name
+                    );
+                    unsafe {
+                        let _ = act.ShutdownObject();
+                    }
                 }
             }
 
@@ -1418,7 +1493,9 @@ fn create_mft(
 
     for act_opt in activates_slice {
         if let Some(act) = act_opt {
-            unsafe { let _ = act.ShutdownObject(); }
+            unsafe {
+                let _ = act.ShutdownObject();
+            }
         }
     }
     unsafe { CoTaskMemFree(Some(activates_sw as *const _ as *mut _)) };
@@ -1468,9 +1545,13 @@ fn set_output_type_from_available(
                     Ok(_) => {
                         // Now add bitrate/frame size/rate after SetOutputType succeeded
                         let _ = attrs.SetUINT32(&MF_MT_AVG_BITRATE, bitrate_bps);
-                        let _ = attrs.SetUINT64(&MF_MT_FRAME_SIZE, (width as u64) << 32 | (height as u64));
+                        let _ = attrs
+                            .SetUINT64(&MF_MT_FRAME_SIZE, (width as u64) << 32 | (height as u64));
                         let _ = attrs.SetUINT64(&MF_MT_FRAME_RATE, (fps as u64) << 32 | 1u64);
-                        let _ = attrs.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32);
+                        let _ = attrs.SetUINT32(
+                            &MF_MT_INTERLACE_MODE,
+                            MFVideoInterlace_Progressive.0 as u32,
+                        );
                         return Ok(mt);
                     }
                     Err(_) => {}
@@ -1482,12 +1563,16 @@ fn set_output_type_from_available(
                 let _ = attrs.SetUINT32(&MF_MT_AVG_BITRATE, bitrate_bps);
                 let _ = attrs.SetUINT64(&MF_MT_FRAME_SIZE, (width as u64) << 32 | (height as u64));
                 let _ = attrs.SetUINT64(&MF_MT_FRAME_RATE, (fps as u64) << 32 | 1u64);
-                let _ = attrs.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32);
+                let _ =
+                    attrs.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32);
 
                 match transform.SetOutputType(0, &mt, 0) {
                     Ok(_) => return Ok(mt),
                     Err(e) => {
-                        eprintln!("[mft_encoder] SetOutputType with available type [{}] failed: {:?}", idx, e);
+                        eprintln!(
+                            "[mft_encoder] SetOutputType with available type [{}] failed: {:?}",
+                            idx, e
+                        );
                     }
                 }
             }
@@ -1497,7 +1582,8 @@ fn set_output_type_from_available(
     // Fallback: try manual type
     let mt = create_output_media_type(width, height, fps, bitrate_bps)?;
     unsafe {
-        transform.SetOutputType(0, &mt, 0)
+        transform
+            .SetOutputType(0, &mt, 0)
             .map_err(|e| MftEncoderError::MediaType(format!("SetOutputType (manual): {:?}", e)))?;
     }
     Ok(mt)
@@ -1526,12 +1612,16 @@ fn set_input_type_from_available(
             unsafe {
                 let _ = attrs.SetUINT64(&MF_MT_FRAME_SIZE, (width as u64) << 32 | (height as u64));
                 let _ = attrs.SetUINT64(&MF_MT_FRAME_RATE, (fps as u64) << 32 | 1u64);
-                let _ = attrs.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32);
+                let _ =
+                    attrs.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32);
 
                 match transform.SetInputType(0, &mt, 0) {
                     Ok(_) => return Ok(()),
                     Err(e) => {
-                        eprintln!("[mft_encoder] SetInputType with available type [{}] failed: {:?}", idx, e);
+                        eprintln!(
+                            "[mft_encoder] SetInputType with available type [{}] failed: {:?}",
+                            idx, e
+                        );
                     }
                 }
             }
@@ -1541,7 +1631,8 @@ fn set_input_type_from_available(
     // Fallback: manual NV12 type
     let mt = create_input_media_type(width, height, fps)?;
     unsafe {
-        transform.SetInputType(0, &mt, 0)
+        transform
+            .SetInputType(0, &mt, 0)
             .map_err(|e| MftEncoderError::MediaType(format!("SetInputType (manual): {:?}", e)))?;
     }
     Ok(())
@@ -1607,9 +1698,7 @@ fn create_sample_from_texture(
     use windows::core::IUnknown;
 
     let unknown: IUnknown = texture.cast()?;
-    let buffer = unsafe {
-        MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &unknown, 0, false)?
-    };
+    let buffer = unsafe { MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &unknown, 0, false)? };
 
     let sample = unsafe { MFCreateSample()? };
     unsafe {

@@ -12,7 +12,6 @@
 
 use livekit::webrtc::prelude::VideoBuffer;
 
-
 /// Raw RGBA frame from capture (e.g. WGC). Lock-free slot holds `Box<RawFrame>`.
 #[derive(Clone)]
 pub struct RawFrame {
@@ -23,7 +22,11 @@ pub struct RawFrame {
 
 impl RawFrame {
     pub fn new(pixels: Vec<u8>, width: u32, height: u32) -> Self {
-        Self { pixels, width, height }
+        Self {
+            pixels,
+            width,
+            height,
+        }
     }
 }
 
@@ -111,7 +114,8 @@ impl CpuEncoderBuffers {
 
     fn ensure_size(&mut self, src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) {
         use livekit::webrtc::video_frame::I420Buffer;
-        if self.src_w != src_w || self.src_h != src_h || self.dst_w != dst_w || self.dst_h != dst_h {
+        if self.src_w != src_w || self.src_h != src_h || self.dst_w != dst_w || self.dst_h != dst_h
+        {
             self.src_w = src_w;
             self.src_h = src_h;
             self.dst_w = dst_w;
@@ -183,14 +187,7 @@ impl VideoEncoder for CpuH264Encoder {
 /// Box-filter scale RGBA (src) → RGBA (dst). Reused buffer for ARGBScale-before-I420 path.
 /// Public for xcap I420 path (scale-first then convert).
 #[inline(never)]
-pub fn box_scale_rgba(
-    src: &[u8],
-    src_w: u32,
-    src_h: u32,
-    dst: &mut [u8],
-    dst_w: u32,
-    dst_h: u32,
-) {
+pub fn box_scale_rgba(src: &[u8], src_w: u32, src_h: u32, dst: &mut [u8], dst_w: u32, dst_h: u32) {
     let dst_w = dst_w as usize;
     let dst_h = dst_h as usize;
     let src_w = src_w as usize;
@@ -325,7 +322,13 @@ impl VideoEncoder for NvencH264Encoder {
         timestamp_us: i64,
         returned_buffer: Option<livekit::webrtc::video_frame::I420Buffer>,
     ) -> Result<EncoderOutput, EncoderError> {
-        self.fallback.encode_frame(raw, target_width, target_height, timestamp_us, returned_buffer)
+        self.fallback.encode_frame(
+            raw,
+            target_width,
+            target_height,
+            timestamp_us,
+            returned_buffer,
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -358,7 +361,13 @@ impl VideoEncoder for AmfH264Encoder {
         timestamp_us: i64,
         returned_buffer: Option<livekit::webrtc::video_frame::I420Buffer>,
     ) -> Result<EncoderOutput, EncoderError> {
-        self.fallback.encode_frame(raw, target_width, target_height, timestamp_us, returned_buffer)
+        self.fallback.encode_frame(
+            raw,
+            target_width,
+            target_height,
+            timestamp_us,
+            returned_buffer,
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -391,7 +400,13 @@ impl VideoEncoder for QsvH264Encoder {
         timestamp_us: i64,
         returned_buffer: Option<livekit::webrtc::video_frame::I420Buffer>,
     ) -> Result<EncoderOutput, EncoderError> {
-        self.fallback.encode_frame(raw, target_width, target_height, timestamp_us, returned_buffer)
+        self.fallback.encode_frame(
+            raw,
+            target_width,
+            target_height,
+            timestamp_us,
+            returned_buffer,
+        )
     }
 
     fn name(&self) -> &'static str {

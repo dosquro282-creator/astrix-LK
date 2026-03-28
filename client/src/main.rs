@@ -22,4 +22,3 @@ async fn main() -> eframe::Result<()> {
         Box::new(|cc| Ok(Box::new(app::AstrixApp::new(cc)))),
     )
 }
-

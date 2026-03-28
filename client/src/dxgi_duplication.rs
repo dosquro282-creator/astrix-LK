@@ -4,9 +4,9 @@ use thiserror::Error;
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_INVALID_CALL, DXGI_ERROR_WAIT_TIMEOUT,
-    DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput,
-    IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
+    CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1,
+    IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_INVALID_CALL,
+    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
 };
 use xcap::Monitor;
 
@@ -120,7 +120,10 @@ impl DxgiDuplicationCapture {
     ) -> Result<Option<AcquiredDesktopFrame>, DxgiDuplicationError> {
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
-        match unsafe { self.duplication.AcquireNextFrame(timeout_ms, &mut info, &mut resource) } {
+        match unsafe {
+            self.duplication
+                .AcquireNextFrame(timeout_ms, &mut info, &mut resource)
+        } {
             Ok(()) => Ok(Some(AcquiredDesktopFrame {
                 duplication: self.duplication.clone(),
                 resource,
@@ -162,7 +165,10 @@ fn select_output(screen_index: Option<usize>) -> Result<SelectedOutput, DxgiDupl
 
     let idx = screen_index.unwrap_or(0);
     if idx >= monitors.len() {
-        return Err(DxgiDuplicationError::InvalidMonitorIndex(idx, monitors.len() - 1));
+        return Err(DxgiDuplicationError::InvalidMonitorIndex(
+            idx,
+            monitors.len() - 1,
+        ));
     }
 
     let target = &monitors[idx];
@@ -212,13 +218,21 @@ fn select_output(screen_index: Option<usize>) -> Result<SelectedOutput, DxgiDupl
             && (rect.right - rect.left) as u32 == target_w
             && (rect.bottom - rect.top) as u32 == target_h
     }) {
-        return Ok(outputs.swap_remove(pos).into_selected(idx, target_name.clone()));
+        return Ok(outputs
+            .swap_remove(pos)
+            .into_selected(idx, target_name.clone()));
     }
 
     let attached_positions: Vec<usize> = outputs
         .iter()
         .enumerate()
-        .filter_map(|(pos, candidate)| candidate.output_desc.AttachedToDesktop.as_bool().then_some(pos))
+        .filter_map(|(pos, candidate)| {
+            candidate
+                .output_desc
+                .AttachedToDesktop
+                .as_bool()
+                .then_some(pos)
+        })
         .collect();
     if idx < attached_positions.len() {
         return Ok(outputs

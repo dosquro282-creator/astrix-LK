@@ -94,9 +94,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn enumerate_mft() -> Result<(u32, u32), Box<dyn std::error::Error>> {
     use std::ptr;
     use windows::Win32::Media::MediaFoundation::{
-        IMFActivate, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SYNCMFT,
-        MFT_REGISTER_TYPE_INFO, MFMediaType_Video, MFVideoFormat_H264, MFVideoFormat_NV12,
-        MFTEnumEx,
+        IMFActivate, MFMediaType_Video, MFTEnumEx, MFVideoFormat_H264, MFVideoFormat_NV12,
+        MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SYNCMFT,
+        MFT_REGISTER_TYPE_INFO,
     };
     use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 
@@ -192,13 +192,26 @@ fn quick_init_check() -> Result<String, Box<dyn std::error::Error>> {
 
     // Step 2: MftH264Encoder (hardware)
     print!("  MftH264Encoder::new (hardware) ... ");
-    match astrix_client::mft_encoder::MftH264Encoder::new(&gpu.device, width, height, fps, bitrate) {
+    match astrix_client::mft_encoder::MftH264Encoder::new(&gpu.device, width, height, fps, bitrate)
+    {
         Ok(enc) => {
-            println!("OK ({} {})", enc.encoder_name(), if enc.is_hardware() { "hardware" } else { "software" });
+            println!(
+                "OK ({} {})",
+                enc.encoder_name(),
+                if enc.is_hardware() {
+                    "hardware"
+                } else {
+                    "software"
+                }
+            );
             return Ok(format!(
                 "D3d11BgraToNv12 + MftH264Encoder ({} {})",
                 enc.encoder_name(),
-                if enc.is_hardware() { "hardware" } else { "software" }
+                if enc.is_hardware() {
+                    "hardware"
+                } else {
+                    "software"
+                }
             ));
         }
         Err(e) => {
@@ -209,14 +222,27 @@ fn quick_init_check() -> Result<String, Box<dyn std::error::Error>> {
     // Step 3: MftH264Encoder (force software)
     print!("  MftH264Encoder::new (software, ASTRIX_MFT_SOFTWARE=1) ... ");
     std::env::set_var("ASTRIX_MFT_SOFTWARE", "1");
-    match astrix_client::mft_encoder::MftH264Encoder::new(&gpu.device, width, height, fps, bitrate) {
+    match astrix_client::mft_encoder::MftH264Encoder::new(&gpu.device, width, height, fps, bitrate)
+    {
         Ok(enc) => {
             std::env::remove_var("ASTRIX_MFT_SOFTWARE");
-            println!("OK ({} {})", enc.encoder_name(), if enc.is_hardware() { "hardware" } else { "software" });
+            println!(
+                "OK ({} {})",
+                enc.encoder_name(),
+                if enc.is_hardware() {
+                    "hardware"
+                } else {
+                    "software"
+                }
+            );
             return Ok(format!(
                 "D3d11BgraToNv12 + MftH264Encoder ({} {})",
                 enc.encoder_name(),
-                if enc.is_hardware() { "hardware" } else { "software" }
+                if enc.is_hardware() {
+                    "hardware"
+                } else {
+                    "software"
+                }
             ));
         }
         Err(e) => {

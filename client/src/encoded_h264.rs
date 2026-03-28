@@ -87,7 +87,10 @@ impl EncodedH264Encoder {
                 });
             }
             Err(err) if err.should_fallback_to_mft() => {
-                eprintln!("[encoded_h264] NVENC D3D11 unavailable, falling back to MFT: {}", err);
+                eprintln!(
+                    "[encoded_h264] NVENC D3D11 unavailable, falling back to MFT: {}",
+                    err
+                );
             }
             Err(err) => return Err(err.into()),
         }
@@ -109,12 +112,12 @@ impl EncodedH264Encoder {
         let mut runtime_fallback_attempted = false;
         loop {
             let result = match &mut self.inner {
-                EncodedH264EncoderImpl::Nvenc(enc) => {
-                    enc.encode(texture, ts_us, key_frame).map_err(EncodedH264EncoderError::from)
-                }
-                EncodedH264EncoderImpl::Mft(enc) => {
-                    enc.encode(texture, ts_us, key_frame).map_err(EncodedH264EncoderError::from)
-                }
+                EncodedH264EncoderImpl::Nvenc(enc) => enc
+                    .encode(texture, ts_us, key_frame)
+                    .map_err(EncodedH264EncoderError::from),
+                EncodedH264EncoderImpl::Mft(enc) => enc
+                    .encode(texture, ts_us, key_frame)
+                    .map_err(EncodedH264EncoderError::from),
             };
 
             match result {
@@ -228,12 +231,12 @@ impl EncodedH264Encoder {
         let mut runtime_fallback_attempted = false;
         loop {
             let result = match &mut self.inner {
-                EncodedH264EncoderImpl::Nvenc(enc) => {
-                    enc.set_bitrate(bitrate).map_err(EncodedH264EncoderError::from)
-                }
-                EncodedH264EncoderImpl::Mft(enc) => {
-                    enc.set_bitrate(bitrate).map_err(EncodedH264EncoderError::from)
-                }
+                EncodedH264EncoderImpl::Nvenc(enc) => enc
+                    .set_bitrate(bitrate)
+                    .map_err(EncodedH264EncoderError::from),
+                EncodedH264EncoderImpl::Mft(enc) => enc
+                    .set_bitrate(bitrate)
+                    .map_err(EncodedH264EncoderError::from),
             };
 
             match result {
@@ -267,7 +270,9 @@ impl EncodedH264Encoder {
     pub fn backend_kind(&self) -> EncodedBackendKind {
         match &self.inner {
             EncodedH264EncoderImpl::Nvenc(_) => EncodedBackendKind::NvencD3d11,
-            EncodedH264EncoderImpl::Mft(enc) if enc.is_hardware() => EncodedBackendKind::MftHardware,
+            EncodedH264EncoderImpl::Mft(enc) if enc.is_hardware() => {
+                EncodedBackendKind::MftHardware
+            }
             EncodedH264EncoderImpl::Mft(_) => EncodedBackendKind::MftSoftware,
         }
     }

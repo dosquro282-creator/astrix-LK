@@ -1,5 +1,4 @@
-//! Правая колонка UI: список участников по ролям/онлайн, Voice speaking indicator.
-//! Discord-like: группировка онлайн/оффлайн, подсветка говорящих, использование Theme.
+//! Right-side member list.
 
 use std::collections::HashMap;
 
@@ -7,14 +6,15 @@ use eframe::egui;
 
 use crate::theme::Theme;
 
-/// Ширина панели участников (как в Discord).
-pub const MEMBER_PANEL_WIDTH: f32 = 220.0;
-/// Радиус аватарки участника.
-const AVATAR_RADIUS: f32 = 14.0;
-/// Высота строки участника.
-const MEMBER_ROW_HEIGHT: f32 = 32.0;
+pub const MEMBER_PANEL_WIDTH: f32 = 240.0;
+const MEMBER_ROW_HEIGHT: f32 = 36.0;
+const MEMBER_AVATAR_RADIUS: f32 = 14.0;
 
-/// Снимок участника для отрисовки (без мутабельных заимствований).
+#[derive(Debug, Clone)]
+pub enum MemberPanelAction {
+    OpenMemberProfile(i64),
+}
+
 #[derive(Clone)]
 pub struct MemberSnapshot {
     pub user_id: i64,
@@ -24,19 +24,15 @@ pub struct MemberSnapshot {
     pub online: bool,
 }
 
-/// Параметры для отрисовки панели участников.
 pub struct MemberPanelParams<'a> {
     pub theme: &'a Theme,
     pub members: &'a [MemberSnapshot],
     pub online_count: usize,
-    /// Кто сейчас говорит (user_id -> true). Из voice.speaking.
     pub speaking: &'a HashMap<i64, bool>,
-    /// Аватарки по user_id (опционально).
     pub avatar_textures: &'a HashMap<i64, egui::TextureHandle>,
+    pub on_action: &'a mut dyn FnMut(MemberPanelAction),
 }
 
-/// Отрисовка правой колонки: заголовок, список участников с группировкой онлайн/оффлайн,
-/// speaking indicator (подсветка говорящих).
 pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: MemberPanelParams<'_>) {
     let MemberPanelParams {
         theme,
@@ -44,134 +40,150 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: MemberPanelParams<'_
         online_count,
         speaking,
         avatar_textures,
+        on_action,
     } = params;
 
-    // ─── Заголовок ─────────────────────────────────────────────────────────────
-    egui::TopBottomPanel::top("members_header")
+    ui.painter()
+        .rect_filled(ui.max_rect(), egui::Rounding::ZERO, theme.bg_secondary);
+
+    let offline_count = members.len().saturating_sub(online_count);
+
+    egui::TopBottomPanel::top("member_panel_header")
         .exact_height(40.0)
         .show_separator_line(false)
         .show_inside(ui, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.heading(egui::RichText::new("Участники").color(theme.text_primary));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(format!("В сети — {}", online_count))
-                            .size(13.0)
-                            .color(theme.success),
-                    );
-                });
-            });
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new("MEMBERS")
+                    .size(11.0)
+                    .strong()
+                    .color(theme.text_muted),
+            );
         });
 
-    // ─── Список участников (скролл) ────────────────────────────────────────────
     egui::ScrollArea::vertical()
         .id_source("member_panel_scroll")
         .show(ui, |ui| {
             if members.is_empty() {
-                ui.add_space(12.0);
-                ui.label(
-                    egui::RichText::new("Нет участников.")
-                        .color(theme.text_muted),
-                );
+                ui.add_space(16.0);
+                ui.label(egui::RichText::new("No members").color(theme.text_muted));
                 return;
             }
 
-            let mut prev_online = true;
-            for m in members.iter() {
-                // Разделитель при переходе от онлайн к оффлайн
-                if prev_online && !m.online {
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-                }
-                prev_online = m.online;
-
-                let is_speaking = *speaking.get(&m.user_id).unwrap_or(&false);
-                let _ = member_row(
+            section_title(ui, theme, format!("ONLINE - {online_count}"));
+            for member in members.iter().filter(|member| member.online) {
+                let response = member_row(
                     ctx,
                     ui,
                     theme,
-                    m,
-                    is_speaking,
-                    avatar_textures.get(&m.user_id),
+                    member,
+                    false,
+                    avatar_textures.get(&member.user_id),
                 );
-                ui.add_space(2.0);
+                if response.clicked() {
+                    (*on_action)(MemberPanelAction::OpenMemberProfile(member.user_id));
+                }
+            }
+
+            ui.add_space(10.0);
+            section_title(ui, theme, format!("OFFLINE - {offline_count}"));
+            for member in members.iter().filter(|member| !member.online) {
+                let response = member_row(
+                    ctx,
+                    ui,
+                    theme,
+                    member,
+                    false,
+                    avatar_textures.get(&member.user_id),
+                );
+                if response.clicked() {
+                    (*on_action)(MemberPanelAction::OpenMemberProfile(member.user_id));
+                }
             }
         });
 }
 
-/// Строка участника с анимацией hover и speaking indicator.
+fn section_title(ui: &mut egui::Ui, theme: &Theme, title: String) {
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(title)
+            .size(11.0)
+            .strong()
+            .color(theme.text_muted),
+    );
+    ui.add_space(4.0);
+}
+
 fn member_row(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
     theme: &Theme,
-    m: &MemberSnapshot,
-    is_speaking: bool,
+    member: &MemberSnapshot,
+    _is_speaking: bool,
     avatar_texture: Option<&egui::TextureHandle>,
 ) -> egui::Response {
-    let id = ui.make_persistent_id(("member", m.user_id));
-    let width = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(width, MEMBER_ROW_HEIGHT),
-        egui::Sense::hover(),
+    let id = ui.make_persistent_id(("member_row", member.user_id));
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), MEMBER_ROW_HEIGHT),
+        egui::Sense::click(),
     );
+    let hovered = response.hovered();
+    let hover_t = ctx.animate_bool(id.with("hover"), hovered);
 
-    let hovered = resp.hovered();
-    let hover_id = id.with("hover");
-    let hover_t = ctx.animate_bool(hover_id, hovered);
+    let fill = Theme::lerp_color(theme.bg_secondary, theme.bg_hover, hover_t * 0.18);
+    ui.painter()
+        .rect_filled(rect, egui::Rounding::same(4.0), fill);
 
-    let bg = if hovered {
-        Theme::lerp_color(theme.bg_secondary, theme.bg_hover, hover_t)
-    } else {
-        theme.bg_secondary
-    };
-    ui.painter().rect_filled(rect, 0.0, bg);
-
-    // Аватар + speaking ring
-    let avatar_x = rect.min.x + AVATAR_RADIUS + 4.0;
-    let avatar_center = egui::pos2(avatar_x, rect.center().y);
+    let inner = rect.shrink2(egui::vec2(8.0, 4.0));
+    let avatar_center = egui::pos2(inner.left() + MEMBER_AVATAR_RADIUS, inner.center().y);
     crate::components::avatar::avatar_at(
         ui,
         theme,
         avatar_center,
-        &m.display_name,
-        AVATAR_RADIUS,
-        is_speaking,
+        &member.display_name,
+        MEMBER_AVATAR_RADIUS,
+        false,
         avatar_texture,
     );
 
-    // Имя и роль
-    let text_x = avatar_x + AVATAR_RADIUS + 8.0;
-    let name_color = if m.online {
-        theme.text_primary
+    ui.painter().circle_filled(
+        egui::pos2(
+            avatar_center.x + MEMBER_AVATAR_RADIUS + 7.0,
+            inner.center().y,
+        ),
+        3.0,
+        if member.online {
+            theme.online
+        } else {
+            theme.text_muted
+        },
+    );
+
+    let text_x = avatar_center.x + MEMBER_AVATAR_RADIUS + 16.0;
+    ui.painter().text(
+        egui::pos2(text_x, inner.center().y - 6.0),
+        egui::Align2::LEFT_CENTER,
+        &member.display_name,
+        egui::FontId::proportional(13.0),
+        if member.online {
+            theme.text_primary
+        } else {
+            theme.text_secondary
+        },
+    );
+
+    let secondary = if member.is_owner {
+        "Server owner"
     } else {
-        theme.text_muted
+        member.username.as_str()
     };
-    let galley = ui.painter().layout(
-        m.display_name.clone(),
-        egui::FontId::proportional(14.0),
-        name_color,
-        rect.width() - (text_x - rect.min.x) - 8.0,
-    );
-    let galley_size = galley.size();
-    ui.painter().galley(
-        egui::pos2(text_x, rect.center().y - galley_size.y * 0.5),
-        galley.clone(),
-        name_color,
+    ui.painter().text(
+        egui::pos2(text_x, inner.center().y + 8.0),
+        egui::Align2::LEFT_CENTER,
+        secondary,
+        egui::FontId::proportional(10.5),
+        theme.text_muted,
     );
 
-    if m.is_owner {
-        let name_w = galley_size.x + 4.0;
-        let owner_pos = egui::pos2(text_x + name_w, rect.center().y - 6.0);
-        ui.painter().text(
-            owner_pos,
-            egui::Align2::LEFT_CENTER,
-            "[автор]",
-            egui::FontId::proportional(11.0),
-            theme.text_muted,
-        );
-    }
-
-    resp.on_hover_text(format!("Логин: {}", m.username))
+    response.on_hover_text("Open member profile")
 }

@@ -6,8 +6,8 @@
 
 use parking_lot::Mutex;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11Texture2D,
+    ID3D11Device, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 
@@ -40,15 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fps = 60u32;
     let bitrate_bps = 8_000_000u32;
 
-    let converter = D3d11BgraToNv12::new(
-        &gpu.device,
-        &gpu.context,
-        width,
-        height,
-        width,
-        height,
-        fps,
-    )?;
+    let converter =
+        D3d11BgraToNv12::new(&gpu.device, &gpu.context, width, height, width, height, fps)?;
     println!(
         "Converter created: {}x{} @ {} fps, NV12 ring={}",
         width,
@@ -188,7 +181,10 @@ fn create_bgra_texture(
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_B8G8R8A8_UNORM.into(),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: D3D11_USAGE_DEFAULT,
         BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
         CPUAccessFlags: 0,
@@ -202,6 +198,5 @@ fn create_bgra_texture(
 }
 
 fn has_annex_b_start(data: &[u8]) -> bool {
-    data.windows(4).any(|w| w == [0, 0, 0, 1])
-        || data.windows(3).any(|w| w == [0, 0, 1])
+    data.windows(4).any(|w| w == [0, 0, 0, 1]) || data.windows(3).any(|w| w == [0, 0, 1])
 }

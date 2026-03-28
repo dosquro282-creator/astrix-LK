@@ -6,25 +6,25 @@
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use windows::core::Interface;
-use windows::Win32::Graphics::Direct3D::{D3D11_SRV_DIMENSION_TEXTURE2D, D3D_DRIVER_TYPE_HARDWARE};
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+use windows::Win32::Graphics::Direct3D::{D3D11_SRV_DIMENSION_TEXTURE2D, D3D_DRIVER_TYPE_HARDWARE};
+use windows::Win32::Graphics::Direct3D11::ID3D11Resource;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAP_WRITE_DISCARD,
-    D3D11_QUERY_DESC, D3D11_QUERY_EVENT, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
-    D3D11_UAV_DIMENSION_TEXTURE2D, ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext,
-    ID3D11Device3, ID3D11Query, ID3D11ShaderResourceView, ID3D11ShaderResourceView1,
-    ID3D11Texture2D, ID3D11UnorderedAccessView,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0,
-    D3D11_SHADER_RESOURCE_VIEW_DESC1, D3D11_SHADER_RESOURCE_VIEW_DESC1_0, D3D11_TEX2D_SRV,
-    D3D11_TEX2D_SRV1, D3D11_TEXTURE2D_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC,
-    D3D11_UNORDERED_ACCESS_VIEW_DESC_0, D3D11_TEX2D_UAV,
+    D3D11CreateDevice, ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11Device3,
+    ID3D11DeviceContext, ID3D11Query, ID3D11ShaderResourceView, ID3D11ShaderResourceView1,
+    ID3D11Texture2D, ID3D11UnorderedAccessView, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_MAP_READ, D3D11_MAP_WRITE_DISCARD, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
+    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC1,
+    D3D11_SHADER_RESOURCE_VIEW_DESC1_0, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_SRV,
+    D3D11_TEX2D_SRV1, D3D11_TEX2D_UAV, D3D11_TEXTURE2D_DESC, D3D11_UAV_DIMENSION_TEXTURE2D,
+    D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC_0, D3D11_USAGE_DEFAULT,
+    D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_NV12, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
+    DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
     DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED;
-use windows::Win32::Graphics::Direct3D11::ID3D11Resource;
 
 const HLSL_I420_TO_RGBA: &str = r"
 // BT.601: R = Y + 1.402*(Cr-0.5); G = Y - 0.344*(Cb-0.5) - 0.714*(Cr-0.5); B = Y + 1.772*(Cb-0.5)
@@ -97,8 +97,7 @@ pub struct D3d11I420ToRgba {
 static DECODE_GPU_FAILED: AtomicU8 = AtomicU8::new(0);
 
 /// Runtime gamma from settings (0 = off). Stored as f32 bits in AtomicU32. Default 0.
-static VIDEO_DECODER_GAMMA: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(0); // f32::to_bits(0.0)
+static VIDEO_DECODER_GAMMA: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0); // f32::to_bits(0.0)
 
 /// Set gamma from settings UI. Called when settings load or user changes slider.
 pub fn set_video_decoder_gamma(gamma: f32) {
@@ -124,8 +123,19 @@ impl D3d11I420ToRgba {
     pub fn new(width: u32, height: u32) -> Result<Self, D3d11RgbaError> {
         let (device, context) = create_device()?;
         let cs = compile_cs_i420_to_rgba(&device)?;
-        let (cb_params, tex_y, tex_u, tex_v, tex_rgba, staging_rgba, srv_y, srv_u, srv_v, uav_rgba, event_query) =
-            create_resources(&device, width, height)?;
+        let (
+            cb_params,
+            tex_y,
+            tex_u,
+            tex_v,
+            tex_rgba,
+            staging_rgba,
+            srv_y,
+            srv_u,
+            srv_v,
+            uav_rgba,
+            event_query,
+        ) = create_resources(&device, width, height)?;
         Ok(Self {
             device,
             context,
@@ -151,7 +161,8 @@ impl D3d11I420ToRgba {
         let hr = unsafe { self.device.GetDeviceRemovedReason() };
         if hr.is_err() {
             return Err(D3d11RgbaError::DeviceLost(format!(
-                "D3D11 device lost: {:?}", hr
+                "D3D11 device lost: {:?}",
+                hr
             )));
         }
         Ok(())
@@ -174,12 +185,24 @@ impl D3d11I420ToRgba {
         }
 
         unsafe {
-            let res_y = self.tex_y.cast::<ID3D11Resource>().map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
-            let res_u = self.tex_u.cast::<ID3D11Resource>().map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
-            let res_v = self.tex_v.cast::<ID3D11Resource>().map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
-            self.context.UpdateSubresource(&res_y, 0, None, y.as_ptr() as *const _, w, 0);
-            self.context.UpdateSubresource(&res_u, 0, None, u.as_ptr() as *const _, w / 2, 0);
-            self.context.UpdateSubresource(&res_v, 0, None, v.as_ptr() as *const _, w / 2, 0);
+            let res_y = self
+                .tex_y
+                .cast::<ID3D11Resource>()
+                .map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
+            let res_u = self
+                .tex_u
+                .cast::<ID3D11Resource>()
+                .map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
+            let res_v = self
+                .tex_v
+                .cast::<ID3D11Resource>()
+                .map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
+            self.context
+                .UpdateSubresource(&res_y, 0, None, y.as_ptr() as *const _, w, 0);
+            self.context
+                .UpdateSubresource(&res_u, 0, None, u.as_ptr() as *const _, w / 2, 0);
+            self.context
+                .UpdateSubresource(&res_v, 0, None, v.as_ptr() as *const _, w / 2, 0);
         }
 
         self.check_device_lost()?;
@@ -211,12 +234,22 @@ impl D3d11I420ToRgba {
         let uav_counts = [u32::MAX];
         unsafe {
             self.context.CSSetShader(Some(&self.cs), None);
-            self.context.CSSetConstantBuffers(0, Some(&[Some(self.cb_params.clone())]));
+            self.context
+                .CSSetConstantBuffers(0, Some(&[Some(self.cb_params.clone())]));
             self.context.CSSetShaderResources(
                 0,
-                Some(&[Some(self.srv_y.clone()), Some(self.srv_u.clone()), Some(self.srv_v.clone())]),
+                Some(&[
+                    Some(self.srv_y.clone()),
+                    Some(self.srv_u.clone()),
+                    Some(self.srv_v.clone()),
+                ]),
             );
-            self.context.CSSetUnorderedAccessViews(0, 1, Some(uavs.as_ptr()), Some(uav_counts.as_ptr()));
+            self.context.CSSetUnorderedAccessViews(
+                0,
+                1,
+                Some(uavs.as_ptr()),
+                Some(uav_counts.as_ptr()),
+            );
         }
 
         let gx = (w + 15) / 16;
@@ -228,8 +261,14 @@ impl D3d11I420ToRgba {
         let uavs_clear = [None];
         let counts_clear = [0u32];
         unsafe {
-            self.context.CSSetUnorderedAccessViews(0, 1, Some(uavs_clear.as_ptr()), Some(counts_clear.as_ptr()));
-            self.context.CSSetShaderResources(0, Some(&[None, None, None]));
+            self.context.CSSetUnorderedAccessViews(
+                0,
+                1,
+                Some(uavs_clear.as_ptr()),
+                Some(counts_clear.as_ptr()),
+            );
+            self.context
+                .CSSetShaderResources(0, Some(&[None, None, None]));
             self.context.CSSetShader(None, None);
         }
 
@@ -252,7 +291,8 @@ impl D3d11I420ToRgba {
                         self.check_device_lost()?;
                         if wait_start.elapsed() > std::time::Duration::from_secs(2) {
                             return Err(D3d11RgbaError::DeviceLost(format!(
-                                "GPU query timeout (2s), last err: {:?}", e
+                                "GPU query timeout (2s), last err: {:?}",
+                                e
                             )));
                         }
                         std::thread::yield_now();
@@ -345,13 +385,15 @@ impl D3d11Nv12ToRgba {
     /// Create converter with the given D3D11 device. Use shared device from gpu_device for zero-copy.
     pub fn new(device: &ID3D11Device, default_full_range: bool) -> Result<Self, D3d11RgbaError> {
         let context = unsafe {
-            device
-                .GetImmediateContext()
-                .map_err(|e| D3d11RgbaError::CreateDevice(format!("GetImmediateContext: {:?}", e)))?
+            device.GetImmediateContext().map_err(|e| {
+                D3d11RgbaError::CreateDevice(format!("GetImmediateContext: {:?}", e))
+            })?
         };
         // ASTRIX_VIDEO_COLOR_STAGE=1,2,3,4: preset for color fix testing (overrides other env vars).
         // 1=OUTPUT_SRGB only, 2=SRGB texture format, 3=+DISABLE_FRAMEBUFFER_SRGB, 4=GAMMA_DECODER 0.55
-        let color_stage = std::env::var("ASTRIX_VIDEO_COLOR_STAGE").ok().and_then(|v| v.parse::<u8>().ok());
+        let color_stage = std::env::var("ASTRIX_VIDEO_COLOR_STAGE")
+            .ok()
+            .and_then(|v| v.parse::<u8>().ok());
 
         let (output_srgb, decoder_gamma, use_runtime_gamma) = if let Some(stage) = color_stage {
             let (os, dg, rt) = match stage {
@@ -361,7 +403,10 @@ impl D3d11Nv12ToRgba {
                 4 => (false, Some(0.55), false), // compile-time 0.55
                 _ => (false, None, true),
             };
-            eprintln!("[d3d11_rgba] COLOR_STAGE={}: output_srgb={} decoder_gamma={:?}", stage, os, dg);
+            eprintln!(
+                "[d3d11_rgba] COLOR_STAGE={}: output_srgb={} decoder_gamma={:?}",
+                stage, os, dg
+            );
             if stage == 3 {
                 eprintln!("[d3d11_rgba] Stage 3: also set ASTRIX_VIDEO_DISABLE_FRAMEBUFFER_SRGB=1");
             }
@@ -401,7 +446,14 @@ impl D3d11Nv12ToRgba {
             );
         }
 
-        let cs = compile_cs_nv12_to_rgba(device, output_srgb, full_range, decoder_gamma, use_runtime_gamma, uv_bilinear)?;
+        let cs = compile_cs_nv12_to_rgba(
+            device,
+            output_srgb,
+            full_range,
+            decoder_gamma,
+            use_runtime_gamma,
+            uv_bilinear,
+        )?;
         let cb_gamma = if use_runtime_gamma {
             Some(create_gamma_cb(device)?)
         } else {
@@ -469,7 +521,8 @@ impl D3d11Nv12ToRgba {
             let src = nv12_texture
                 .cast::<ID3D11Resource>()
                 .map_err(|e| D3d11RgbaError::CreateTexture(format!("src cast: {:?}", e)))?;
-            self.context.CopySubresourceRegion(&dst, 0, 0, 0, 0, &src, subresource, None);
+            self.context
+                .CopySubresourceRegion(&dst, 0, 0, 0, 0, &src, subresource, None);
         }
 
         let srv_y = create_nv12_plane_srv(&self.device, staging, 0, true)?;
@@ -489,9 +542,19 @@ impl D3d11Nv12ToRgba {
             unsafe {
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
                 self.context
-                    .Map(&res, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(std::ptr::addr_of_mut!(mapped)))
+                    .Map(
+                        &res,
+                        0,
+                        D3D11_MAP_WRITE_DISCARD,
+                        0,
+                        Some(std::ptr::addr_of_mut!(mapped)),
+                    )
                     .map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
-                std::ptr::copy_nonoverlapping(params.as_ptr() as *const u8, mapped.pData as *mut u8, 16);
+                std::ptr::copy_nonoverlapping(
+                    params.as_ptr() as *const u8,
+                    mapped.pData as *mut u8,
+                    16,
+                );
                 self.context.Unmap(&res, 0);
             }
         }
@@ -504,28 +567,46 @@ impl D3d11Nv12ToRgba {
             unsafe {
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
                 self.context
-                    .Map(&res, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(std::ptr::addr_of_mut!(mapped)))
+                    .Map(
+                        &res,
+                        0,
+                        D3D11_MAP_WRITE_DISCARD,
+                        0,
+                        Some(std::ptr::addr_of_mut!(mapped)),
+                    )
                     .map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
-                std::ptr::copy_nonoverlapping(params.as_ptr() as *const u8, mapped.pData as *mut u8, 16);
+                std::ptr::copy_nonoverlapping(
+                    params.as_ptr() as *const u8,
+                    mapped.pData as *mut u8,
+                    16,
+                );
                 self.context.Unmap(&res, 0);
             }
         }
 
         unsafe {
             self.context.CSSetShader(Some(&self.cs), None);
-            if let (Some(ref cb_g), Some(ref cb_n)) = (self.cb_gamma.as_ref(), self.cb_nv12.as_ref()) {
-                let bufs: [Option<ID3D11Buffer>; 2] = [Some((*cb_g).clone()), Some((*cb_n).clone())];
+            if let (Some(ref cb_g), Some(ref cb_n)) =
+                (self.cb_gamma.as_ref(), self.cb_nv12.as_ref())
+            {
+                let bufs: [Option<ID3D11Buffer>; 2] =
+                    [Some((*cb_g).clone()), Some((*cb_n).clone())];
                 self.context.CSSetConstantBuffers(0, Some(&bufs));
             } else if let Some(ref cb) = self.cb_gamma {
-                self.context.CSSetConstantBuffers(0, Some(&[Some(cb.clone())]));
+                self.context
+                    .CSSetConstantBuffers(0, Some(&[Some(cb.clone())]));
             } else if let Some(ref cb) = self.cb_nv12 {
-                self.context.CSSetConstantBuffers(0, Some(&[Some(cb.clone())]));
+                self.context
+                    .CSSetConstantBuffers(0, Some(&[Some(cb.clone())]));
             }
-            self.context.CSSetShaderResources(
+            self.context
+                .CSSetShaderResources(0, Some(&[Some(srv_y), Some(srv_uv)]));
+            self.context.CSSetUnorderedAccessViews(
                 0,
-                Some(&[Some(srv_y), Some(srv_uv)]),
+                1,
+                Some(uavs.as_ptr()),
+                Some(uav_counts.as_ptr()),
             );
-            self.context.CSSetUnorderedAccessViews(0, 1, Some(uavs.as_ptr()), Some(uav_counts.as_ptr()));
         }
 
         let gx = (width + 7) / 8;
@@ -537,11 +618,21 @@ impl D3d11Nv12ToRgba {
         let uavs_clear = [None];
         let counts_clear = [0u32];
         unsafe {
-            self.context.CSSetUnorderedAccessViews(0, 1, Some(uavs_clear.as_ptr()), Some(counts_clear.as_ptr()));
+            self.context.CSSetUnorderedAccessViews(
+                0,
+                1,
+                Some(uavs_clear.as_ptr()),
+                Some(counts_clear.as_ptr()),
+            );
             self.context.CSSetShaderResources(0, Some(&[None, None]));
             if self.cb_gamma.is_some() || self.cb_nv12.is_some() {
-                let n = if self.cb_gamma.is_some() && self.cb_nv12.is_some() { 2 } else { 1 };
-                self.context.CSSetConstantBuffers(0, Some(&[None, None][..n]));
+                let n = if self.cb_gamma.is_some() && self.cb_nv12.is_some() {
+                    2
+                } else {
+                    1
+                };
+                self.context
+                    .CSSetConstantBuffers(0, Some(&[None, None][..n]));
             }
             self.context.CSSetShader(None, None);
         }
@@ -550,7 +641,9 @@ impl D3d11Nv12ToRgba {
         // display_texture has MISC_SHARED but no UAV (those flags conflict).
         // The CopyResource command is in the same command stream as the Dispatch, so
         // wglDXLockObjectsNV will see display_texture contain fresh compute data.
-        if let (Some(src), Some(dst)) = (self.output_texture.as_ref(), self.display_texture.as_ref()) {
+        if let (Some(src), Some(dst)) =
+            (self.output_texture.as_ref(), self.display_texture.as_ref())
+        {
             unsafe {
                 let src_res = src
                     .cast::<ID3D11Resource>()
@@ -610,7 +703,10 @@ fn map_texture_to_rgba_bytes(
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_R8G8B8A8_UNORM.into(),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: D3D11_USAGE_STAGING,
         BindFlags: 0,
         CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
@@ -625,8 +721,14 @@ fn map_texture_to_rgba_bytes(
     let staging = staging.ok_or_else(|| D3d11RgbaError::CreateTexture("staging null".into()))?;
 
     unsafe {
-        let dst = staging.clone().cast::<ID3D11Resource>().map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
-        let src = texture.clone().cast::<ID3D11Resource>().map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
+        let dst = staging
+            .clone()
+            .cast::<ID3D11Resource>()
+            .map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
+        let src = texture
+            .clone()
+            .cast::<ID3D11Resource>()
+            .map_err(|e| D3d11RgbaError::Map(e.to_string()))?;
         context.CopyResource(&dst, &src);
         context.Flush();
     }
@@ -650,7 +752,9 @@ fn map_texture_to_rgba_bytes(
     Ok(rgba)
 }
 
-fn create_gamma_cb(device: &ID3D11Device) -> Result<windows::Win32::Graphics::Direct3D11::ID3D11Buffer, D3d11RgbaError> {
+fn create_gamma_cb(
+    device: &ID3D11Device,
+) -> Result<windows::Win32::Graphics::Direct3D11::ID3D11Buffer, D3d11RgbaError> {
     use windows::Win32::Graphics::Direct3D11::{
         D3D11_BIND_CONSTANT_BUFFER, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_USAGE_DYNAMIC,
     };
@@ -671,7 +775,9 @@ fn create_gamma_cb(device: &ID3D11Device) -> Result<windows::Win32::Graphics::Di
     buf.ok_or_else(|| D3d11RgbaError::CreateTexture("gamma cbuffer null".into()))
 }
 
-fn create_nv12_cb(device: &ID3D11Device) -> Result<windows::Win32::Graphics::Direct3D11::ID3D11Buffer, D3d11RgbaError> {
+fn create_nv12_cb(
+    device: &ID3D11Device,
+) -> Result<windows::Win32::Graphics::Direct3D11::ID3D11Buffer, D3d11RgbaError> {
     use windows::Win32::Graphics::Direct3D11::{
         D3D11_BIND_CONSTANT_BUFFER, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_USAGE_DYNAMIC,
     };
@@ -783,13 +889,15 @@ void main(uint3 id : SV_DispatchThreadID) {
                 .map(|b| {
                     let ptr = b.GetBufferPointer();
                     let len = b.GetBufferSize();
-                    String::from_utf8_lossy(std::slice::from_raw_parts(ptr as *const u8, len)).into_owned()
+                    String::from_utf8_lossy(std::slice::from_raw_parts(ptr as *const u8, len))
+                        .into_owned()
                 })
                 .unwrap_or_else(|| format!("D3DCompile NV12 failed: {:?}", hr));
             return Err(D3d11RgbaError::Compile(msg));
         }
         let blob = blob.ok_or_else(|| D3d11RgbaError::Compile("no blob".into()))?;
-        let bytecode = std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize());
+        let bytecode =
+            std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize());
         let mut cs = None;
         device
             .CreateComputeShader(bytecode, None, Some(&mut cs))
@@ -817,7 +925,8 @@ fn create_nv12_plane_srv(
     // Use CreateShaderResourceView1 (D3D11.3) when available.
     let plane_slice = if y_plane { 0 } else { 1 };
     if let Ok(device3) = device.cast::<ID3D11Device3>() {
-        static LOGGED_PLANE_SLICE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        static LOGGED_PLANE_SLICE: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         if crate::telemetry::is_telemetry_enabled()
             && !LOGGED_PLANE_SLICE.swap(true, std::sync::atomic::Ordering::Relaxed)
         {
@@ -838,7 +947,9 @@ fn create_nv12_plane_srv(
         unsafe {
             device3
                 .CreateShaderResourceView1(&res, Some(&desc1), Some(&mut srv1))
-                .map_err(|e| D3d11RgbaError::CreateShaderResourceView(format!("NV12 plane SRV: {:?}", e)))?;
+                .map_err(|e| {
+                    D3d11RgbaError::CreateShaderResourceView(format!("NV12 plane SRV: {:?}", e))
+                })?;
         }
         if let Some(srv1) = srv1 {
             return srv1.cast::<ID3D11ShaderResourceView>().map_err(|e| {
@@ -861,7 +972,9 @@ fn create_nv12_plane_srv(
     unsafe {
         device
             .CreateShaderResourceView(&res, Some(&desc), Some(&mut srv))
-            .map_err(|e| D3d11RgbaError::CreateShaderResourceView(format!("NV12 plane SRV: {:?}", e)))?;
+            .map_err(|e| {
+                D3d11RgbaError::CreateShaderResourceView(format!("NV12 plane SRV: {:?}", e))
+            })?;
     }
     srv.ok_or_else(|| D3d11RgbaError::CreateShaderResourceView("NV12 plane SRV null".into()))
 }
@@ -873,7 +986,11 @@ fn create_nv12_plane_srv(
 fn nv12_output_shared_handle(tex: &ID3D11Texture2D) -> Option<usize> {
     use windows::core::Interface;
     let raw = unsafe { tex.as_raw() as usize };
-    if raw == 0 { None } else { Some(raw) }
+    if raw == 0 {
+        None
+    } else {
+        Some(raw)
+    }
 }
 
 /// Create the WGL display texture: MISC_SHARED + BIND_SHADER_RESOURCE, no UAV.
@@ -887,14 +1004,19 @@ fn create_display_texture(
     width: u32,
     height: u32,
 ) -> Result<ID3D11Texture2D, D3d11RgbaError> {
-    use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_SHARED};
+    use windows::Win32::Graphics::Direct3D11::{
+        D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_SHARED,
+    };
     let tex_desc = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_R8G8B8A8_UNORM.into(),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: D3D11_USAGE_DEFAULT,
         BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
         CPUAccessFlags: 0,
@@ -914,7 +1036,9 @@ fn create_nv12_output_resources(
     width: u32,
     height: u32,
 ) -> Result<(ID3D11Texture2D, ID3D11UnorderedAccessView), D3d11RgbaError> {
-    use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_UNORDERED_ACCESS, D3D11_BIND_SHADER_RESOURCE};
+    use windows::Win32::Graphics::Direct3D11::{
+        D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS,
+    };
 
     let tex_desc = D3D11_TEXTURE2D_DESC {
         Width: width,
@@ -922,7 +1046,10 @@ fn create_nv12_output_resources(
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_R8G8B8A8_UNORM.into(),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: D3D11_USAGE_DEFAULT,
         // UAV: compute shader writes here.  No MISC_SHARED — the two flags conflict and
         // prevent CreateUnorderedAccessView from succeeding on some hardware/drivers.
@@ -937,7 +1064,8 @@ fn create_nv12_output_resources(
             .CreateTexture2D(&tex_desc, None, Some(std::ptr::from_mut(&mut tex_rgba)))
             .map_err(|e| D3d11RgbaError::CreateTexture(format!("NV12 output tex: {:?}", e)))?;
     }
-    let tex_rgba = tex_rgba.ok_or_else(|| D3d11RgbaError::CreateTexture("CreateTexture2D null".into()))?;
+    let tex_rgba =
+        tex_rgba.ok_or_else(|| D3d11RgbaError::CreateTexture("CreateTexture2D null".into()))?;
 
     let uav_desc = D3D11_UNORDERED_ACCESS_VIEW_DESC {
         Format: DXGI_FORMAT_R8G8B8A8_UNORM.into(),
@@ -975,7 +1103,10 @@ fn create_nv12_shader_readable(
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_NV12.into(),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: D3D11_USAGE_DEFAULT,
         BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
         CPUAccessFlags: 0,
@@ -1008,7 +1139,9 @@ fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext), D3d11RgbaError
             Some(&mut context),
         );
         if hr == Err(DXGI_ERROR_UNSUPPORTED.into()) {
-            return Err(D3d11RgbaError::CreateDevice("Hardware device unsupported".into()));
+            return Err(D3d11RgbaError::CreateDevice(
+                "Hardware device unsupported".into(),
+            ));
         }
         let device = device
             .ok_or_else(|| D3d11RgbaError::CreateDevice("CreateDevice returned null".into()))?;
@@ -1020,7 +1153,7 @@ fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext), D3d11RgbaError
 
 fn compile_cs_i420_to_rgba(device: &ID3D11Device) -> Result<ID3D11ComputeShader, D3d11RgbaError> {
     use windows::core::PCSTR;
-    use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_SKIP_VALIDATION, D3DCOMPILE_DEBUG};
+    use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_VALIDATION};
     let source = std::ffi::CString::new(HLSL_I420_TO_RGBA)
         .map_err(|_| D3d11RgbaError::Compile("HLSL string null".into()))?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -1048,13 +1181,15 @@ fn compile_cs_i420_to_rgba(device: &ID3D11Device) -> Result<ID3D11ComputeShader,
                 .map(|b| {
                     let ptr = b.GetBufferPointer();
                     let len = b.GetBufferSize();
-                    String::from_utf8_lossy(std::slice::from_raw_parts(ptr as *const u8, len)).into_owned()
+                    String::from_utf8_lossy(std::slice::from_raw_parts(ptr as *const u8, len))
+                        .into_owned()
                 })
                 .unwrap_or_else(|| format!("D3DCompile failed: {:?}", hr));
             return Err(D3d11RgbaError::Compile(msg));
         }
         let blob = blob.ok_or_else(|| D3d11RgbaError::Compile("no blob".into()))?;
-        let bytecode = std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize());
+        let bytecode =
+            std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize());
         let mut cs = None;
         device
             .CreateComputeShader(bytecode, None, Some(&mut cs))
@@ -1085,7 +1220,7 @@ fn create_resources(
 > {
     use windows::Win32::Graphics::Direct3D11::{
         D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS,
-        D3D11_BUFFER_DESC, D3D11_USAGE_DYNAMIC, D3D11_CPU_ACCESS_WRITE,
+        D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_USAGE_DYNAMIC,
     };
 
     let uw = width / 2;
@@ -1113,7 +1248,10 @@ fn create_resources(
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_R8_UNORM.into(),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: D3D11_USAGE_DEFAULT,
         BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
         CPUAccessFlags: 0,
@@ -1125,13 +1263,25 @@ fn create_resources(
     let mut tex_v = None;
     unsafe {
         device
-            .CreateTexture2D(&tex_desc_r8(width, height), None, Some(std::ptr::from_mut(&mut tex_y)))
+            .CreateTexture2D(
+                &tex_desc_r8(width, height),
+                None,
+                Some(std::ptr::from_mut(&mut tex_y)),
+            )
             .map_err(|e| D3d11RgbaError::CreateTexture(format!("tex_y: {:?}", e)))?;
         device
-            .CreateTexture2D(&tex_desc_r8(uw, uh), None, Some(std::ptr::from_mut(&mut tex_u)))
+            .CreateTexture2D(
+                &tex_desc_r8(uw, uh),
+                None,
+                Some(std::ptr::from_mut(&mut tex_u)),
+            )
             .map_err(|e| D3d11RgbaError::CreateTexture(format!("tex_u: {:?}", e)))?;
         device
-            .CreateTexture2D(&tex_desc_r8(uw, uh), None, Some(std::ptr::from_mut(&mut tex_v)))
+            .CreateTexture2D(
+                &tex_desc_r8(uw, uh),
+                None,
+                Some(std::ptr::from_mut(&mut tex_v)),
+            )
             .map_err(|e| D3d11RgbaError::CreateTexture(format!("tex_v: {:?}", e)))?;
     }
     let tex_y = tex_y.unwrap();
@@ -1144,7 +1294,10 @@ fn create_resources(
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_R8G8B8A8_UNORM.into(),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Usage: D3D11_USAGE_DEFAULT,
         BindFlags: D3D11_BIND_UNORDERED_ACCESS.0 as u32,
         CPUAccessFlags: 0,
@@ -1153,7 +1306,11 @@ fn create_resources(
     let mut tex_rgba = None;
     unsafe {
         device
-            .CreateTexture2D(&tex_rgba_desc, None, Some(std::ptr::from_mut(&mut tex_rgba)))
+            .CreateTexture2D(
+                &tex_rgba_desc,
+                None,
+                Some(std::ptr::from_mut(&mut tex_rgba)),
+            )
             .map_err(|e| D3d11RgbaError::CreateTexture(format!("tex_rgba: {:?}", e)))?;
     }
     let tex_rgba = tex_rgba.unwrap();
@@ -1167,7 +1324,11 @@ fn create_resources(
     let mut staging_rgba = None;
     unsafe {
         device
-            .CreateTexture2D(&staging_desc, None, Some(std::ptr::from_mut(&mut staging_rgba)))
+            .CreateTexture2D(
+                &staging_desc,
+                None,
+                Some(std::ptr::from_mut(&mut staging_rgba)),
+            )
             .map_err(|e| D3d11RgbaError::CreateTexture(format!("staging: {:?}", e)))?;
     }
     let staging_rgba = staging_rgba.unwrap();
@@ -1187,14 +1348,26 @@ fn create_resources(
     let mut srv_u = None;
     let mut srv_v = None;
     unsafe {
-        let res_y = tex_y.clone().cast::<windows::Win32::Graphics::Direct3D11::ID3D11Resource>().map_err(|e| D3d11RgbaError::CreateShaderResourceView(e.to_string()))?;
-        device.CreateShaderResourceView(&res_y, Some(&srv_desc_r8(width, height)), Some(&mut srv_y))
+        let res_y = tex_y
+            .clone()
+            .cast::<windows::Win32::Graphics::Direct3D11::ID3D11Resource>()
             .map_err(|e| D3d11RgbaError::CreateShaderResourceView(e.to_string()))?;
-        let res_u = tex_u.clone().cast::<windows::Win32::Graphics::Direct3D11::ID3D11Resource>().map_err(|e| D3d11RgbaError::CreateShaderResourceView(e.to_string()))?;
-        device.CreateShaderResourceView(&res_u, Some(&srv_desc_r8(uw, uh)), Some(&mut srv_u))
+        device
+            .CreateShaderResourceView(&res_y, Some(&srv_desc_r8(width, height)), Some(&mut srv_y))
             .map_err(|e| D3d11RgbaError::CreateShaderResourceView(e.to_string()))?;
-        let res_v = tex_v.clone().cast::<windows::Win32::Graphics::Direct3D11::ID3D11Resource>().map_err(|e| D3d11RgbaError::CreateShaderResourceView(e.to_string()))?;
-        device.CreateShaderResourceView(&res_v, Some(&srv_desc_r8(uw, uh)), Some(&mut srv_v))
+        let res_u = tex_u
+            .clone()
+            .cast::<windows::Win32::Graphics::Direct3D11::ID3D11Resource>()
+            .map_err(|e| D3d11RgbaError::CreateShaderResourceView(e.to_string()))?;
+        device
+            .CreateShaderResourceView(&res_u, Some(&srv_desc_r8(uw, uh)), Some(&mut srv_u))
+            .map_err(|e| D3d11RgbaError::CreateShaderResourceView(e.to_string()))?;
+        let res_v = tex_v
+            .clone()
+            .cast::<windows::Win32::Graphics::Direct3D11::ID3D11Resource>()
+            .map_err(|e| D3d11RgbaError::CreateShaderResourceView(e.to_string()))?;
+        device
+            .CreateShaderResourceView(&res_v, Some(&srv_desc_r8(uw, uh)), Some(&mut srv_v))
             .map_err(|e| D3d11RgbaError::CreateShaderResourceView(e.to_string()))?;
     }
 
@@ -1207,8 +1380,12 @@ fn create_resources(
     };
     let mut uav_rgba = None;
     unsafe {
-        let res = tex_rgba.clone().cast::<windows::Win32::Graphics::Direct3D11::ID3D11Resource>().map_err(|e| D3d11RgbaError::CreateUnorderedAccessView(e.to_string()))?;
-        device.CreateUnorderedAccessView(&res, Some(&uav_desc), Some(&mut uav_rgba))
+        let res = tex_rgba
+            .clone()
+            .cast::<windows::Win32::Graphics::Direct3D11::ID3D11Resource>()
+            .map_err(|e| D3d11RgbaError::CreateUnorderedAccessView(e.to_string()))?;
+        device
+            .CreateUnorderedAccessView(&res, Some(&uav_desc), Some(&mut uav_rgba))
             .map_err(|e| D3d11RgbaError::CreateUnorderedAccessView(e.to_string()))?;
     }
 
@@ -1222,7 +1399,8 @@ fn create_resources(
             .CreateQuery(&query_desc, Some(&mut event_query))
             .map_err(|e| D3d11RgbaError::CreateQuery(e.to_string()))?;
     }
-    let event_query = event_query.ok_or_else(|| D3d11RgbaError::CreateQuery("CreateQuery null".into()))?;
+    let event_query =
+        event_query.ok_or_else(|| D3d11RgbaError::CreateQuery("CreateQuery null".into()))?;
 
     Ok((
         cb_params,

@@ -8,21 +8,25 @@
 #![cfg(all(target_os = "windows", feature = "wgc-capture"))]
 
 use windows::core::Interface;
-use windows::Win32::Graphics::Direct3D::Fxc::{D3DCompile, D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_VALIDATION};
+use windows::Win32::Graphics::Direct3D::Fxc::{
+    D3DCompile, D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_VALIDATION,
+};
 use windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_UNORDERED_ACCESS, D3D11_CPU_ACCESS_READ,
-    D3D11_CPU_ACCESS_WRITE, D3D11_MAP_READ, D3D11_MAP_WRITE_DISCARD, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
-    D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS,
-    D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC, D3D11_USAGE_STAGING,
-    D3D11_TEXTURE2D_DESC, D3D11_UAV_DIMENSION_BUFFER, ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext,
-    ID3D11Query, ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D,
-    ID3D11UnorderedAccessView, D3D11_BUFFER_DESC, D3D11_BUFFER_UAV, D3D11_BUFFER_UAV_FLAG_RAW,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_SAMPLER_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC,
-    D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_SRV, D3D11_UNORDERED_ACCESS_VIEW_DESC,
-    D3D11_UNORDERED_ACCESS_VIEW_DESC_0,
+    ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext, ID3D11Query,
+    ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11UnorderedAccessView,
+    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_UNORDERED_ACCESS, D3D11_BUFFER_DESC, D3D11_BUFFER_UAV,
+    D3D11_BUFFER_UAV_FLAG_RAW, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_MAP_WRITE_DISCARD, D3D11_QUERY_DESC,
+    D3D11_QUERY_EVENT, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, D3D11_SAMPLER_DESC,
+    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_SRV,
+    D3D11_TEXTURE2D_DESC, D3D11_UAV_DIMENSION_BUFFER, D3D11_UNORDERED_ACCESS_VIEW_DESC,
+    D3D11_UNORDERED_ACCESS_VIEW_DESC_0, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
+    D3D11_USAGE_STAGING,
 };
-use windows::Win32::Graphics::Direct3D11::{D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_TEXTURE_ADDRESS_CLAMP};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_TEXTURE_ADDRESS_CLAMP,
+};
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_R32_TYPELESS,
     DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -187,7 +191,13 @@ pub struct I420Planes {
 impl I420Planes {
     /// Create an empty instance to be filled by convert().
     pub fn new_empty() -> Self {
-        Self { y: Vec::new(), u: Vec::new(), v: Vec::new(), width: 0, height: 0 }
+        Self {
+            y: Vec::new(),
+            u: Vec::new(),
+            v: Vec::new(),
+            width: 0,
+            height: 0,
+        }
     }
 
     /// Resize buffers to match dimensions without reallocating if already large enough.
@@ -256,11 +266,7 @@ pub enum D3d11I420Error {
 
 impl D3d11RgbaToI420 {
     /// Build pipeline for the given dimensions.
-    pub fn new(
-        device: &ID3D11Device,
-        width: u32,
-        height: u32,
-    ) -> Result<Self, D3d11I420Error> {
+    pub fn new(device: &ID3D11Device, width: u32, height: u32) -> Result<Self, D3d11I420Error> {
         let cs = compile_cs(device)?;
         let (cb_params, buf_y, buf_u, buf_v, staging_y, staging_u, staging_v, uav_y, uav_u, uav_v) =
             create_buffers_and_uavs(device, width, height)?;
@@ -326,7 +332,9 @@ impl D3d11RgbaToI420 {
 
         // Double-buffered staging: map the set written in the previous call, write to the other.
         // last_write_idx starts at 1, so first call: map_idx=1 (pre-signalled), write_idx=0.
-        let last = self.last_write_idx.load(std::sync::atomic::Ordering::Relaxed);
+        let last = self
+            .last_write_idx
+            .load(std::sync::atomic::Ordering::Relaxed);
         let map_idx = last;
         let write_idx = 1 - last;
 
@@ -339,29 +347,59 @@ impl D3d11RgbaToI420 {
             unsafe {
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
                 context
-                    .Map(&self.cb_params, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped as *mut _))
+                    .Map(
+                        &self.cb_params,
+                        0,
+                        D3D11_MAP_WRITE_DISCARD,
+                        0,
+                        Some(&mut mapped as *mut _),
+                    )
                     .map_err(|e| D3d11I420Error::Map(e.to_string()))?;
-                std::ptr::copy_nonoverlapping(params.as_ptr() as *const u8, mapped.pData as *mut u8, 16);
+                std::ptr::copy_nonoverlapping(
+                    params.as_ptr() as *const u8,
+                    mapped.pData as *mut u8,
+                    16,
+                );
                 context.Unmap(&self.cb_params, 0);
 
                 context.CSSetShader(Some(&self.cs), None);
                 context.CSSetConstantBuffers(0, Some(&[Some(self.cb_params.clone())]));
                 context.CSSetShaderResources(0, Some(&[Some(srv.clone())]));
-                context.CSSetUnorderedAccessViews(0, 3, Some(uavs.as_ptr()), Some(uav_counts.as_ptr()));
+                context.CSSetUnorderedAccessViews(
+                    0,
+                    3,
+                    Some(uavs.as_ptr()),
+                    Some(uav_counts.as_ptr()),
+                );
                 // Each thread covers 4 pixels along X → divide X dispatch by 4.
                 context.Dispatch((w / 4 + 15) / 16, (h + 15) / 16, 1);
 
                 let params_uv: [u32; 4] = [w, h, 1, 0];
                 context
-                    .Map(&self.cb_params, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped as *mut _))
+                    .Map(
+                        &self.cb_params,
+                        0,
+                        D3D11_MAP_WRITE_DISCARD,
+                        0,
+                        Some(&mut mapped as *mut _),
+                    )
                     .map_err(|e| D3d11I420Error::Map(e.to_string()))?;
-                std::ptr::copy_nonoverlapping(params_uv.as_ptr() as *const u8, mapped.pData as *mut u8, 16);
+                std::ptr::copy_nonoverlapping(
+                    params_uv.as_ptr() as *const u8,
+                    mapped.pData as *mut u8,
+                    16,
+                );
                 context.Unmap(&self.cb_params, 0);
                 context.Dispatch((uw / 4 + 15) / 16, (uh + 15) / 16, 1);
 
                 let uavs_clear = [None, None, None];
                 let counts_clear = [0u32; 3];
-                context.CSSetUnorderedAccessViews(0, 3, Some(uavs_clear.as_ptr()), Some(counts_clear.as_ptr()));
+                context.CSSetUnorderedAccessViews(
+                    0,
+                    3,
+                    Some(uavs_clear.as_ptr()),
+                    Some(counts_clear.as_ptr()),
+                );
                 context.CSSetShaderResources(0, Some(&[None]));
                 context.CSSetShader(None, None);
             }
@@ -401,19 +439,37 @@ impl D3d11RgbaToI420 {
         unsafe {
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             context
-                .Map(&self.staging_y[map_idx], 0, D3D11_MAP_READ, 0, Some(std::ptr::addr_of_mut!(mapped)))
+                .Map(
+                    &self.staging_y[map_idx],
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(std::ptr::addr_of_mut!(mapped)),
+                )
                 .map_err(|e| D3d11I420Error::Map(e.to_string()))?;
             std::ptr::copy_nonoverlapping(mapped.pData as *const u8, out.y.as_mut_ptr(), y_len);
             context.Unmap(&self.staging_y[map_idx], 0);
 
             context
-                .Map(&self.staging_u[map_idx], 0, D3D11_MAP_READ, 0, Some(std::ptr::addr_of_mut!(mapped)))
+                .Map(
+                    &self.staging_u[map_idx],
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(std::ptr::addr_of_mut!(mapped)),
+                )
                 .map_err(|e| D3d11I420Error::Map(e.to_string()))?;
             std::ptr::copy_nonoverlapping(mapped.pData as *const u8, out.u.as_mut_ptr(), uv_len);
             context.Unmap(&self.staging_u[map_idx], 0);
 
             context
-                .Map(&self.staging_v[map_idx], 0, D3D11_MAP_READ, 0, Some(std::ptr::addr_of_mut!(mapped)))
+                .Map(
+                    &self.staging_v[map_idx],
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(std::ptr::addr_of_mut!(mapped)),
+                )
                 .map_err(|e| D3d11I420Error::Map(e.to_string()))?;
             std::ptr::copy_nonoverlapping(mapped.pData as *const u8, out.v.as_mut_ptr(), uv_len);
             context.Unmap(&self.staging_v[map_idx], 0);
@@ -433,10 +489,16 @@ impl D3d11RgbaToI420 {
                 // No second Flush: End() is a fence, one Flush before it is sufficient.
             }
         }
-        self.last_write_idx.store(write_idx, std::sync::atomic::Ordering::Relaxed);
+        self.last_write_idx
+            .store(write_idx, std::sync::atomic::Ordering::Relaxed);
 
         let total_ns = t_total.elapsed().as_nanos() as u64;
-        Ok(GpuConvertTiming { dispatch_ns, copy_ns, map_ns, total_ns })
+        Ok(GpuConvertTiming {
+            dispatch_ns,
+            copy_ns,
+            map_ns,
+            total_ns,
+        })
     }
 
     pub fn width(&self) -> u32 {
@@ -548,9 +610,7 @@ impl D3d11RgbaToI420Scaled {
 
         let srv = create_srv_for_texture(device, texture)?;
 
-        let write_params = |phase: u32| -> [u32; 8] {
-            [sw, sh, dw, dh, phase, 0, 0, 0]
-        };
+        let write_params = |phase: u32| -> [u32; 8] { [sw, sh, dw, dh, phase, 0, 0, 0] };
 
         let uavs = [
             Some(self.uav_y.clone()),
@@ -561,7 +621,9 @@ impl D3d11RgbaToI420Scaled {
 
         // Double-buffered staging: map the set written in the previous call, write to the other.
         // last_write_idx starts at 1, so first call: map_idx=1 (pre-signalled), write_idx=0.
-        let last = self.last_write_idx.load(std::sync::atomic::Ordering::Relaxed);
+        let last = self
+            .last_write_idx
+            .load(std::sync::atomic::Ordering::Relaxed);
         let map_idx = last;
         let write_idx = 1 - last;
 
@@ -575,12 +637,23 @@ impl D3d11RgbaToI420Scaled {
                 context.CSSetConstantBuffers(0, Some(&[Some(self.cb_params.clone())]));
                 context.CSSetShaderResources(0, Some(&[Some(srv.clone())]));
                 context.CSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
-                context.CSSetUnorderedAccessViews(0, 3, Some(uavs.as_ptr()), Some(uav_counts.as_ptr()));
+                context.CSSetUnorderedAccessViews(
+                    0,
+                    3,
+                    Some(uavs.as_ptr()),
+                    Some(uav_counts.as_ptr()),
+                );
 
                 let p = write_params(0);
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
                 context
-                    .Map(&self.cb_params, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped as *mut _))
+                    .Map(
+                        &self.cb_params,
+                        0,
+                        D3D11_MAP_WRITE_DISCARD,
+                        0,
+                        Some(&mut mapped as *mut _),
+                    )
                     .map_err(|e| D3d11I420Error::Map(e.to_string()))?;
                 std::ptr::copy_nonoverlapping(p.as_ptr() as *const u8, mapped.pData as *mut u8, 32);
                 context.Unmap(&self.cb_params, 0);
@@ -590,7 +663,13 @@ impl D3d11RgbaToI420Scaled {
 
                 let p = write_params(1);
                 context
-                    .Map(&self.cb_params, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped as *mut _))
+                    .Map(
+                        &self.cb_params,
+                        0,
+                        D3D11_MAP_WRITE_DISCARD,
+                        0,
+                        Some(&mut mapped as *mut _),
+                    )
                     .map_err(|e| D3d11I420Error::Map(e.to_string()))?;
                 std::ptr::copy_nonoverlapping(p.as_ptr() as *const u8, mapped.pData as *mut u8, 32);
                 context.Unmap(&self.cb_params, 0);
@@ -598,7 +677,12 @@ impl D3d11RgbaToI420Scaled {
 
                 let uavs_clear = [None, None, None];
                 let counts_clear = [0u32; 3];
-                context.CSSetUnorderedAccessViews(0, 3, Some(uavs_clear.as_ptr()), Some(counts_clear.as_ptr()));
+                context.CSSetUnorderedAccessViews(
+                    0,
+                    3,
+                    Some(uavs_clear.as_ptr()),
+                    Some(counts_clear.as_ptr()),
+                );
                 context.CSSetShaderResources(0, Some(&[None]));
                 context.CSSetSamplers(0, Some(&[None]));
                 context.CSSetShader(None, None);
@@ -637,19 +721,37 @@ impl D3d11RgbaToI420Scaled {
         unsafe {
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             context
-                .Map(&self.staging_y[map_idx], 0, D3D11_MAP_READ, 0, Some(std::ptr::addr_of_mut!(mapped)))
+                .Map(
+                    &self.staging_y[map_idx],
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(std::ptr::addr_of_mut!(mapped)),
+                )
                 .map_err(|e| D3d11I420Error::Map(e.to_string()))?;
             std::ptr::copy_nonoverlapping(mapped.pData as *const u8, out.y.as_mut_ptr(), y_len);
             context.Unmap(&self.staging_y[map_idx], 0);
 
             context
-                .Map(&self.staging_u[map_idx], 0, D3D11_MAP_READ, 0, Some(std::ptr::addr_of_mut!(mapped)))
+                .Map(
+                    &self.staging_u[map_idx],
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(std::ptr::addr_of_mut!(mapped)),
+                )
                 .map_err(|e| D3d11I420Error::Map(e.to_string()))?;
             std::ptr::copy_nonoverlapping(mapped.pData as *const u8, out.u.as_mut_ptr(), uv_len);
             context.Unmap(&self.staging_u[map_idx], 0);
 
             context
-                .Map(&self.staging_v[map_idx], 0, D3D11_MAP_READ, 0, Some(std::ptr::addr_of_mut!(mapped)))
+                .Map(
+                    &self.staging_v[map_idx],
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(std::ptr::addr_of_mut!(mapped)),
+                )
                 .map_err(|e| D3d11I420Error::Map(e.to_string()))?;
             std::ptr::copy_nonoverlapping(mapped.pData as *const u8, out.v.as_mut_ptr(), uv_len);
             context.Unmap(&self.staging_v[map_idx], 0);
@@ -669,10 +771,16 @@ impl D3d11RgbaToI420Scaled {
                 // No second Flush: End() is a fence, one Flush before it is sufficient.
             }
         }
-        self.last_write_idx.store(write_idx, std::sync::atomic::Ordering::Relaxed);
+        self.last_write_idx
+            .store(write_idx, std::sync::atomic::Ordering::Relaxed);
 
         let total_ns = t_total.elapsed().as_nanos() as u64;
-        Ok(GpuConvertTiming { dispatch_ns, copy_ns, map_ns, total_ns })
+        Ok(GpuConvertTiming {
+            dispatch_ns,
+            copy_ns,
+            map_ns,
+            total_ns,
+        })
     }
 }
 
@@ -771,8 +879,10 @@ fn create_srv_for_texture(
     };
     let mut srv = None;
     unsafe {
-        let resource: windows::Win32::Graphics::Direct3D11::ID3D11Resource =
-            texture.clone().cast().map_err(|e| D3d11I420Error::CreateShaderResourceView(e.to_string()))?;
+        let resource: windows::Win32::Graphics::Direct3D11::ID3D11Resource = texture
+            .clone()
+            .cast()
+            .map_err(|e| D3d11I420Error::CreateShaderResourceView(e.to_string()))?;
         device
             .CreateShaderResourceView(&resource, Some(&desc), Some(&mut srv))
             .map_err(|e| D3d11I420Error::CreateShaderResourceView(e.to_string()))?;
@@ -783,7 +893,11 @@ fn create_srv_for_texture(
 }
 
 fn compile_cs_scaled(device: &ID3D11Device) -> Result<ID3D11ComputeShader, D3d11I420Error> {
-    compile_cs_from_source(device, HLSL_RGBA_TO_I420_SCALED, HLSL_RGBA_TO_I420_SCALED.len())
+    compile_cs_from_source(
+        device,
+        HLSL_RGBA_TO_I420_SCALED,
+        HLSL_RGBA_TO_I420_SCALED.len(),
+    )
 }
 
 fn create_linear_sampler(device: &ID3D11Device) -> Result<ID3D11SamplerState, D3d11I420Error> {
@@ -866,15 +980,15 @@ fn create_buffers_and_uavs(
     let mut buf_u = None;
     let mut buf_v = None;
     unsafe {
-        device.CreateBuffer(&buf_desc(y_count), None, Some(&mut buf_y)).map_err(|e| {
-            D3d11I420Error::CreateBuffer(format!("buf_y: {}", e))
-        })?;
-        device.CreateBuffer(&buf_desc(uv_count), None, Some(&mut buf_u)).map_err(|e| {
-            D3d11I420Error::CreateBuffer(format!("buf_u: {}", e))
-        })?;
-        device.CreateBuffer(&buf_desc(uv_count), None, Some(&mut buf_v)).map_err(|e| {
-            D3d11I420Error::CreateBuffer(format!("buf_v: {}", e))
-        })?;
+        device
+            .CreateBuffer(&buf_desc(y_count), None, Some(&mut buf_y))
+            .map_err(|e| D3d11I420Error::CreateBuffer(format!("buf_y: {}", e)))?;
+        device
+            .CreateBuffer(&buf_desc(uv_count), None, Some(&mut buf_u))
+            .map_err(|e| D3d11I420Error::CreateBuffer(format!("buf_u: {}", e)))?;
+        device
+            .CreateBuffer(&buf_desc(uv_count), None, Some(&mut buf_v))
+            .map_err(|e| D3d11I420Error::CreateBuffer(format!("buf_v: {}", e)))?;
     }
     let buf_y = buf_y.unwrap();
     let buf_u = buf_u.unwrap();
@@ -899,24 +1013,24 @@ fn create_buffers_and_uavs(
     let mut sv0 = None;
     let mut sv1 = None;
     unsafe {
-        device.CreateBuffer(&staging_desc(y_count), None, Some(&mut sy0)).map_err(|e| {
-            D3d11I420Error::CreateBuffer(format!("staging_y[0]: {}", e))
-        })?;
-        device.CreateBuffer(&staging_desc(y_count), None, Some(&mut sy1)).map_err(|e| {
-            D3d11I420Error::CreateBuffer(format!("staging_y[1]: {}", e))
-        })?;
-        device.CreateBuffer(&staging_desc(uv_count), None, Some(&mut su0)).map_err(|e| {
-            D3d11I420Error::CreateBuffer(format!("staging_u[0]: {}", e))
-        })?;
-        device.CreateBuffer(&staging_desc(uv_count), None, Some(&mut su1)).map_err(|e| {
-            D3d11I420Error::CreateBuffer(format!("staging_u[1]: {}", e))
-        })?;
-        device.CreateBuffer(&staging_desc(uv_count), None, Some(&mut sv0)).map_err(|e| {
-            D3d11I420Error::CreateBuffer(format!("staging_v[0]: {}", e))
-        })?;
-        device.CreateBuffer(&staging_desc(uv_count), None, Some(&mut sv1)).map_err(|e| {
-            D3d11I420Error::CreateBuffer(format!("staging_v[1]: {}", e))
-        })?;
+        device
+            .CreateBuffer(&staging_desc(y_count), None, Some(&mut sy0))
+            .map_err(|e| D3d11I420Error::CreateBuffer(format!("staging_y[0]: {}", e)))?;
+        device
+            .CreateBuffer(&staging_desc(y_count), None, Some(&mut sy1))
+            .map_err(|e| D3d11I420Error::CreateBuffer(format!("staging_y[1]: {}", e)))?;
+        device
+            .CreateBuffer(&staging_desc(uv_count), None, Some(&mut su0))
+            .map_err(|e| D3d11I420Error::CreateBuffer(format!("staging_u[0]: {}", e)))?;
+        device
+            .CreateBuffer(&staging_desc(uv_count), None, Some(&mut su1))
+            .map_err(|e| D3d11I420Error::CreateBuffer(format!("staging_u[1]: {}", e)))?;
+        device
+            .CreateBuffer(&staging_desc(uv_count), None, Some(&mut sv0))
+            .map_err(|e| D3d11I420Error::CreateBuffer(format!("staging_v[0]: {}", e)))?;
+        device
+            .CreateBuffer(&staging_desc(uv_count), None, Some(&mut sv1))
+            .map_err(|e| D3d11I420Error::CreateBuffer(format!("staging_v[1]: {}", e)))?;
     }
     let staging_y = [sy0.unwrap(), sy1.unwrap()];
     let staging_u = [su0.unwrap(), su1.unwrap()];

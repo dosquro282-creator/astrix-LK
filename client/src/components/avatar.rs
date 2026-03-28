@@ -17,7 +17,15 @@ pub fn avatar(
     let ring_margin = if speaking { 3.0 } else { 0.0 };
     let size = egui::vec2((radius + ring_margin) * 2.0, (radius + ring_margin) * 2.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
-    paint_at(ui, theme, rect.center(), display_name, radius, speaking, texture);
+    paint_at(
+        ui,
+        theme,
+        rect.center(),
+        display_name,
+        radius,
+        speaking,
+        texture,
+    );
     resp
 }
 
@@ -69,10 +77,7 @@ fn paint_at(
     }
 
     if speaking {
-        ui.painter().circle_stroke(
-            center,
-            radius + 1.5,
-            egui::Stroke::new(2.5, theme.success),
-        );
+        ui.painter()
+            .circle_stroke(center, radius + 1.5, egui::Stroke::new(2.5, theme.success));
     }
 }

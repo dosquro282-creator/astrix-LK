@@ -45,8 +45,8 @@ func NewServer(cfg config.Config) *Server {
 	// Voice manager (in-memory state + WS; LiveKit handles media).
 	voiceMgr := voice.NewManager(wsHub)
 
-	// Hook: when a WS client disconnects → auto-leave any voice room.
-	wsHub.OnDisconnect = voice.LeaveOnDisconnect(voiceMgr, st)
+	// Do not auto-leave voice on transient WS disconnects.
+	// LiveKit webhook + explicit /voice/leave remain the source of truth for voice presence.
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)

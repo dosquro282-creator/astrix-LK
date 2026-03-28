@@ -1,8 +1,8 @@
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
-use parking_lot::Mutex;
 
 pub const DEFAULT_API_BASE: &str = "http://104.128.136.203:8080";
 
@@ -300,15 +300,26 @@ impl ApiClient {
 
     pub async fn register(&self, req: &RegisterRequest) -> Result<(), ApiError> {
         let url = format!("{}/auth/register", self.base);
-        self.http.post(url).json(req).send().await?.error_for_status()?;
+        self.http
+            .post(url)
+            .json(req)
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     pub async fn login(&self, req: &LoginRequest) -> Result<TokenResponse, ApiError> {
         let url = format!("{}/auth/login", self.base);
-        let resp = self.http.post(url).json(req).send().await?
+        let resp = self
+            .http
+            .post(url)
+            .json(req)
+            .send()
+            .await?
             .error_for_status()?
-            .json::<TokenResponse>().await?;
+            .json::<TokenResponse>()
+            .await?;
         Ok(resp)
     }
 
@@ -316,107 +327,194 @@ impl ApiClient {
 
     pub async fn list_servers(&self, token: &str) -> Result<Vec<Server>, ApiError> {
         let url = format!("{}/servers/", self.base);
-        Ok(self.http.get(url)
+        Ok(self
+            .http
+            .get(url)
             .header("Authorization", Self::auth_header(token))
-            .send().await?.error_for_status()?.json::<Vec<Server>>().await?)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<Server>>()
+            .await?)
     }
 
     pub async fn create_server(&self, token: &str, name: &str) -> Result<Server, ApiError> {
         let url = format!("{}/servers/", self.base);
-        Ok(self.http.post(url)
+        Ok(self
+            .http
+            .post(url)
             .header("Authorization", Self::auth_header(token))
             .json(&serde_json::json!({ "name": name }))
-            .send().await?.error_for_status()?.json::<Server>().await?)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Server>()
+            .await?)
     }
 
     pub async fn delete_server(&self, token: &str, server_id: i64) -> Result<(), ApiError> {
         let url = format!("{}/servers/{}", self.base, server_id);
-        self.http.delete(url)
+        self.http
+            .delete(url)
             .header("Authorization", Self::auth_header(token))
-            .send().await?.error_for_status()?;
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     // ── Channels ──────────────────────────────────────────────────────────
 
-    pub async fn list_channels(&self, token: &str, server_id: i64) -> Result<Vec<Channel>, ApiError> {
+    pub async fn list_channels(
+        &self,
+        token: &str,
+        server_id: i64,
+    ) -> Result<Vec<Channel>, ApiError> {
         let url = format!("{}/channels/?server_id={}", self.base, server_id);
-        Ok(self.http.get(url)
+        Ok(self
+            .http
+            .get(url)
             .header("Authorization", Self::auth_header(token))
-            .send().await?.error_for_status()?.json::<Vec<Channel>>().await?)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<Channel>>()
+            .await?)
     }
 
     pub async fn create_channel(
-        &self, token: &str, server_id: i64, name: &str, ch_type: &str,
+        &self,
+        token: &str,
+        server_id: i64,
+        name: &str,
+        ch_type: &str,
     ) -> Result<Channel, ApiError> {
         let url = format!("{}/channels/", self.base);
-        Ok(self.http.post(url)
+        Ok(self
+            .http
+            .post(url)
             .header("Authorization", Self::auth_header(token))
             .json(&serde_json::json!({ "server_id": server_id, "name": name, "type": ch_type }))
-            .send().await?.error_for_status()?.json::<Channel>().await?)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Channel>()
+            .await?)
     }
 
     pub async fn rename_channel(
-        &self, token: &str, channel_id: i64, name: &str,
+        &self,
+        token: &str,
+        channel_id: i64,
+        name: &str,
     ) -> Result<Channel, ApiError> {
         let url = format!("{}/channels/{}", self.base, channel_id);
-        Ok(self.http.patch(url)
+        Ok(self
+            .http
+            .patch(url)
             .header("Authorization", Self::auth_header(token))
             .json(&serde_json::json!({ "name": name }))
-            .send().await?.error_for_status()?.json::<Channel>().await?)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Channel>()
+            .await?)
     }
 
     // ── Members ───────────────────────────────────────────────────────────
 
-    pub async fn list_server_members(&self, token: &str, server_id: i64) -> Result<Vec<Member>, ApiError> {
+    pub async fn list_server_members(
+        &self,
+        token: &str,
+        server_id: i64,
+    ) -> Result<Vec<Member>, ApiError> {
         let url = format!("{}/members/?server_id={}", self.base, server_id);
-        Ok(self.http.get(url)
+        Ok(self
+            .http
+            .get(url)
             .header("Authorization", Self::auth_header(token))
-            .send().await?.error_for_status()?.json::<Vec<Member>>().await?)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<Member>>()
+            .await?)
     }
 
-    pub async fn add_member(&self, token: &str, server_id: i64, user_id: i64) -> Result<(), ApiError> {
+    pub async fn add_member(
+        &self,
+        token: &str,
+        server_id: i64,
+        user_id: i64,
+    ) -> Result<(), ApiError> {
         let url = format!("{}/members/", self.base);
-        self.http.post(url)
+        self.http
+            .post(url)
             .header("Authorization", Self::auth_header(token))
             .json(&serde_json::json!({ "server_id": server_id, "user_id": user_id }))
-            .send().await?.error_for_status()?;
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     pub async fn set_nickname(
-        &self, token: &str, server_id: i64, nickname: &str,
+        &self,
+        token: &str,
+        server_id: i64,
+        nickname: &str,
     ) -> Result<(), ApiError> {
         let url = format!("{}/members/nickname", self.base);
-        self.http.patch(url)
+        self.http
+            .patch(url)
             .header("Authorization", Self::auth_header(token))
             .json(&serde_json::json!({ "server_id": server_id, "nickname": nickname }))
-            .send().await?.error_for_status()?;
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     // ── Messages ──────────────────────────────────────────────────────────
 
-    pub async fn list_messages(&self, token: &str, channel_id: i64) -> Result<Vec<Message>, ApiError> {
+    pub async fn list_messages(
+        &self,
+        token: &str,
+        channel_id: i64,
+    ) -> Result<Vec<Message>, ApiError> {
         let url = format!("{}/messages/?channel_id={}", self.base, channel_id);
-        Ok(self.http.get(url)
+        Ok(self
+            .http
+            .get(url)
             .header("Authorization", Self::auth_header(token))
-            .send().await?.error_for_status()?.json::<Vec<Message>>().await?)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<Message>>()
+            .await?)
     }
 
     pub async fn send_message(
-        &self, token: &str, channel_id: i64, content: &str,
+        &self,
+        token: &str,
+        channel_id: i64,
+        content: &str,
         attachments: Vec<AttachmentMeta>,
     ) -> Result<Message, ApiError> {
         let url = format!("{}/messages/", self.base);
-        Ok(self.http.post(url)
+        Ok(self
+            .http
+            .post(url)
             .header("Authorization", Self::auth_header(token))
             .json(&serde_json::json!({
                 "channel_id": channel_id,
                 "content": content,
                 "attachments": attachments,
             }))
-            .send().await?.error_for_status()?.json::<Message>().await?)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Message>()
+            .await?)
     }
 
     // ── Avatar ────────────────────────────────────────────────────────────
@@ -424,44 +522,68 @@ impl ApiClient {
     pub async fn get_avatar(&self, user_id: i64) -> Result<Vec<u8>, ApiError> {
         let url = format!("{}/users/avatar?user_id={}", self.base, user_id);
         let resp = self.http.get(url).send().await?.error_for_status()?;
-        Ok(resp.bytes().await.map(|b| b.to_vec())
+        Ok(resp
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
             .map_err(|e| ApiError::Network(e.to_string()))?)
     }
 
     pub async fn set_avatar(&self, token: &str, data: Vec<u8>, mime: &str) -> Result<(), ApiError> {
         let url = format!("{}/users/me/avatar", self.base);
-        self.http.post(url)
+        self.http
+            .post(url)
             .header("Authorization", Self::auth_header(token))
             .header("Content-Type", mime)
             .body(data)
-            .send().await?.error_for_status()?;
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     // ── Media ─────────────────────────────────────────────────────────────
 
     pub async fn upload_media(
-        &self, token: &str, server_id: i64,
-        filename: &str, mime: &str, data: Vec<u8>,
+        &self,
+        token: &str,
+        server_id: i64,
+        filename: &str,
+        mime: &str,
+        data: Vec<u8>,
     ) -> Result<MediaUploadResponse, ApiError> {
         let url = format!(
             "{}/media/?server_id={}&filename={}",
-            self.base, server_id,
+            self.base,
+            server_id,
             urlencoding_encode(filename)
         );
-        Ok(self.http.post(url)
+        Ok(self
+            .http
+            .post(url)
             .header("Authorization", Self::auth_header(token))
             .header("Content-Type", mime)
             .body(data)
-            .send().await?.error_for_status()?.json::<MediaUploadResponse>().await?)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<MediaUploadResponse>()
+            .await?)
     }
 
     pub async fn download_media(&self, token: &str, media_id: i64) -> Result<Vec<u8>, ApiError> {
         let url = format!("{}/media/{}", self.base, media_id);
-        let resp = self.http.get(url)
+        let resp = self
+            .http
+            .get(url)
             .header("Authorization", Self::auth_header(token))
-            .send().await?.error_for_status()?;
-        Ok(resp.bytes().await.map(|b| b.to_vec())
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(resp
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
             .map_err(|e| ApiError::Network(e.to_string()))?)
     }
 
@@ -469,32 +591,49 @@ impl ApiClient {
 
     /// Join a voice channel. Returns LiveKit URL, token, and current participant list.
     pub async fn voice_join(
-        &self, token: &str, channel_id: i64, server_id: i64,
+        &self,
+        token: &str,
+        channel_id: i64,
+        server_id: i64,
     ) -> Result<VoiceJoinResponse, ApiError> {
         let url = format!("{}/voice/join", self.base);
-        Ok(self.http.post(url)
+        Ok(self
+            .http
+            .post(url)
             .header("Authorization", Self::auth_header(token))
             .json(&serde_json::json!({ "channel_id": channel_id, "server_id": server_id }))
-            .send().await?.error_for_status()?.json::<VoiceJoinResponse>().await?)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<VoiceJoinResponse>()
+            .await?)
     }
 
     /// Leave a voice channel.
     pub async fn voice_leave(&self, token: &str, channel_id: i64) -> Result<(), ApiError> {
         let url = format!("{}/voice/leave", self.base);
-        self.http.post(url)
+        self.http
+            .post(url)
             .header("Authorization", Self::auth_header(token))
             .json(&serde_json::json!({ "channel_id": channel_id }))
-            .send().await?.error_for_status()?;
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     /// Update mic/cam/streaming state in the current voice room.
     pub async fn voice_update_state(
-        &self, token: &str,
-        channel_id: i64, mic_muted: bool, cam_enabled: bool, streaming: bool,
+        &self,
+        token: &str,
+        channel_id: i64,
+        mic_muted: bool,
+        cam_enabled: bool,
+        streaming: bool,
     ) -> Result<(), ApiError> {
         let url = format!("{}/voice/mute", self.base);
-        self.http.post(url)
+        self.http
+            .post(url)
             .header("Authorization", Self::auth_header(token))
             .json(&serde_json::json!({
                 "channel_id":  channel_id,
@@ -502,18 +641,32 @@ impl ApiClient {
                 "cam_enabled": cam_enabled,
                 "streaming":   streaming,
             }))
-            .send().await?.error_for_status()?;
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     /// Fetch the current participant list for a voice channel (REST fallback).
-    pub async fn voice_state(&self, token: &str, channel_id: i64) -> Result<Vec<VoiceParticipant>, ApiError> {
+    pub async fn voice_state(
+        &self,
+        token: &str,
+        channel_id: i64,
+    ) -> Result<Vec<VoiceParticipant>, ApiError> {
         let url = format!("{}/voice/state?channel_id={}", self.base, channel_id);
         #[derive(serde::Deserialize)]
-        struct Resp { participants: Vec<VoiceParticipant> }
-        let r = self.http.get(url)
+        struct Resp {
+            participants: Vec<VoiceParticipant>,
+        }
+        let r = self
+            .http
+            .get(url)
             .header("Authorization", Self::auth_header(token))
-            .send().await?.error_for_status()?.json::<Resp>().await?;
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Resp>()
+            .await?;
         Ok(r.participants)
     }
 }
@@ -522,8 +675,9 @@ fn urlencoding_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-            | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }

@@ -9,6 +9,8 @@
   },
   "dark_mode": true,
   "voice_volume_by_user": {},
+  "stream_volume_by_user": {},
   "decode_path": "mft",
-  "video_decoder_gamma": 0.47
+  "video_decoder_gamma": 0.0,
+  "video_decoder_gamma_migrated_v2": true
 }

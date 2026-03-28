@@ -1,24 +1,19 @@
-//! Вторая колонка UI: название сервера, категории каналов, текстовые/голосовые каналы, блок профиля внизу.
-//! Discord-like: анимация выбора канала (вертикальная полоска слева), сворачиваемые категории.
-//! Нижний блок профиля (аватар, ник, mute, deafen, settings) — из bottom_panel.
+//! Left sidebar with channel lists and the user voice bar.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
 
-use crate::bottom_panel::{self, BottomPanelAction, BottomPanelParams, BottomPanelVoiceSnapshot};
+use crate::bottom_panel;
 use crate::net::VoiceParticipant;
 use crate::theme::Theme;
 
-/// Ширина панели каналов (как в Discord).
 pub const CHANNEL_PANEL_WIDTH: f32 = 240.0;
-/// Высота заголовка сервера.
-const SERVER_HEADER_HEIGHT: f32 = 40.0;
-/// Ширина вертикальной полоски у выбранного канала.
-const CHANNEL_INDICATOR_WIDTH: f32 = 4.0;
-const CHANNEL_INDICATOR_RADIUS: f32 = 2.0;
 
-/// Действие пользователя в панели каналов (обрабатывается в ui.rs).
+const SERVER_HEADER_HEIGHT: f32 = 48.0;
+const HEADER_BUTTON_SIZE: egui::Vec2 = egui::vec2(26.0, 26.0);
+const CHANNEL_ROW_HEIGHT: f32 = 30.0;
+
 #[derive(Debug, Clone)]
 pub enum ChannelPanelAction {
     SelectChannel(i64),
@@ -26,6 +21,10 @@ pub enum ChannelPanelAction {
     LeaveVoice,
     SetMicMuted(bool),
     SetOutputMuted(bool),
+    SetCameraEnabled(bool),
+    ToggleScreenShare,
+    SetParticipantMuted { user_id: i64, muted: bool },
+    SetParticipantVolume { user_id: i64, volume: f32 },
     CreateChannel,
     Invite,
     ChannelSettings(i64, String),
@@ -34,18 +33,20 @@ pub enum ChannelPanelAction {
     RetryChannels,
 }
 
-/// Снимок голосового состояния для отрисовки (без мутабельных заимствований).
 #[derive(Clone, Default)]
 pub struct ChannelPanelVoiceSnapshot {
     pub channel_id: Option<i64>,
     pub server_id: Option<i64>,
     pub mic_muted: bool,
     pub output_muted: bool,
+    pub camera_on: bool,
+    pub screen_on: bool,
     pub channel_voice: HashMap<i64, Vec<VoiceParticipant>>,
     pub speaking: HashMap<i64, bool>,
+    pub local_volumes: HashMap<i64, f32>,
+    pub locally_muted: HashSet<i64>,
 }
 
-/// Состояние загрузки (для отображения спиннера/ошибки).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChannelsLoadState {
     Idle,
@@ -54,26 +55,20 @@ pub enum ChannelsLoadState {
     Error(String),
 }
 
-/// Параметры для отрисовки панели каналов.
 pub struct ChannelPanelParams<'a> {
     pub theme: &'a Theme,
     pub server_name: &'a str,
     pub server_id: i64,
-    /// Текстовые каналы: (id, name).
     pub text_channels: &'a [(i64, String)],
-    /// Голосовые каналы: (id, name).
     pub voice_channels: &'a [(i64, String)],
+    pub unread_channel_ids: &'a HashSet<i64>,
     pub selected_channel_id: Option<i64>,
     pub voice: ChannelPanelVoiceSnapshot,
-    pub user_display: &'a str,
     pub user_id: Option<i64>,
     pub on_action: &'a mut dyn FnMut(ChannelPanelAction),
-    /// Аватар текущего пользователя (опционально).
-    pub avatar_texture: Option<&'a egui::TextureHandle>,
     pub channels_load: ChannelsLoadState,
 }
 
-/// Отрисовка второй колонки: заголовок сервера, список каналов, профиль внизу.
 pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'_>) {
     let ChannelPanelParams {
         theme,
@@ -81,245 +76,353 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
         server_id,
         text_channels,
         voice_channels,
+        unread_channel_ids,
         selected_channel_id,
         voice,
-        user_display,
         user_id,
         on_action,
-        avatar_texture,
         channels_load,
     } = params;
 
-    // ─── Блок профиля внизу (bottom_panel) ──────────────────────────────────
-    let profile_height = bottom_panel::BOTTOM_PANEL_HEIGHT;
-    let scroll_h = (ui.available_height() - profile_height).max(60.0);
-
-    let voice_snap = BottomPanelVoiceSnapshot {
-        in_voice_channel: voice.channel_id.is_some(),
-        mic_muted: voice.mic_muted,
-        output_muted: voice.output_muted,
-    };
+    ui.painter()
+        .rect_filled(ui.max_rect(), egui::Rounding::ZERO, theme.bg_secondary);
 
     egui::TopBottomPanel::bottom("channel_panel_user")
-        .show_separator_line(true)
-        .show_inside(ui, |ui| {
-            let mut map_action = |a: BottomPanelAction| {
-                match a {
-                    BottomPanelAction::LeaveVoice => (*on_action)(ChannelPanelAction::LeaveVoice),
-                    BottomPanelAction::SetMicMuted(b) => (*on_action)(ChannelPanelAction::SetMicMuted(b)),
-                    BottomPanelAction::SetOutputMuted(b) => (*on_action)(ChannelPanelAction::SetOutputMuted(b)),
-                    BottomPanelAction::OpenSettings => (*on_action)(ChannelPanelAction::OpenSettings),
-                    BottomPanelAction::Logout => (*on_action)(ChannelPanelAction::Logout),
-                }
-            };
-            bottom_panel::show(ctx, ui, BottomPanelParams {
-                theme,
-                user_display,
-                user_id,
-                voice: voice_snap,
-                avatar_texture,
-                on_action: &mut map_action,
-            });
-        });
+        .exact_height(bottom_panel::BOTTOM_PANEL_HEIGHT)
+        .show_separator_line(false)
+        .show_inside(ui, |_ui| {});
 
-    // ─── Заголовок сервера + кнопки ─────────────────────────────────────────
     egui::TopBottomPanel::top("channel_panel_header")
         .exact_height(SERVER_HEADER_HEIGHT)
         .show_separator_line(false)
         .show_inside(ui, |ui| {
-            ui.add_space(4.0);
+            let rect = ui.max_rect();
+            ui.painter()
+                .rect_filled(rect, egui::Rounding::ZERO, theme.bg_elevated);
+            ui.painter().line_segment(
+                [rect.left_bottom(), rect.right_bottom()],
+                egui::Stroke::new(1.0, theme.border),
+            );
+
+            let total_w = ui.available_width();
+            let button_group_w = HEADER_BUTTON_SIZE.x * 2.0 + 8.0;
+            let title_w = (total_w - button_group_w - 10.0).max(0.0);
+
             ui.horizontal(|ui| {
-                ui.heading(egui::RichText::new(server_name).color(theme.text_primary));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("+").on_hover_text("Создать канал").clicked() {
-                        (*on_action)(ChannelPanelAction::CreateChannel);
-                    }
-                    if ui.small_button("👥").on_hover_text("Пригласить").clicked() {
+                ui.add_space(10.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(title_w, SERVER_HEADER_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.label(
+                            egui::RichText::new(server_name)
+                                .size(16.0)
+                                .strong()
+                                .color(theme.text_primary),
+                        );
+                    },
+                );
+
+                ui.horizontal(|ui| {
+                    if header_button(ui, theme, "@", "Invite").clicked() {
                         (*on_action)(ChannelPanelAction::Invite);
+                    }
+                    if header_button(ui, theme, "+", "Create channel").clicked() {
+                        (*on_action)(ChannelPanelAction::CreateChannel);
                     }
                 });
             });
         });
 
-    // ─── Список каналов (скролл) ────────────────────────────────────────────
     egui::ScrollArea::vertical()
         .id_source("channel_panel_scroll")
-        .max_height(scroll_h)
-        .show(ui, |ui| {
-            match channels_load {
-                ChannelsLoadState::Loading => {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(24.0);
-                        ui.spinner();
-                        ui.label(egui::RichText::new("Загрузка каналов...").color(theme.text_muted));
-                    });
-                    return;
+        .show(ui, |ui| match channels_load {
+            ChannelsLoadState::Loading => loading_state(ui, theme, "Loading channels..."),
+            ChannelsLoadState::Error(ref error) => {
+                ui.add_space(24.0);
+                ui.label(egui::RichText::new(error).color(theme.error));
+                ui.add_space(8.0);
+                if ui.button("Retry").clicked() {
+                    (*on_action)(ChannelPanelAction::RetryChannels);
                 }
-                ChannelsLoadState::Error(ref msg) => {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(24.0);
-                        ui.label(egui::RichText::new(msg).color(theme.error));
-                        ui.add_space(8.0);
-                        if ui.button("Повторить").clicked() {
-                            (*on_action)(ChannelPanelAction::RetryChannels);
+            }
+            _ => {
+                ui.add_space(10.0);
+                ui.add_space(10.0);
+                section_label(ui, theme, "TEXT CHANNELS");
+                ui.add_space(4.0);
+                for (id, name) in text_channels {
+                    let response = channel_row(
+                        ctx,
+                        ui,
+                        theme,
+                        ChannelRowParams {
+                            row_id: format!("text_channel_{id}"),
+                            icon: "#",
+                            label: name.clone(),
+                            active: selected_channel_id == Some(*id),
+                            unread: unread_channel_ids.contains(id),
+                            metadata: None,
+                        },
+                    );
+                    if response.clicked() {
+                        (*on_action)(ChannelPanelAction::SelectChannel(*id));
+                    }
+                    response.context_menu(|ui| {
+                        if ui.button("Channel settings").clicked() {
+                            (*on_action)(ChannelPanelAction::ChannelSettings(*id, name.clone()));
+                            ui.close_menu();
                         }
                     });
-                    return;
                 }
-                _ => {}
-            }
-            ui.label(
-                egui::RichText::new("ТЕКСТОВЫЕ КАНАЛЫ")
-                    .small()
-                    .color(theme.text_muted),
-            );
-            for (id, name) in text_channels.iter() {
-                let sel = selected_channel_id == Some(*id);
-                let resp = channel_row(
-                    ctx,
-                    ui,
-                    theme,
-                    *id,
-                    name,
-                    &format!("# {}", name),
-                    sel,
-                    false,
-                    false,
-                    format!("ch_text_{}", id),
-                );
-                if resp.clicked() {
-                    (*on_action)(ChannelPanelAction::SelectChannel(*id));
-                }
-                resp.context_menu(|ui| {
-                    if ui.button("Настройки канала").clicked() {
-                        (*on_action)(ChannelPanelAction::ChannelSettings(*id, name.clone()));
-                        ui.close_menu();
-                    }
-                });
-            }
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("ГОЛОСОВЫЕ КАНАЛЫ")
-                    .small()
-                    .color(theme.text_muted),
-            );
 
-            for (id, name) in voice_channels.iter() {
-                let sel = selected_channel_id == Some(*id);
-                let in_this = voice.channel_id == Some(*id);
-                let label_text = if in_this {
-                    format!("🔊 {}", name)
-                } else {
-                    format!("🔈 {}", name)
-                };
-                let resp = channel_row(
-                    ctx,
-                    ui,
-                    theme,
-                    *id,
-                    name,
-                    &label_text,
-                    sel || in_this,
-                    true,
-                    in_this,
-                    format!("ch_voice_{}", id),
-                );
-                if resp.clicked() {
-                    (*on_action)(ChannelPanelAction::SelectChannel(*id));
-                    if !in_this {
-                        (*on_action)(ChannelPanelAction::JoinVoice {
-                            channel_id: *id,
-                            server_id,
-                        });
-                    }
-                }
-                resp.context_menu(|ui| {
-                    if ui.button("Настройки канала").clicked() {
-                        (*on_action)(ChannelPanelAction::ChannelSettings(*id, name.clone()));
-                        ui.close_menu();
-                    }
-                });
+                ui.add_space(12.0);
+                ui.add_space(10.0);
+                section_label(ui, theme, "VOICE CHANNELS");
+                ui.add_space(4.0);
+                for (id, name) in voice_channels {
+                    let in_this_voice = voice.channel_id == Some(*id);
+                    let participant_count =
+                        voice.channel_voice.get(id).map(|v| v.len()).unwrap_or(0);
 
-                // Участники голосового канала (упрощённо: список имён)
-                let participants = voice.channel_voice.get(id).cloned().unwrap_or_default();
-                    for p in participants.iter() {
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.add_space(20.0);
-                        let is_speaking = *voice.speaking.get(&p.user_id).unwrap_or(&false);
-                        crate::components::avatar::avatar(ui, theme, &p.username, 10.0, is_speaking, None);
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(&p.username)
-                                .small()
-                                .color(theme.text_secondary),
-                        );
-                        if p.mic_muted {
-                            ui.label(egui::RichText::new("🔇").small());
+                    let response = channel_row(
+                        ctx,
+                        ui,
+                        theme,
+                        ChannelRowParams {
+                            row_id: format!("voice_channel_{id}"),
+                            icon: "🔊",
+                            label: name.clone(),
+                            active: selected_channel_id == Some(*id) || in_this_voice,
+                            unread: false,
+                            metadata: Some(if participant_count > 0 {
+                                participant_count.to_string()
+                            } else {
+                                String::new()
+                            }),
+                        },
+                    );
+                    if response.clicked() {
+                        (*on_action)(ChannelPanelAction::SelectChannel(*id));
+                        if !in_this_voice {
+                            (*on_action)(ChannelPanelAction::JoinVoice {
+                                channel_id: *id,
+                                server_id,
+                            });
+                        }
+                    }
+                    response.context_menu(|ui| {
+                        if ui.button("Channel settings").clicked() {
+                            (*on_action)(ChannelPanelAction::ChannelSettings(*id, name.clone()));
+                            ui.close_menu();
                         }
                     });
+
+                    if let Some(participants) = voice.channel_voice.get(id) {
+                        for participant in participants {
+                            let row = voice_participant_row(
+                                ui,
+                                theme,
+                                participant,
+                                *voice.speaking.get(&participant.user_id).unwrap_or(&false),
+                            );
+                            if voice.channel_id == Some(*id) && Some(participant.user_id) != user_id
+                            {
+                                let locally_muted =
+                                    voice.locally_muted.contains(&participant.user_id);
+                                row.context_menu(|ui| {
+                                    let mute_label = if locally_muted {
+                                        "Unmute locally"
+                                    } else {
+                                        "Mute locally"
+                                    };
+                                    if ui.button(mute_label).clicked() {
+                                        (*on_action)(ChannelPanelAction::SetParticipantMuted {
+                                            user_id: participant.user_id,
+                                            muted: !locally_muted,
+                                        });
+                                        ui.close_menu();
+                                    }
+
+                                    let mut volume = voice
+                                        .local_volumes
+                                        .get(&participant.user_id)
+                                        .copied()
+                                        .unwrap_or(1.0);
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut volume, 0.0..=3.0)
+                                                .text("Volume")
+                                                .custom_formatter(|value, _| {
+                                                    format!("{:.0}%", value * 100.0)
+                                                }),
+                                        )
+                                        .changed()
+                                    {
+                                        (*on_action)(ChannelPanelAction::SetParticipantVolume {
+                                            user_id: participant.user_id,
+                                            volume,
+                                        });
+                                    }
+                                });
+                            }
+                        }
+                    }
                 }
             }
         });
 }
 
-/// Строка канала с анимацией выбора (вертикальная полоска слева).
+fn loading_state(ui: &mut egui::Ui, theme: &Theme, label: &str) {
+    ui.vertical_centered(|ui| {
+        ui.add_space(32.0);
+        ui.spinner();
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(label).color(theme.text_muted));
+    });
+}
+
+fn section_label(ui: &mut egui::Ui, theme: &Theme, title: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new(title)
+                .size(11.0)
+                .strong()
+                .color(theme.text_muted),
+        );
+    });
+}
+
+fn header_button(ui: &mut egui::Ui, theme: &Theme, label: &str, tooltip: &str) -> egui::Response {
+    ui.add_sized(
+        HEADER_BUTTON_SIZE,
+        egui::Button::new(
+            egui::RichText::new(label)
+                .size(13.0)
+                .color(theme.text_secondary),
+        )
+        .frame(false),
+    )
+    .on_hover_text(tooltip)
+}
+
+struct ChannelRowParams {
+    row_id: String,
+    icon: &'static str,
+    label: String,
+    active: bool,
+    unread: bool,
+    metadata: Option<String>,
+}
+
 fn channel_row(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
     theme: &Theme,
-    id: i64,
-    _name: &str,
-    label: &str,
-    selected: bool,
-    _is_voice: bool,
-    _in_this_voice: bool,
-    id_source: impl std::hash::Hash,
+    params: ChannelRowParams,
 ) -> egui::Response {
-    let id = ui.make_persistent_id(id_source);
-    let width = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(width, 24.0),
+    let ChannelRowParams {
+        row_id,
+        icon,
+        label,
+        active,
+        unread,
+        metadata,
+    } = params;
+
+    let id = ui.make_persistent_id(row_id);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), CHANNEL_ROW_HEIGHT),
         egui::Sense::click(),
     );
-    let hovered = resp.hovered();
-    let active_id = id.with("active");
-    let active_t = ctx.animate_bool(active_id, selected);
-    let hover_id = id.with("hover");
-    let hover_t = ctx.animate_bool(hover_id, hovered);
 
-    let bg = if selected {
-        Theme::lerp_color(theme.bg_secondary, theme.bg_hover, active_t * 0.5 + 0.5)
+    let hovered = response.hovered();
+    let hover_t = ctx.animate_bool(id.with("hover"), hovered);
+
+    let fill = if active {
+        theme.bg_active
     } else {
-        Theme::lerp_color(theme.bg_secondary, theme.bg_hover, hover_t)
+        Theme::lerp_color(theme.bg_secondary, theme.bg_hover, hover_t * 0.45)
     };
-    ui.painter().rect_filled(rect, 0.0, bg);
+    ui.painter()
+        .rect_filled(rect, egui::Rounding::same(4.0), fill);
 
-    if active_t > 0.0 {
-        let bar_left = rect.min.x + 2.0;
-        let bar_rect = egui::Rect::from_min_size(
-            egui::pos2(bar_left, rect.center().y - 8.0),
-            egui::vec2(CHANNEL_INDICATOR_WIDTH, 16.0),
-        );
-        let bar_fill = Theme::lerp_color(theme.bg_secondary, theme.accent, active_t);
-        ui.painter().rect_filled(bar_rect, CHANNEL_INDICATOR_RADIUS, bar_fill);
-    }
-
-    let text_color = if selected {
+    let icon_color = if active {
         theme.text_primary
     } else {
-        theme.text_secondary
+        theme.text_muted
     };
-    let galley = ui.painter().layout(
-        label.to_string(),
-        egui::FontId::proportional(14.0),
-        text_color,
-        rect.width() - 16.0,
+    let text_color = if active || unread {
+        theme.text_primary
+    } else {
+        theme.text_muted
+    };
+
+    let text_pos = egui::pos2(rect.left() + 10.0, rect.center().y);
+    ui.painter().text(
+        text_pos,
+        egui::Align2::LEFT_CENTER,
+        icon,
+        egui::FontId::proportional(15.0),
+        icon_color,
     );
-    ui.painter().galley(
-        rect.min + egui::vec2(12.0, (rect.height() - galley.size().y) * 0.5),
-        galley,
+    ui.painter().text(
+        text_pos + egui::vec2(18.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(15.0),
         text_color,
     );
-    resp
+
+    if let Some(meta) = metadata.filter(|value| !value.is_empty()) {
+        ui.painter().text(
+            egui::pos2(rect.right() - 12.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            meta,
+            egui::FontId::proportional(12.0),
+            theme.text_muted,
+        );
+    }
+
+    if unread && !active {
+        ui.painter().circle_filled(
+            egui::pos2(rect.right() - 10.0, rect.center().y),
+            3.0,
+            theme.text_primary,
+        );
+    }
+
+    response
+}
+
+fn voice_participant_row(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    participant: &VoiceParticipant,
+    is_speaking: bool,
+) -> egui::Response {
+    let name = if participant.username.is_empty() {
+        "Guest"
+    } else {
+        participant.username.as_str()
+    };
+
+    let row = ui
+        .horizontal(|ui| {
+            ui.add_space(20.0);
+            crate::components::avatar::avatar(ui, theme, name, 10.0, is_speaking, None);
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(name)
+                    .small()
+                    .color(theme.text_secondary),
+            );
+            if participant.mic_muted {
+                ui.label(egui::RichText::new("Muted").small().color(theme.text_muted));
+            }
+        })
+        .response;
+    ui.add_space(2.0);
+    row
 }

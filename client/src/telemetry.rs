@@ -15,7 +15,9 @@ static TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
 /// Check if ASTRIX_TELEMETRY=1. Cached on first call (process-lifetime).
 pub fn is_telemetry_enabled() -> bool {
     *TELEMETRY_ENABLED.get_or_init(|| {
-        std::env::var("ASTRIX_TELEMETRY").map(|v| v == "1").unwrap_or(false)
+        std::env::var("ASTRIX_TELEMETRY")
+            .map(|v| v == "1")
+            .unwrap_or(false)
     })
 }
 
@@ -86,9 +88,12 @@ impl PipelineTelemetry {
         self.encode_us.store(us, Ordering::Release);
         self.encode_max_us.fetch_max(us, Ordering::Relaxed);
         // EMA: avg = avg*0.9 + us*0.1
-        let _: u64 = self.encode_avg_us.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
-            Some(if old == 0 { us } else { (old * 9 + us) / 10 })
-        }).unwrap_or(0);
+        let _: u64 = self
+            .encode_avg_us
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                Some(if old == 0 { us } else { (old * 9 + us) / 10 })
+            })
+            .unwrap_or(0);
     }
     pub fn set_encoder_type(&self, s: &str) {
         *self.encoder_type.write() = Some(s.to_string());
@@ -114,17 +119,33 @@ impl PipelineTelemetry {
     /// `expected_us` = sender's declared interval from timestamps.
     pub fn add_receiver_frame(&self, network_us: u64, frame_delta_us: u64, expected_us: u64) {
         self.network_us.store(network_us, Ordering::Release);
-        self.recv_frame_delta_us.store(frame_delta_us, Ordering::Release);
+        self.recv_frame_delta_us
+            .store(frame_delta_us, Ordering::Release);
         self.recv_expected_us.store(expected_us, Ordering::Release);
         // Min: update if first (0) or smaller
-        let _: u64 = self.recv_network_min_us.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
-            Some(if old == 0 || network_us < old { network_us } else { old })
-        }).unwrap_or(0);
-        self.recv_network_max_us.fetch_max(network_us, Ordering::Relaxed);
+        let _: u64 = self
+            .recv_network_min_us
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                Some(if old == 0 || network_us < old {
+                    network_us
+                } else {
+                    old
+                })
+            })
+            .unwrap_or(0);
+        self.recv_network_max_us
+            .fetch_max(network_us, Ordering::Relaxed);
         // EMA for avg
-        let _: u64 = self.recv_network_avg_us.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
-            Some(if old == 0 { network_us } else { (old * 9 + network_us) / 10 })
-        }).unwrap_or(0);
+        let _: u64 = self
+            .recv_network_avg_us
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                Some(if old == 0 {
+                    network_us
+                } else {
+                    (old * 9 + network_us) / 10
+                })
+            })
+            .unwrap_or(0);
         if frame_delta_us > 100_000 {
             self.recv_stall_count.fetch_add(1, Ordering::Relaxed);
         }
@@ -150,7 +171,8 @@ impl PipelineTelemetry {
     }
 
     pub fn add_recv_pacing_sleep_us(&self, us: u64) {
-        self.recv_pacing_sleep_sum_us.fetch_add(us, Ordering::Relaxed);
+        self.recv_pacing_sleep_sum_us
+            .fetch_add(us, Ordering::Relaxed);
     }
 
     /// Reset receiver window stats (call at start of print for receiver).
@@ -197,17 +219,61 @@ impl PipelineTelemetry {
         if let Some(ref enc) = *self.encoder_type.read() {
             let _ = writeln!(buf, "  encoder:      {}", enc);
         }
-        let _ = writeln!(buf, "  capture:      {}", Self::get_ms(self.capture_us.load(Ordering::Acquire)));
-        let _ = writeln!(buf, "  convert:      {}", Self::get_ms(self.convert_us.load(Ordering::Acquire)));
-        let _ = writeln!(buf, "  encode:       {}", Self::get_ms(self.encode_us.load(Ordering::Acquire)));
-        let _ = writeln!(buf, "  encode_avg:   {}", Self::get_ms(self.encode_avg_us.load(Ordering::Acquire)));
-        let _ = writeln!(buf, "  encode_peak:  {}", Self::get_ms(self.encode_max_us.swap(0, Ordering::AcqRel)));
-        let _ = writeln!(buf, "  frames_drop:  {}", self.frames_dropped.swap(0, Ordering::AcqRel));
-        let _ = writeln!(buf, "  send:         {}", Self::get_ms(self.send_us.load(Ordering::Acquire)));
-        let _ = writeln!(buf, "  network:      {}", Self::get_ms(self.network_us.load(Ordering::Acquire)));
-        let _ = writeln!(buf, "  decode:       {}", Self::get_ms(self.decode_us.load(Ordering::Acquire)));
-        let _ = writeln!(buf, "  render:       {}", Self::get_ms(self.render_us.load(Ordering::Acquire)));
-        let _ = writeln!(buf, "  gui_draw:     {}", Self::get_ms(self.gui_draw_us.load(Ordering::Acquire)));
+        let _ = writeln!(
+            buf,
+            "  capture:      {}",
+            Self::get_ms(self.capture_us.load(Ordering::Acquire))
+        );
+        let _ = writeln!(
+            buf,
+            "  convert:      {}",
+            Self::get_ms(self.convert_us.load(Ordering::Acquire))
+        );
+        let _ = writeln!(
+            buf,
+            "  encode:       {}",
+            Self::get_ms(self.encode_us.load(Ordering::Acquire))
+        );
+        let _ = writeln!(
+            buf,
+            "  encode_avg:   {}",
+            Self::get_ms(self.encode_avg_us.load(Ordering::Acquire))
+        );
+        let _ = writeln!(
+            buf,
+            "  encode_peak:  {}",
+            Self::get_ms(self.encode_max_us.swap(0, Ordering::AcqRel))
+        );
+        let _ = writeln!(
+            buf,
+            "  frames_drop:  {}",
+            self.frames_dropped.swap(0, Ordering::AcqRel)
+        );
+        let _ = writeln!(
+            buf,
+            "  send:         {}",
+            Self::get_ms(self.send_us.load(Ordering::Acquire))
+        );
+        let _ = writeln!(
+            buf,
+            "  network:      {}",
+            Self::get_ms(self.network_us.load(Ordering::Acquire))
+        );
+        let _ = writeln!(
+            buf,
+            "  decode:       {}",
+            Self::get_ms(self.decode_us.load(Ordering::Acquire))
+        );
+        let _ = writeln!(
+            buf,
+            "  render:       {}",
+            Self::get_ms(self.render_us.load(Ordering::Acquire))
+        );
+        let _ = writeln!(
+            buf,
+            "  gui_draw:     {}",
+            Self::get_ms(self.gui_draw_us.load(Ordering::Acquire))
+        );
 
         if prefix == "receiver" {
             let elapsed_secs = 1.0;
@@ -220,13 +286,33 @@ impl PipelineTelemetry {
             self.reset_receiver_window();
             let _ = writeln!(buf, "  --- receiver stats (1s window) ---");
             let _ = writeln!(buf, "  recv_fps:     {:.1}", recv_fps);
-            let _ = writeln!(buf, "  frame_delta:  {} (last)", Self::get_ms(self.recv_frame_delta_us.load(Ordering::Acquire)));
-            let _ = writeln!(buf, "  expected:     {} (sender interval)", Self::get_ms(self.recv_expected_us.load(Ordering::Acquire)));
+            let _ = writeln!(
+                buf,
+                "  frame_delta:  {} (last)",
+                Self::get_ms(self.recv_frame_delta_us.load(Ordering::Acquire))
+            );
+            let _ = writeln!(
+                buf,
+                "  expected:     {} (sender interval)",
+                Self::get_ms(self.recv_expected_us.load(Ordering::Acquire))
+            );
             let _ = writeln!(buf, "  network_min: {}", Self::get_ms(network_min));
             let _ = writeln!(buf, "  network_max: {}", Self::get_ms(network_max));
-            let _ = writeln!(buf, "  network_avg: {}", Self::get_ms(self.recv_network_avg_us.load(Ordering::Acquire)));
-            let _ = writeln!(buf, "  recv_wait:    {} (last stream.next)", Self::get_ms(self.recv_wait_us.load(Ordering::Acquire)));
-            let _ = writeln!(buf, "  recv_wait_pk: {} (peak)", Self::get_ms(recv_wait_peak));
+            let _ = writeln!(
+                buf,
+                "  network_avg: {}",
+                Self::get_ms(self.recv_network_avg_us.load(Ordering::Acquire))
+            );
+            let _ = writeln!(
+                buf,
+                "  recv_wait:    {} (last stream.next)",
+                Self::get_ms(self.recv_wait_us.load(Ordering::Acquire))
+            );
+            let _ = writeln!(
+                buf,
+                "  recv_wait_pk: {} (peak)",
+                Self::get_ms(recv_wait_peak)
+            );
             let _ = writeln!(buf, "  stall_count:  {}", stalls);
             let coalesce_pk = self.recv_coalesce_peak.swap(0, Ordering::AcqRel);
             let coalesced = self.recv_coalesced_frames.swap(0, Ordering::AcqRel);
@@ -274,6 +360,7 @@ impl<'a> TelemetryTimer<'a> {
 
 impl Drop for TelemetryTimer<'_> {
     fn drop(&mut self) {
-        self.target.store(self.start.elapsed().as_micros() as u64, Ordering::Release);
+        self.target
+            .store(self.start.elapsed().as_micros() as u64, Ordering::Release);
     }
 }

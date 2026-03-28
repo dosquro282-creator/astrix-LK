@@ -7,9 +7,9 @@
 
 use std::ptr;
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SYNCMFT,
-    MFT_REGISTER_TYPE_INFO, MFMediaType_Video, MFVideoFormat_H264, MFVideoFormat_NV12,
-    MFTEnumEx,
+    IMFActivate, MFMediaType_Video, MFTEnumEx, MFVideoFormat_H264, MFVideoFormat_NV12,
+    MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SYNCMFT,
+    MFT_REGISTER_TYPE_INFO,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 
@@ -31,24 +31,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Try hardware first
     println!("--- Hardware MFT encoders (NV12 -> H.264) ---");
-    let count = unsafe {
-        enumerate_mfts(
-            MFT_ENUM_FLAG_HARDWARE,
-            &input_type,
-            &output_type,
-        )
-    }?;
+    let count = unsafe { enumerate_mfts(MFT_ENUM_FLAG_HARDWARE, &input_type, &output_type) }?;
     println!("Found {} hardware encoder(s)\n", count);
 
     // Fallback: software MFT
     println!("--- Software MFT encoders (NV12 -> H.264) ---");
-    let count_sw = unsafe {
-        enumerate_mfts(
-            MFT_ENUM_FLAG_SYNCMFT,
-            &input_type,
-            &output_type,
-        )
-    }?;
+    let count_sw = unsafe { enumerate_mfts(MFT_ENUM_FLAG_SYNCMFT, &input_type, &output_type) }?;
     println!("Found {} software encoder(s)\n", count_sw);
 
     if count > 0 || count_sw > 0 {
@@ -86,7 +74,12 @@ unsafe fn enumerate_mfts(
         if let Some(act) = act_opt {
             let name = get_friendly_name(act).unwrap_or_else(|_| "?".to_string());
             let is_hw = (flags.0 & MFT_ENUM_FLAG_HARDWARE.0) != 0;
-            println!("  [{}] {} ({})", i, name, if is_hw { "hardware" } else { "software" });
+            println!(
+                "  [{}] {} ({})",
+                i,
+                name,
+                if is_hw { "hardware" } else { "software" }
+            );
         }
     }
 

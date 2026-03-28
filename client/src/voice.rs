@@ -75,15 +75,15 @@ pub enum ScreenPreset {
 impl ScreenPreset {
     pub fn label(self) -> &'static str {
         match self {
-            Self::P720F30   => "720p  30 к/с",
-            Self::P720F60   => "720p  60 к/с",
-            Self::P720F120  => "720p  120 к/с",
-            Self::P1080F30  => "1080p 30 к/с",
-            Self::P1080F60  => "1080p 60 к/с",
+            Self::P720F30 => "720p  30 к/с",
+            Self::P720F60 => "720p  60 к/с",
+            Self::P720F120 => "720p  120 к/с",
+            Self::P1080F30 => "1080p 30 к/с",
+            Self::P1080F60 => "1080p 60 к/с",
             Self::P1080F120 => "1080p 120 к/с",
-            Self::P1440F30  => "1440p 30 к/с",
-            Self::P1440F60  => "1440p 60 к/с",
-            Self::P1440F90  => "1440p 90 к/с",
+            Self::P1440F30 => "1440p 30 к/с",
+            Self::P1440F60 => "1440p 60 к/с",
+            Self::P1440F90 => "1440p 90 к/с",
         }
     }
 
@@ -94,18 +94,18 @@ impl ScreenPreset {
     /// Too-tight budget makes the RC skip frames, causing stutter.
     pub fn params(self) -> (u32, u32, f64, u64) {
         match self {
-            Self::P720F30   => (1280, 720,  30.0, 5_000_000),
-            Self::P720F60   => (1280, 720,  60.0, 8_000_000),
-            Self::P720F120  => (1280, 720,  120.0, 16_000_000),
-            Self::P1080F30  => (1920, 1080, 30.0, 8_000_000),
-            Self::P1080F60  => (1920, 1080, 60.0, 12_000_000),
+            Self::P720F30 => (1280, 720, 30.0, 5_000_000),
+            Self::P720F60 => (1280, 720, 60.0, 8_000_000),
+            Self::P720F120 => (1280, 720, 120.0, 16_000_000),
+            Self::P1080F30 => (1920, 1080, 30.0, 8_000_000),
+            Self::P1080F60 => (1920, 1080, 60.0, 12_000_000),
             Self::P1080F120 => (1920, 1080, 120.0, 20_000_000),
-            Self::P1440F30  => (2560, 1440, 30.0, 12_000_000),
-            Self::P1440F60  => (2560, 1440, 60.0, 18_000_000),
+            Self::P1440F30 => (2560, 1440, 30.0, 12_000_000),
+            Self::P1440F60 => (2560, 1440, 60.0, 18_000_000),
             // 24 Mbps is too tight for 1440p90, but 60 Mbps creates heavy
             // bursts on periodic IDRs and can destabilize the subscriber path.
             // Keep this roomy, but below the point where receiver jitter grows.
-            Self::P1440F90  => (2560, 1440, 90.0, 35_000_000),
+            Self::P1440F90 => (2560, 1440, 90.0, 35_000_000),
         }
     }
 
@@ -114,11 +114,11 @@ impl ScreenPreset {
     /// 90/120 fps presets cap to 60 fps. Bitrates are still generous for Baseline profile.
     pub fn effective_params_for_cpu(self) -> (u32, u32, f64, u64) {
         match self {
-            Self::P720F60   => (1280, 720,  30.0, 10_000_000),
-            Self::P1080F60  => (1920, 1080, 30.0, 20_000_000),
-            Self::P720F120  => (1280, 720,  60.0, 20_000_000),
+            Self::P720F60 => (1280, 720, 30.0, 10_000_000),
+            Self::P1080F60 => (1920, 1080, 30.0, 20_000_000),
+            Self::P720F120 => (1280, 720, 60.0, 20_000_000),
             Self::P1080F120 => (1920, 1080, 60.0, 35_000_000),
-            Self::P1440F90  => (2560, 1440, 60.0, 50_000_000),
+            Self::P1440F90 => (2560, 1440, 60.0, 50_000_000),
             _ => self.params(),
         }
     }
@@ -130,8 +130,12 @@ impl ScreenPreset {
     pub fn use_simulcast(self) -> bool {
         matches!(
             self,
-            Self::P720F60 | Self::P720F120 | Self::P1080F60 | Self::P1080F120
-                | Self::P1440F60 | Self::P1440F90
+            Self::P720F60
+                | Self::P720F120
+                | Self::P1080F60
+                | Self::P1080F120
+                | Self::P1440F60
+                | Self::P1440F90
         )
     }
 
@@ -172,11 +176,22 @@ pub enum EncodingPath {
 impl EncodingPath {
     pub fn to_display_string(&self) -> String {
         match self {
-            Self::NvencD3d11 { adapter } => format!("NVENC D3D11 ({}, hardware)", adapter.trim_end_matches('\0')),
-            Self::MftHardware { adapter } => format!("MFT GPU ({}, hardware)", adapter.trim_end_matches('\0')),
+            Self::NvencD3d11 { adapter } => {
+                format!("NVENC D3D11 ({}, hardware)", adapter.trim_end_matches('\0'))
+            }
+            Self::MftHardware { adapter } => {
+                format!("MFT GPU ({}, hardware)", adapter.trim_end_matches('\0'))
+            }
             Self::MftSoftware => "MFT software".into(),
-            Self::OpenH264 { threads, gpu_capture } => {
-                let capture = if *gpu_capture { "GPU capture" } else { "CPU capture" };
+            Self::OpenH264 {
+                threads,
+                gpu_capture,
+            } => {
+                let capture = if *gpu_capture {
+                    "GPU capture"
+                } else {
+                    "CPU capture"
+                };
                 format!("OpenH264 ({} threads, {})", threads, capture)
             }
         }
@@ -305,7 +320,10 @@ pub enum VoiceCmd {
     /// Disable camera video (Phase 2.4).
     StopCamera,
     /// Start screen sharing. `screen_index`: which monitor (None = 0). `preset`: quality preset.
-    StartScreen { source: StreamSourceTarget, preset: ScreenPreset },
+    StartScreen {
+        source: StreamSourceTarget,
+        preset: ScreenPreset,
+    },
     /// Mute/unmute outgoing screen/application audio.
     SetScreenAudioMuted(bool),
     /// Stop screen sharing.

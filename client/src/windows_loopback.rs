@@ -1,41 +1,46 @@
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use std::collections::VecDeque;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-use std::sync::Arc;
-#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use std::sync::Arc;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use std::time::Duration;
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use parking_lot::Mutex;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-use windows_core::{implement, HRESULT, Interface};
+use windows::Win32::Foundation::CloseHandle;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use windows::Win32::Media::Audio::{
     ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
     IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
-    IAudioCaptureClient, IAudioClient, AUDIOCLIENT_ACTIVATION_PARAMS,
-    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, AUDCLNT_BUFFERFLAGS_SILENT,
-    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-    AUDCLNT_STREAMFLAGS_LOOPBACK,
+    IAudioCaptureClient, IAudioClient, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
+    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
     PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
     WAVEFORMATEX, WAVE_FORMAT_PCM,
 };
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use windows::Win32::System::Com::{
-    BLOB, CoInitializeEx, CoTaskMemAlloc, CoUninitialize,
+    CoInitializeEx, CoTaskMemAlloc, CoUninitialize,
     StructuredStorage::{
         PropVariantClear, PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
     },
-    COINIT_MULTITHREADED,
+    BLOB, COINIT_MULTITHREADED,
+};
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use windows::Win32::System::Threading::GetCurrentProcessId;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use windows::Win32::System::Variant::VT_BLOB;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use windows_core::{implement, Interface, HRESULT};
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 const SAMPLE_RATE: u32 = 48_000;
@@ -69,6 +74,58 @@ impl LoopbackTarget {
             },
         }
     }
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn process_entry_exe_name(entry: &PROCESSENTRY32W) -> String {
+    let len = entry
+        .szExeFile
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(entry.szExeFile.len());
+    String::from_utf16_lossy(&entry.szExeFile[..len]).to_ascii_lowercase()
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+pub fn sibling_current_image_process_ids() -> Vec<u32> {
+    let current_pid = unsafe { GetCurrentProcessId() };
+    let Some(current_exe_name) = std::env::current_exe().ok().and_then(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase())
+    }) else {
+        return Vec::new();
+    };
+
+    let snapshot = match unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) } {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            eprintln!("[voice][screen][audio] sibling Astrix enumeration failed: {err:?}");
+            return Vec::new();
+        }
+    };
+
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut process_ids = Vec::new();
+    let mut next = unsafe { Process32FirstW(snapshot, &mut entry) };
+    while next.is_ok() {
+        if entry.th32ProcessID != 0
+            && entry.th32ProcessID != current_pid
+            && process_entry_exe_name(&entry) == current_exe_name
+        {
+            process_ids.push(entry.th32ProcessID);
+        }
+        next = unsafe { Process32NextW(snapshot, &mut entry) };
+    }
+
+    unsafe {
+        let _ = CloseHandle(snapshot);
+    }
+    process_ids.sort_unstable();
+    process_ids.dedup();
+    process_ids
 }
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
@@ -144,12 +201,16 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for ActivationHandler_Impl {
         let mut status = HRESULT(0);
         let mut interface: Option<windows_core::IUnknown> = None;
         let result = {
-            unsafe { activateoperation.ok()?.GetActivateResult(&mut status, &mut interface) }?;
+            unsafe {
+                activateoperation
+                    .ok()?
+                    .GetActivateResult(&mut status, &mut interface)
+            }?;
             if status.is_ok() {
                 match interface {
-                    Some(interface) => interface.cast::<IAudioClient>().map_err(|e| {
-                        format!("IAudioClient cast failed: {e:?}")
-                    }),
+                    Some(interface) => interface
+                        .cast::<IAudioClient>()
+                        .map_err(|e| format!("IAudioClient cast failed: {e:?}")),
                     None => Err("ActivateAudioInterfaceAsync returned no interface".to_string()),
                 }
             } else {
@@ -277,10 +338,7 @@ fn resample_linear(samples: &[i16], target_len: usize) -> Vec<i16> {
 }
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-fn push_resampled_chunk_into_ring(
-    output_ring: &Arc<Mutex<VecDeque<i16>>>,
-    resampled: Vec<i16>,
-) {
+fn push_resampled_chunk_into_ring(output_ring: &Arc<Mutex<VecDeque<i16>>>, resampled: Vec<i16>) {
     let mut ring = output_ring.lock();
     let max_len = SAMPLES_PER_10MS * 24;
     let ring_len = ring.len();
@@ -369,10 +427,7 @@ fn capture_default_output_to_ring(
 
     eprintln!(
         "[voice][screen][audio] fallback: default output loopback on '{}' ({} Hz, {} ch, {})",
-        device_name,
-        config.sample_rate.0,
-        config.channels,
-        sample_format
+        device_name, config.sample_rate.0, config.channels, sample_format
     );
 
     let stream = match sample_format {
@@ -423,8 +478,9 @@ fn convert_buffer_to_mono(
     let channels = format.channels.max(1);
     match format.sample_kind {
         SampleKind::I16 => {
-            let samples =
-                unsafe { std::slice::from_raw_parts(data as *const i16, frames.saturating_mul(channels)) };
+            let samples = unsafe {
+                std::slice::from_raw_parts(data as *const i16, frames.saturating_mul(channels))
+            };
             let mut out = Vec::with_capacity(frames);
             for frame in samples.chunks(channels) {
                 let sum: i32 = frame.iter().map(|&sample| sample as i32).sum();
@@ -433,8 +489,9 @@ fn convert_buffer_to_mono(
             out
         }
         SampleKind::I32 => {
-            let samples =
-                unsafe { std::slice::from_raw_parts(data as *const i32, frames.saturating_mul(channels)) };
+            let samples = unsafe {
+                std::slice::from_raw_parts(data as *const i32, frames.saturating_mul(channels))
+            };
             let shift = format.valid_bits_per_sample.saturating_sub(16).min(16) as u32;
             let mut out = Vec::with_capacity(frames);
             for frame in samples.chunks(channels) {
@@ -447,8 +504,9 @@ fn convert_buffer_to_mono(
             out
         }
         SampleKind::F32 => {
-            let samples =
-                unsafe { std::slice::from_raw_parts(data as *const f32, frames.saturating_mul(channels)) };
+            let samples = unsafe {
+                std::slice::from_raw_parts(data as *const f32, frames.saturating_mul(channels))
+            };
             let mut out = Vec::with_capacity(frames);
             for frame in samples.chunks(channels) {
                 let sum: f32 = frame.iter().copied().sum();

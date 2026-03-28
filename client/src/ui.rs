@@ -45,28 +45,28 @@ impl RenderFpsTracker {
 }
 
 use eframe::egui;
-use parking_lot::Mutex;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use egui_glow;
+use parking_lot::Mutex;
 
-use crate::crypto::ChannelKey;
-use crate::net::{
-    ApiClient, AttachmentMeta, Channel, LoginRequest, Member, Message,
-    RegisterRequest, Server, VoiceParticipant,
-    WsClientMsg, WsEventQueue, new_event_queue, ws_task,
-};
+use crate::bottom_panel::{self, BottomPanelAction, BottomPanelParams, BottomPanelVoiceSnapshot};
 use crate::channel_panel::{
-    self, ChannelPanelAction, ChannelPanelParams, ChannelPanelVoiceSnapshot,
-    ChannelsLoadState,
+    self, ChannelPanelAction, ChannelPanelParams, ChannelPanelVoiceSnapshot, ChannelsLoadState,
 };
 use crate::chat_panel::{self, ChatPanelAction, ChatPanelParams};
+use crate::crypto::ChannelKey;
 use crate::guild_panel::{self, GuildPanelParams};
-use crate::member_panel::{self, MemberPanelParams, MemberSnapshot};
-use crate::theme::Theme;
+use crate::member_panel::{self, MemberPanelAction, MemberPanelParams, MemberSnapshot};
+use crate::net::{
+    new_event_queue, ws_task, ApiClient, AttachmentMeta, Channel, LoginRequest, Member, Message,
+    RegisterRequest, Server, VoiceParticipant, WsClientMsg, WsEventQueue,
+};
 use crate::telemetry::PipelineTelemetry;
+use crate::theme::Theme;
+use crate::todo_actions;
 use crate::voice::{
-    spawn_voice_engine, video_frame_key, video_preview_frame_key, StreamSourceTarget, VideoFrame, VideoFrames,
-    VoiceCmd, VoiceSessionStats,
+    spawn_voice_engine, video_frame_key, video_preview_frame_key, StreamSourceTarget, VideoFrame,
+    VideoFrames, VoiceCmd, VoiceSessionStats,
 };
 
 // ─── Persistent settings (saved to disk) ────────────────────────────────────
@@ -79,10 +79,22 @@ fn default_api_base() -> String {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub(crate) struct SavedAccount {
+    #[serde(default)]
+    pub(crate) user_id: Option<i64>,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    #[serde(default)]
+    pub(crate) display_name: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct Settings {
     pub(crate) remember_me: bool,
     pub(crate) saved_username: String,
     pub(crate) saved_password: String,
+    #[serde(default)]
+    pub(crate) saved_accounts: Vec<SavedAccount>,
     #[serde(default = "default_api_base")]
     pub(crate) api_base: String,
     pub(crate) last_server: HashMap<String, i64>,
@@ -112,6 +124,7 @@ impl Default for Settings {
             remember_me: false,
             saved_username: String::new(),
             saved_password: String::new(),
+            saved_accounts: Vec::new(),
             api_base: default_api_base(),
             last_server: HashMap::new(),
             dark_mode: false,
@@ -140,6 +153,9 @@ impl Settings {
             s.api_base = default_api_base();
             should_save = true;
         }
+        if s.migrate_saved_accounts() {
+            should_save = true;
+        }
         if !s.video_decoder_gamma_migrated_v2 {
             if s.video_decoder_gamma > 0.0 && s.video_decoder_gamma <= 0.75 {
                 eprintln!(
@@ -160,7 +176,106 @@ impl Settings {
         s
     }
     pub(crate) fn save(&self) {
-        let _ = std::fs::write(SETTINGS_PATH, serde_json::to_string_pretty(self).unwrap_or_default());
+        let _ = std::fs::write(
+            SETTINGS_PATH,
+            serde_json::to_string_pretty(self).unwrap_or_default(),
+        );
+    }
+
+    fn migrate_saved_accounts(&mut self) -> bool {
+        let mut changed = false;
+
+        if !self.saved_username.trim().is_empty() && !self.saved_password.is_empty() {
+            let exists = self.saved_accounts.iter().any(|account| {
+                account
+                    .username
+                    .eq_ignore_ascii_case(self.saved_username.trim())
+            });
+            if !exists {
+                self.saved_accounts.insert(
+                    0,
+                    SavedAccount {
+                        user_id: None,
+                        username: self.saved_username.clone(),
+                        password: self.saved_password.clone(),
+                        display_name: self.saved_username.clone(),
+                    },
+                );
+                changed = true;
+            }
+        }
+
+        let old_len = self.saved_accounts.len();
+        self.saved_accounts
+            .retain(|account| !account.username.trim().is_empty() && !account.password.is_empty());
+        if self.saved_accounts.len() != old_len {
+            changed = true;
+        }
+
+        let mut deduped = Vec::with_capacity(self.saved_accounts.len());
+        for account in self.saved_accounts.drain(..) {
+            let duplicate = deduped.iter().any(|existing: &SavedAccount| {
+                existing.user_id == account.user_id
+                    || existing
+                        .username
+                        .eq_ignore_ascii_case(account.username.trim())
+            });
+            if duplicate {
+                changed = true;
+            } else {
+                deduped.push(account);
+            }
+        }
+        self.saved_accounts = deduped;
+
+        if self.saved_accounts.len() > 8 {
+            self.saved_accounts.truncate(8);
+            changed = true;
+        }
+
+        if self.remember_me
+            && (self.saved_username.trim().is_empty() || self.saved_password.is_empty())
+            && !self.saved_accounts.is_empty()
+        {
+            if let Some(account) = self.saved_accounts.first() {
+                self.saved_username = account.username.clone();
+                self.saved_password = account.password.clone();
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
+    fn upsert_saved_account(
+        &mut self,
+        user_id: i64,
+        username: String,
+        password: String,
+        display_name: String,
+    ) {
+        self.saved_accounts.retain(|account| {
+            account.user_id != Some(user_id)
+                && !account.username.eq_ignore_ascii_case(username.trim())
+        });
+        self.saved_accounts.insert(
+            0,
+            SavedAccount {
+                user_id: Some(user_id),
+                username: username.clone(),
+                password: password.clone(),
+                display_name: if display_name.trim().is_empty() {
+                    username.clone()
+                } else {
+                    display_name
+                },
+            },
+        );
+        if self.saved_accounts.len() > 8 {
+            self.saved_accounts.truncate(8);
+        }
+        self.saved_username = username;
+        self.saved_password = password;
     }
 }
 
@@ -222,17 +337,30 @@ pub(crate) fn process_background_loads(
             None => return,
         };
         let do_servers = st.main.servers_load == LoadState::Idle || st.main.retry_servers;
-        let do_channels = (st.main.channels_load == LoadState::Idle && st.main.selected_server.is_some())
+        let do_channels = (st.main.channels_load == LoadState::Idle
+            && st.main.selected_server.is_some())
             || st.main.retry_channels
-            || (st.main.selected_server != st.main.channels_load_for && st.main.selected_server.is_some());
-        let do_messages = (st.main.messages_load == LoadState::Idle && st.main.selected_channel.is_some())
+            || (st.main.selected_server != st.main.channels_load_for
+                && st.main.selected_server.is_some());
+        let do_messages = (st.main.messages_load == LoadState::Idle
+            && st.main.selected_channel.is_some())
             || st.main.retry_messages
-            || (st.main.selected_channel != st.main.messages_load_for && st.main.selected_channel.is_some());
+            || (st.main.selected_channel != st.main.messages_load_for
+                && st.main.selected_channel.is_some());
         let server_id = st.main.selected_server;
         let channel_id = st.main.selected_channel;
         let user_id = st.user_id;
         let last_server = st.settings.last_server.clone();
-        (do_servers, do_channels, do_messages, token, server_id, channel_id, user_id, last_server)
+        (
+            do_servers,
+            do_channels,
+            do_messages,
+            token,
+            server_id,
+            channel_id,
+            user_id,
+            last_server,
+        )
     };
 
     if do_servers {
@@ -270,7 +398,9 @@ pub(crate) fn process_background_loads(
                     st.main.servers_load = LoadState::Loaded;
                 }
                 Ok(Err(e)) => st.main.servers_load = LoadState::Error(e.to_string()),
-                Err(_) => st.main.servers_load = LoadState::Error("Таймаут загрузки серверов".to_string()),
+                Err(_) => {
+                    st.main.servers_load = LoadState::Error("Таймаут загрузки серверов".to_string())
+                }
             }
             ctx_c.request_repaint();
         });
@@ -295,7 +425,8 @@ pub(crate) fn process_background_loads(
         let user_id_c = user_id;
         tokio::spawn(async move {
             let chs_fut = api_c.list_channels(&token_c, sid);
-            let chs_result = tokio::time::timeout(Duration::from_secs(LOAD_TIMEOUT_SECS), chs_fut).await;
+            let chs_result =
+                tokio::time::timeout(Duration::from_secs(LOAD_TIMEOUT_SECS), chs_fut).await;
             {
                 let st = state_c.lock();
                 if st.main.selected_server != Some(sid) {
@@ -312,28 +443,31 @@ pub(crate) fn process_background_loads(
                 }
                 Err(_) => {
                     let mut st = state_c.lock();
-                    st.main.channels_load = LoadState::Error("Таймаут загрузки каналов".to_string());
+                    st.main.channels_load =
+                        LoadState::Error("Таймаут загрузки каналов".to_string());
                     ctx_c.request_repaint();
                     return;
                 }
             };
-            let voice_ch_ids: Vec<i64> = channels.iter()
+            let voice_ch_ids: Vec<i64> = channels
+                .iter()
                 .filter(|c| c.r#type == "voice")
                 .map(|c| c.id)
                 .collect();
             let mut channel_voice = HashMap::new();
             for ch_id in voice_ch_ids {
-                if let Ok(Ok(ps)) = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    api_c.voice_state(&token_c, ch_id),
-                ).await {
+                if let Ok(Ok(ps)) =
+                    tokio::time::timeout(Duration::from_secs(5), api_c.voice_state(&token_c, ch_id))
+                        .await
+                {
                     if !ps.is_empty() {
                         channel_voice.insert(ch_id, ps);
                     }
                 }
             }
             let ms_fut = api_c.list_server_members(&token_c, sid);
-            let ms_result = tokio::time::timeout(Duration::from_secs(LOAD_TIMEOUT_SECS), ms_fut).await;
+            let ms_result =
+                tokio::time::timeout(Duration::from_secs(LOAD_TIMEOUT_SECS), ms_fut).await;
             let members = match ms_result {
                 Ok(Ok(ms)) => ms,
                 Ok(Err(e)) => {
@@ -348,7 +482,8 @@ pub(crate) fn process_background_loads(
                     let mut st = state_c.lock();
                     st.main.channels = channels;
                     st.main.channel_voice = channel_voice;
-                    st.main.channels_load = LoadState::Error("Таймаут загрузки участников".to_string());
+                    st.main.channels_load =
+                        LoadState::Error("Таймаут загрузки участников".to_string());
                     ctx_c.request_repaint();
                     return;
                 }
@@ -371,7 +506,9 @@ pub(crate) fn process_background_loads(
         let Some(cid) = channel_id else { return };
         let is_text = {
             let st = state.lock();
-            st.main.channels.iter()
+            st.main
+                .channels
+                .iter()
                 .find(|c| c.id == cid)
                 .map(|c| c.r#type == "text")
                 .unwrap_or(false)
@@ -404,16 +541,23 @@ pub(crate) fn process_background_loads(
                 Ok(Ok(msgs)) => {
                     let max_id = msgs.iter().map(|m| m.id).max().unwrap_or(0);
                     st.main.messages = msgs;
+                    st.main.unread_channels.remove(&cid);
                     if max_id > 0 {
                         st.main.pending_read_receipt = Some((cid, max_id));
                     }
-                    st.main.pending_media_ids = st.main.messages.iter()
+                    st.main.pending_media_ids = st
+                        .main
+                        .messages
+                        .iter()
                         .flat_map(|m| m.attachments.iter().map(|a| a.media_id))
                         .collect();
                     st.main.messages_load = LoadState::Loaded;
                 }
                 Ok(Err(e)) => st.main.messages_load = LoadState::Error(e.to_string()),
-                Err(_) => st.main.messages_load = LoadState::Error("Таймаут загрузки сообщений".to_string()),
+                Err(_) => {
+                    st.main.messages_load =
+                        LoadState::Error("Таймаут загрузки сообщений".to_string())
+                }
             }
             ctx_c.request_repaint();
         });
@@ -423,8 +567,15 @@ pub(crate) fn process_background_loads(
 // ─── State (pub(crate) for app.rs) ────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Screen { Auth, Main }
-impl Default for Screen { fn default() -> Self { Screen::Auth } }
+pub(crate) enum Screen {
+    Auth,
+    Main,
+}
+impl Default for Screen {
+    fn default() -> Self {
+        Screen::Auth
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AuthState {
@@ -459,21 +610,21 @@ pub(crate) struct VoiceState {
 impl Default for VoiceState {
     fn default() -> Self {
         Self {
-            channel_id:   None,
-            server_id:    None,
+            channel_id: None,
+            server_id: None,
             participants: Vec::new(),
-            mic_muted:    false,
+            mic_muted: false,
             output_muted: false,
             local_volumes: HashMap::new(),
             locally_muted: HashSet::new(),
             stream_volumes: HashMap::new(),
             stream_muted: HashSet::new(),
             stream_subscriptions: HashSet::new(),
-            speaking:      Arc::new(Mutex::new(HashMap::new())),
-            input_volume:  2.0,
-            output_volume: 2.0,
-            camera_on:     false,
-            screen_on:     false,
+            speaking: Arc::new(Mutex::new(HashMap::new())),
+            input_volume: 1.0,
+            output_volume: 1.0,
+            camera_on: false,
+            screen_on: false,
             screen_audio_muted: false,
         }
     }
@@ -490,6 +641,7 @@ pub(crate) struct MainState {
     pub(crate) channels: Vec<Channel>,
     pub(crate) messages: Vec<Message>,
     pub(crate) server_members: Vec<Member>,
+    pub(crate) unread_channels: HashSet<i64>,
     pub(crate) selected_server: Option<i64>,
     pub(crate) selected_channel: Option<i64>,
     pub(crate) new_message: String,
@@ -546,6 +698,7 @@ pub(crate) struct MainState {
     pub(crate) show_screen_source_picker: bool,
     pub(crate) screen_sources: Vec<ScreenSourceEntry>,
     pub(crate) window_sources: Vec<ScreenSourceEntry>,
+    pub(crate) selected_stream_source: Option<ScreenSourceEntry>,
     pub(crate) screen_preset: crate::voice::ScreenPreset,
     pub(crate) show_voice_stats_window: bool,
     pub(crate) voice_stats: Option<Arc<Mutex<VoiceSessionStats>>>,
@@ -566,6 +719,7 @@ impl Clone for MainState {
             channels: self.channels.clone(),
             messages: self.messages.clone(),
             server_members: self.server_members.clone(),
+            unread_channels: self.unread_channels.clone(),
             selected_server: self.selected_server,
             selected_channel: self.selected_channel,
             new_message: self.new_message.clone(),
@@ -616,6 +770,7 @@ impl Clone for MainState {
             show_screen_source_picker: false,
             screen_sources: Vec::new(),
             window_sources: Vec::new(),
+            selected_stream_source: self.selected_stream_source.clone(),
             screen_preset: crate::voice::ScreenPreset::default(),
             show_voice_stats_window: self.show_voice_stats_window,
             voice_stats: self.voice_stats.clone(), // Arc clone
@@ -634,6 +789,7 @@ impl Default for MainState {
             channels: Vec::new(),
             messages: Vec::new(),
             server_members: Vec::new(),
+            unread_channels: HashSet::new(),
             selected_server: None,
             selected_channel: None,
             new_message: String::new(),
@@ -684,6 +840,7 @@ impl Default for MainState {
             show_screen_source_picker: false,
             screen_sources: Vec::new(),
             window_sources: Vec::new(),
+            selected_stream_source: None,
             screen_preset: crate::voice::ScreenPreset::default(),
             show_voice_stats_window: false,
             voice_stats: None,
@@ -718,6 +875,8 @@ pub(crate) struct State {
 
 pub(crate) fn auth_screen(ctx: &egui::Context, state: &mut State, api: &ApiClient) {
     let mut error = None;
+    let mut pending_login: Option<(String, String, bool, bool)> = None;
+    let saved_accounts = state.settings.saved_accounts.clone();
 
     egui::CentralPanel::default().show(ctx, |ui| {
         ui.vertical_centered(|ui| {
@@ -725,8 +884,53 @@ pub(crate) fn auth_screen(ctx: &egui::Context, state: &mut State, api: &ApiClien
             ui.heading(egui::RichText::new("Astrix").size(32.0));
             ui.add_space(24.0);
 
-            ui.label(if state.auth.is_register { "Регистрация" } else { "Вход" });
+            ui.label(if state.auth.is_register {
+                "Регистрация"
+            } else {
+                "Вход"
+            });
             ui.add_space(8.0);
+
+            if !state.auth.is_register && !saved_accounts.is_empty() {
+                ui.label("Сохраненные аккаунты");
+                ui.horizontal_wrapped(|ui| {
+                    for account in &saved_accounts {
+                        let display_name = if account.display_name.trim().is_empty() {
+                            account.username.as_str()
+                        } else {
+                            account.display_name.as_str()
+                        };
+                        let first = display_name
+                            .chars()
+                            .next()
+                            .map(|ch| ch.to_uppercase().to_string())
+                            .unwrap_or_else(|| "?".to_string());
+                        let selected = state.auth.username.eq_ignore_ascii_case(&account.username);
+                        if letter_circle(
+                            ui,
+                            &first,
+                            20.0,
+                            selected,
+                            &format!("Войти как {}", display_name),
+                        )
+                        .clicked()
+                        {
+                            state.auth.username = account.username.clone();
+                            state.auth.password = account.password.clone();
+                            state.auth.remember_me = true;
+                            state.auth.error = None;
+                            pending_login = Some((
+                                account.username.clone(),
+                                account.password.clone(),
+                                false,
+                                true,
+                            ));
+                        }
+                        ui.add_space(4.0);
+                    }
+                });
+                ui.add_space(12.0);
+            }
 
             ui.add(
                 egui::TextEdit::singleline(&mut state.auth.username)
@@ -746,7 +950,14 @@ pub(crate) fn auth_screen(ctx: &egui::Context, state: &mut State, api: &ApiClien
             ui.checkbox(&mut state.auth.remember_me, "Запомнить данные входа");
             ui.add_space(8.0);
 
-            if ui.button(if state.auth.is_register { "Зарегистрироваться" } else { "Войти" }).clicked() {
+            if ui
+                .button(if state.auth.is_register {
+                    "Зарегистрироваться"
+                } else {
+                    "Войти"
+                })
+                .clicked()
+            {
                 let username = state.auth.username.clone();
                 let password = state.auth.password.clone();
                 let is_register = state.auth.is_register;
@@ -754,7 +965,11 @@ pub(crate) fn auth_screen(ctx: &egui::Context, state: &mut State, api: &ApiClien
 
                 let result = block_on(async move {
                     if is_register {
-                        let req = RegisterRequest { username: username.clone(), password: password.clone(), public_e2ee_key: None };
+                        let req = RegisterRequest {
+                            username: username.clone(),
+                            password: password.clone(),
+                            public_e2ee_key: None,
+                        };
                         api.register(&req).await?;
                         let login_req = LoginRequest { username, password };
                         api.login(&login_req).await
@@ -770,6 +985,12 @@ pub(crate) fn auth_screen(ctx: &egui::Context, state: &mut State, api: &ApiClien
                             state.settings.remember_me = true;
                             state.settings.saved_username = state.auth.username.clone();
                             state.settings.saved_password = state.auth.password.clone();
+                            state.settings.upsert_saved_account(
+                                tokens.user_id,
+                                state.auth.username.clone(),
+                                state.auth.password.clone(),
+                                tokens.username.clone(),
+                            );
                         } else {
                             state.settings.remember_me = false;
                             state.settings.saved_username.clear();
@@ -799,7 +1020,14 @@ pub(crate) fn auth_screen(ctx: &egui::Context, state: &mut State, api: &ApiClien
             }
 
             ui.add_space(4.0);
-            if ui.button(if state.auth.is_register { "У меня уже есть аккаунт" } else { "Создать аккаунт" }).clicked() {
+            if ui
+                .button(if state.auth.is_register {
+                    "У меня уже есть аккаунт"
+                } else {
+                    "Создать аккаунт"
+                })
+                .clicked()
+            {
                 state.auth.is_register = !state.auth.is_register;
                 state.auth.error = None;
             }
@@ -809,6 +1037,60 @@ pub(crate) fn auth_screen(ctx: &egui::Context, state: &mut State, api: &ApiClien
             }
         });
     });
+
+    if let Some((username, password, is_register, remember_me)) = pending_login {
+        let api = api.clone();
+        let result = block_on(async move {
+            if is_register {
+                let req = RegisterRequest {
+                    username: username.clone(),
+                    password: password.clone(),
+                    public_e2ee_key: None,
+                };
+                api.register(&req).await?;
+                let login_req = LoginRequest { username, password };
+                api.login(&login_req).await
+            } else {
+                api.login(&LoginRequest { username, password }).await
+            }
+        });
+
+        match result {
+            Ok(tokens) => {
+                if remember_me {
+                    state.settings.remember_me = true;
+                    state.settings.upsert_saved_account(
+                        tokens.user_id,
+                        state.auth.username.clone(),
+                        state.auth.password.clone(),
+                        tokens.username.clone(),
+                    );
+                } else {
+                    state.settings.remember_me = false;
+                    state.settings.saved_username.clear();
+                    state.settings.saved_password.clear();
+                }
+                state.settings.save();
+
+                let uid_key = tokens.user_id.to_string();
+                let last_server = state.settings.last_server.get(&uid_key).copied();
+
+                state.access_token = Some(tokens.access_token);
+                state.user_id = Some(tokens.user_id);
+                state.main.my_display_name = tokens.username.clone();
+                state.auth.error = None;
+                state.screen = Screen::Main;
+
+                if let Some(sid) = last_server {
+                    state.main.selected_server = Some(sid);
+                }
+                ctx.request_repaint();
+            }
+            Err(e) => {
+                error = Some(format!("РћС€РёР±РєР° Р°РІС‚РѕСЂРёР·Р°С†РёРё: {e}"));
+            }
+        }
+    }
 
     state.auth.error = error;
 }
@@ -832,7 +1114,11 @@ fn letter_circle(
 ) -> egui::Response {
     let size = egui::vec2(radius * 2.0, radius * 2.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
-    let resp = if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) };
+    let resp = if tooltip.is_empty() {
+        resp
+    } else {
+        resp.on_hover_text(tooltip)
+    };
     let fill = if selected {
         ui.visuals().selection.bg_fill
     } else if resp.hovered() {
@@ -867,15 +1153,19 @@ fn avatar_circle(
     let ring_margin = if speaking { 3.0_f32 } else { 0.0 };
     let size = egui::vec2((radius + ring_margin) * 2.0, (radius + ring_margin) * 2.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    let circle_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(radius * 2.0, radius * 2.0));
+    let circle_rect =
+        egui::Rect::from_center_size(rect.center(), egui::vec2(radius * 2.0, radius * 2.0));
     if let Some(tex) = texture {
         let img = egui::Image::new(tex).fit_to_exact_size(circle_rect.size());
         img.paint_at(ui, circle_rect);
     } else {
-        let letter = display_name.chars().next()
+        let letter = display_name
+            .chars()
+            .next()
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_else(|| "?".to_string());
-        ui.painter().circle_filled(rect.center(), radius, egui::Color32::from_rgb(80, 100, 160));
+        ui.painter()
+            .circle_filled(rect.center(), radius, egui::Color32::from_rgb(80, 100, 160));
         let font_size = (radius * 0.85).max(9.0);
         let galley = ui.painter().layout(
             letter,
@@ -915,23 +1205,34 @@ fn apply_voice_join(
                 state.main.voice.channel_id = Some(channel_id);
                 state.main.voice.server_id = Some(server_id);
                 state.main.voice.participants = resp.participants.clone();
-                state.main.channel_voice.insert(channel_id, resp.participants.clone());
+                state
+                    .main
+                    .channel_voice
+                    .insert(channel_id, resp.participants.clone());
                 state.main.voice.local_volumes.clear();
                 state.main.voice.locally_muted.clear();
                 state.main.voice.stream_volumes.clear();
                 state.main.voice.stream_muted.clear();
                 state.main.voice.stream_subscriptions.clear();
                 for p in &resp.participants {
-                    let vol = state.settings.voice_volume_by_user
+                    let vol = state
+                        .settings
+                        .voice_volume_by_user
                         .get(&p.user_id.to_string())
                         .copied()
                         .unwrap_or(1.0);
-                    let stream_vol = state.settings.stream_volume_by_user
+                    let stream_vol = state
+                        .settings
+                        .stream_volume_by_user
                         .get(&p.user_id.to_string())
                         .copied()
                         .unwrap_or(1.0);
                     state.main.voice.local_volumes.insert(p.user_id, vol);
-                    state.main.voice.stream_volumes.insert(p.user_id, stream_vol);
+                    state
+                        .main
+                        .voice
+                        .stream_volumes
+                        .insert(p.user_id, stream_vol);
                 }
                 state.main.voice.mic_muted = false;
                 stop_voice_engine(engine_tx, engine_done);
@@ -943,7 +1244,8 @@ fn apply_voice_join(
                 let env_override = std::env::var("ASTRIX_DECODE_PATH").unwrap_or_default();
                 let decode_path_owned: String = if env_override == "mft" || env_override == "cpu" {
                     env_override
-                } else if state.settings.decode_path == "cpu" || state.settings.decode_path == "mft" {
+                } else if state.settings.decode_path == "cpu" || state.settings.decode_path == "mft"
+                {
                     state.settings.decode_path.clone()
                 } else {
                     "mft".to_string()
@@ -966,7 +1268,9 @@ fn apply_voice_join(
                 *video_frames = Some(vf);
                 let receiver_telemetry = Arc::new(PipelineTelemetry::new());
                 state.main.voice_receiver_telemetry = Some(Arc::clone(&receiver_telemetry));
-                let session_stats = state.main.voice_stats
+                let session_stats = state
+                    .main
+                    .voice_stats
                     .get_or_insert_with(|| Arc::new(Mutex::new(VoiceSessionStats::default())))
                     .clone();
                 tx.send(VoiceCmd::Start {
@@ -979,15 +1283,38 @@ fn apply_voice_join(
                     speaking: Arc::clone(&state.main.voice.speaking),
                     session_stats,
                     receiver_telemetry: Some(receiver_telemetry),
-                }).ok();
-                tx.send(VoiceCmd::SetInputVolume(state.main.voice.input_volume)).ok();
-                tx.send(VoiceCmd::SetOutputVolume(state.main.voice.output_volume)).ok();
-                tx.send(VoiceCmd::SetScreenAudioMuted(state.main.voice.screen_audio_muted)).ok();
+                })
+                .ok();
+                tx.send(VoiceCmd::SetInputVolume(state.main.voice.input_volume))
+                    .ok();
+                tx.send(VoiceCmd::SetOutputVolume(state.main.voice.output_volume))
+                    .ok();
+                tx.send(VoiceCmd::SetScreenAudioMuted(
+                    state.main.voice.screen_audio_muted,
+                ))
+                .ok();
                 for participant in &resp.participants {
-                    let user_volume = state.main.voice.local_volumes.get(&participant.user_id).copied().unwrap_or(1.0);
-                    let stream_volume = state.main.voice.stream_volumes.get(&participant.user_id).copied().unwrap_or(1.0);
-                    tx.send(VoiceCmd::SetUserVolume(participant.user_id, user_volume)).ok();
-                    tx.send(VoiceCmd::SetStreamVolume(participant.user_id, stream_volume)).ok();
+                    let user_volume = state
+                        .main
+                        .voice
+                        .local_volumes
+                        .get(&participant.user_id)
+                        .copied()
+                        .unwrap_or(1.0);
+                    let stream_volume = state
+                        .main
+                        .voice
+                        .stream_volumes
+                        .get(&participant.user_id)
+                        .copied()
+                        .unwrap_or(1.0);
+                    tx.send(VoiceCmd::SetUserVolume(participant.user_id, user_volume))
+                        .ok();
+                    tx.send(VoiceCmd::SetStreamVolume(
+                        participant.user_id,
+                        stream_volume,
+                    ))
+                    .ok();
                 }
                 *engine_tx = Some(tx);
                 *engine_done = Some(done);
@@ -1037,10 +1364,196 @@ fn apply_voice_leave(
     state.main.voice_receiver_telemetry = None;
     // Phase 3.5: schedule texture deletion (freed via tex_manager in next update()).
     for (_, (egui_tex_id, _, _, _)) in state.main.voice_video_gpu_textures.drain() {
-        state.main.voice_video_gpu_tex_pending_delete.push(egui_tex_id);
+        state
+            .main
+            .voice_video_gpu_tex_pending_delete
+            .push(egui_tex_id);
     }
     state.main.fullscreen_stream_user = None;
     state.main.stream_ended_prev_frame.clear();
+    ctx.request_repaint();
+}
+
+fn sync_voice_presence(state: &State, api: &ApiClient) {
+    if let (Some(ch_id), Some(ref token)) = (state.main.voice.channel_id, &state.access_token) {
+        let token = token.clone();
+        let _ = block_on(api.voice_update_state(
+            &token,
+            ch_id,
+            state.main.voice.mic_muted,
+            state.main.voice.camera_on,
+            state.main.voice.screen_on,
+        ));
+    }
+}
+
+fn update_local_camera_flag(state: &mut State, user_id: Option<i64>, enabled: bool) {
+    if let Some(uid) = user_id {
+        for participant in &mut state.main.voice.participants {
+            if participant.user_id == uid {
+                participant.cam_enabled = enabled;
+                break;
+            }
+        }
+        if let Some(ch_id) = state.main.voice.channel_id {
+            if let Some(list) = state.main.channel_voice.get_mut(&ch_id) {
+                for participant in list.iter_mut() {
+                    if participant.user_id == uid {
+                        participant.cam_enabled = enabled;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn update_local_stream_flag(state: &mut State, user_id: Option<i64>, enabled: bool) {
+    if let Some(uid) = user_id {
+        for participant in &mut state.main.voice.participants {
+            if participant.user_id == uid {
+                participant.streaming = enabled;
+                break;
+            }
+        }
+        if let Some(ch_id) = state.main.voice.channel_id {
+            if let Some(list) = state.main.channel_voice.get_mut(&ch_id) {
+                for participant in list.iter_mut() {
+                    if participant.user_id == uid {
+                        participant.streaming = enabled;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn update_local_mic_flag(state: &mut State, user_id: Option<i64>, muted: bool) {
+    if let Some(uid) = user_id {
+        for participant in &mut state.main.voice.participants {
+            if participant.user_id == uid {
+                participant.mic_muted = muted;
+                break;
+            }
+        }
+        if let Some(ch_id) = state.main.voice.channel_id {
+            if let Some(list) = state.main.channel_voice.get_mut(&ch_id) {
+                for participant in list.iter_mut() {
+                    if participant.user_id == uid {
+                        participant.mic_muted = muted;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn populate_screen_share_sources(state: &mut State) {
+    let monitors = crate::voice_livekit::enumerate_unique_screens();
+    state.main.screen_sources = monitors
+        .iter()
+        .enumerate()
+        .map(|(i, monitor)| {
+            let tag = if monitor.is_primary() {
+                " (осн.)"
+            } else {
+                ""
+            };
+            ScreenSourceEntry {
+                label: format!(
+                    "Монитор {}{} {}×{}",
+                    i + 1,
+                    tag,
+                    monitor.width(),
+                    monitor.height()
+                ),
+                target: StreamSourceTarget::Monitor { index: i },
+            }
+        })
+        .collect();
+    state.main.window_sources = crate::voice_livekit::enumerate_stream_windows()
+        .into_iter()
+        .map(|window| {
+            let title = window.title.trim();
+            let suffix = if title.is_empty() {
+                String::new()
+            } else {
+                format!(" - {}", title)
+            };
+            ScreenSourceEntry {
+                label: format!(
+                    "{}{} {}×{}",
+                    window.app_name, suffix, window.width, window.height
+                ),
+                target: StreamSourceTarget::Window {
+                    window_id: window.window_id,
+                    process_id: window.process_id,
+                },
+            }
+        })
+        .collect();
+}
+
+fn set_local_camera_enabled(
+    ctx: &egui::Context,
+    state: &mut State,
+    api: &ApiClient,
+    engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: Option<i64>,
+    enabled: bool,
+) {
+    state.main.voice.camera_on = enabled;
+    if let Some(tx) = engine_tx {
+        if enabled {
+            tx.send(VoiceCmd::StartCamera).ok();
+        } else {
+            tx.send(VoiceCmd::StopCamera).ok();
+        }
+    }
+    sync_voice_presence(state, api);
+    update_local_camera_flag(state, user_id, enabled);
+    ctx.request_repaint();
+}
+
+fn toggle_local_screen_share(
+    ctx: &egui::Context,
+    state: &mut State,
+    api: &ApiClient,
+    engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: Option<i64>,
+) {
+    if state.main.voice.screen_on {
+        state.main.voice.screen_on = false;
+        if let Some(tx) = engine_tx {
+            tx.send(VoiceCmd::StopScreen).ok();
+        }
+        sync_voice_presence(state, api);
+        update_local_stream_flag(state, user_id, false);
+        ctx.request_repaint();
+        return;
+    }
+
+    if let Some(source) = state
+        .main
+        .selected_stream_source
+        .as_ref()
+        .map(|entry| entry.target.clone())
+    {
+        let preset = state.main.screen_preset;
+        state.main.voice.screen_on = true;
+        if let Some(tx) = engine_tx {
+            tx.send(VoiceCmd::StartScreen { source, preset }).ok();
+        }
+        sync_voice_presence(state, api);
+        update_local_stream_flag(state, user_id, true);
+        ctx.request_repaint();
+        return;
+    }
+
+    populate_screen_share_sources(state);
+    state.main.show_screen_source_picker = true;
     ctx.request_repaint();
 }
 
@@ -1053,7 +1566,8 @@ struct WglVideoCallbackRenderer {
 }
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-static WGL_VIDEO_CALLBACK_RENDERER: OnceLock<Mutex<Option<WglVideoCallbackRenderer>>> = OnceLock::new();
+static WGL_VIDEO_CALLBACK_RENDERER: OnceLock<Mutex<Option<WglVideoCallbackRenderer>>> =
+    OnceLock::new();
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 fn with_wgl_video_callback_renderer<R>(
@@ -1128,13 +1642,10 @@ void main() {
 
         let vao = unsafe { gl.create_vertex_array() }
             .map_err(|e| format!("video callback create_vao: {e}"))?;
-        let vbo = unsafe { gl.create_buffer() }
-            .map_err(|e| format!("video callback create_vbo: {e}"))?;
+        let vbo =
+            unsafe { gl.create_buffer() }.map_err(|e| format!("video callback create_vbo: {e}"))?;
         let vertices: [f32; 16] = [
-            -1.0, -1.0, 0.0, 1.0,
-             1.0, -1.0, 1.0, 1.0,
-            -1.0,  1.0, 0.0, 0.0,
-             1.0,  1.0, 1.0, 0.0,
+            -1.0, -1.0, 0.0, 1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
         ];
         let mut vertex_bytes = Vec::with_capacity(vertices.len() * std::mem::size_of::<f32>());
         for value in vertices {
@@ -1215,8 +1726,8 @@ fn register_wgl_video_texture(
 ) -> Result<(egui::TextureId, u32), String> {
     use eframe::glow::HasContext;
 
-    let tex = unsafe { gl.create_texture() }
-        .map_err(|e| format!("gl.create_texture failed: {e}"))?;
+    let tex =
+        unsafe { gl.create_texture() }.map_err(|e| format!("gl.create_texture failed: {e}"))?;
     let raw_id = tex.0.get();
     unsafe {
         gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
@@ -1245,11 +1756,7 @@ fn register_wgl_video_texture(
             eframe::glow::TEXTURE_BASE_LEVEL,
             0,
         );
-        gl.tex_parameter_i32(
-            eframe::glow::TEXTURE_2D,
-            eframe::glow::TEXTURE_MAX_LEVEL,
-            0,
-        );
+        gl.tex_parameter_i32(eframe::glow::TEXTURE_2D, eframe::glow::TEXTURE_MAX_LEVEL, 0);
         // Explicit RGBA8 storage avoids driver-chosen defaults in the WGL interop path.
         gl.tex_image_2d(
             eframe::glow::TEXTURE_2D,
@@ -1268,10 +1775,7 @@ fn register_wgl_video_texture(
     if crate::telemetry::is_telemetry_enabled() {
         eprintln!(
             "[Phase 3.5] GL video texture allocated: {}x{} {} tex={}",
-            width,
-            height,
-            "RGBA8",
-            raw_id
+            width, height, "RGBA8", raw_id
         );
     }
     let egui_tex_id = eframe_frame.register_native_glow_texture(tex);
@@ -1293,14 +1797,15 @@ pub(crate) fn main_screen(
     engine_done: &mut Option<std::sync::mpsc::Receiver<()>>,
     video_frames: &mut Option<VideoFrames>,
     // Phase 3.5: OpenGL context for GPU texture management (WGL_NV_DX_interop2).
-    #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-    gl_ctx: Option<std::sync::Arc<eframe::glow::Context>>,
+    #[cfg(all(target_os = "windows", feature = "wgc-capture"))] gl_ctx: Option<
+        std::sync::Arc<eframe::glow::Context>,
+    >,
     // Phase 3.5: WGL_NV_DX_interop2 manager (None = CPU path fallback).
-    #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-    mut gl_interop: Option<&mut crate::d3d11_gl_interop::D3d11GlInterop>,
+    #[cfg(all(target_os = "windows", feature = "wgc-capture"))] mut gl_interop: Option<
+        &mut crate::d3d11_gl_interop::D3d11GlInterop,
+    >,
     // Phase 3.5: eframe Frame for register_native_glow_texture().
-    #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-    eframe_frame: &mut eframe::Frame,
+    #[cfg(all(target_os = "windows", feature = "wgc-capture"))] eframe_frame: &mut eframe::Frame,
 ) -> bool {
     // Загрузка серверов/каналов/сообщений — в process_background_loads (app.rs), без block_on.
 
@@ -1347,7 +1852,11 @@ pub(crate) fn main_screen(
     // Use only voice.participants (channel_voice can have stale streaming=true when WS payload lacks channel_id).
     // Debounce: remove texture only after 2 consecutive frames of non-streaming to avoid flickering.
     {
-        let streaming_user_ids: HashSet<i64> = state.main.voice.participants.iter()
+        let streaming_user_ids: HashSet<i64> = state
+            .main
+            .voice
+            .participants
+            .iter()
             .filter(|p| p.streaming)
             .map(|p| p.user_id)
             .collect();
@@ -1371,15 +1880,21 @@ pub(crate) fn main_screen(
             })
             .collect();
 
-        let stream_keys_non_streaming: Vec<i64> = state.main.voice_video_gpu_textures.keys()
+        let stream_keys_non_streaming: Vec<i64> = state
+            .main
+            .voice_video_gpu_textures
+            .keys()
             .chain(state.main.voice_video_textures.keys())
             .filter(|&&k| k < 0 && k > i64::MIN / 2)
             .filter(|&&k| !streaming_user_ids.contains(&(-k - 1)))
             .copied()
-            .collect::<std::collections::HashSet<_>>().into_iter().collect();
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
 
         // Debounce: only remove if we saw this key as non-streaming in the previous frame too.
-        let stream_keys_to_remove: Vec<i64> = stream_keys_non_streaming.iter()
+        let stream_keys_to_remove: Vec<i64> = stream_keys_non_streaming
+            .iter()
             .filter(|k| state.main.stream_ended_prev_frame.contains(k))
             .copied()
             .collect();
@@ -1389,17 +1904,30 @@ pub(crate) fn main_screen(
         if !stream_keys_to_remove.is_empty() {
             for key in &stream_keys_to_remove {
                 state.main.stream_ended_prev_frame.remove(key);
-                if let Some((egui_tex_id, _, _, _)) = state.main.voice_video_gpu_textures.remove(key) {
-                    state.main.voice_video_gpu_tex_pending_delete.push(egui_tex_id);
+                if let Some((egui_tex_id, _, _, _)) =
+                    state.main.voice_video_gpu_textures.remove(key)
+                {
+                    state
+                        .main
+                        .voice_video_gpu_tex_pending_delete
+                        .push(egui_tex_id);
                 }
                 state.main.voice_video_textures.remove(key);
                 state.main.voice_render_fps.remove(key);
                 let uid = -key - 1;
-                state.main.voice_video_textures.remove(&video_preview_frame_key(uid));
-                if let Some((egui_tex_id, _, _, _)) =
-                    state.main.voice_video_gpu_textures.remove(&video_preview_frame_key(uid))
+                state
+                    .main
+                    .voice_video_textures
+                    .remove(&video_preview_frame_key(uid));
+                if let Some((egui_tex_id, _, _, _)) = state
+                    .main
+                    .voice_video_gpu_textures
+                    .remove(&video_preview_frame_key(uid))
                 {
-                    state.main.voice_video_gpu_tex_pending_delete.push(egui_tex_id);
+                    state
+                        .main
+                        .voice_video_gpu_tex_pending_delete
+                        .push(egui_tex_id);
                 }
                 if state.main.fullscreen_stream_user == Some(uid) {
                     state.main.fullscreen_stream_user = None;
@@ -1412,8 +1940,13 @@ pub(crate) fn main_screen(
         }
         if !preview_keys_to_remove.is_empty() {
             for key in &preview_keys_to_remove {
-                if let Some((egui_tex_id, _, _, _)) = state.main.voice_video_gpu_textures.remove(key) {
-                    state.main.voice_video_gpu_tex_pending_delete.push(egui_tex_id);
+                if let Some((egui_tex_id, _, _, _)) =
+                    state.main.voice_video_gpu_textures.remove(key)
+                {
+                    state
+                        .main
+                        .voice_video_gpu_tex_pending_delete
+                        .push(egui_tex_id);
                 }
                 state.main.voice_video_textures.remove(key);
             }
@@ -1449,12 +1982,14 @@ pub(crate) fn main_screen(
                         } else {
                             eprintln!(
                                 "[Phase 3.5] GL video texture resize: key={key} {}x{} → {}x{}",
-                                old_w,
-                                old_h,
-                                frame.width,
-                                frame.height
+                                old_w, old_h, frame.width, frame.height
                             );
-                            match register_wgl_video_texture(gl, eframe_frame, frame.width, frame.height) {
+                            match register_wgl_video_texture(
+                                gl,
+                                eframe_frame,
+                                frame.width,
+                                frame.height,
+                            ) {
                                 Ok((new_eid, new_gid)) => {
                                     old_tex_to_delete = Some(eid);
                                     new_tex_to_delete_on_fail = Some(new_eid);
@@ -1467,7 +2002,12 @@ pub(crate) fn main_screen(
                             }
                         }
                     } else {
-                        match register_wgl_video_texture(gl, eframe_frame, frame.width, frame.height) {
+                        match register_wgl_video_texture(
+                            gl,
+                            eframe_frame,
+                            frame.width,
+                            frame.height,
+                        ) {
                             Ok(pair) => {
                                 new_tex_to_delete_on_fail = Some(pair.0);
                                 Some(pair)
@@ -1480,7 +2020,13 @@ pub(crate) fn main_screen(
                     };
                     if let Some((egui_tex_id, gl_tex_id)) = tex_pair {
                         // Register (or re-register on handle change) the D3D11 shared texture.
-                        match interop.update_texture(key, handle, gl_tex_id, frame.width, frame.height) {
+                        match interop.update_texture(
+                            key,
+                            handle,
+                            gl_tex_id,
+                            frame.width,
+                            frame.height,
+                        ) {
                             Ok(()) => {
                                 if let Some(tex_id) = old_tex_to_delete.take() {
                                     state.main.voice_video_gpu_tex_pending_delete.push(tex_id);
@@ -1544,7 +2090,9 @@ pub(crate) fn main_screen(
             // Print from UI so gui_draw is fresh. Only print when frames are actively
             // being received so the log starts with the stream, not on idle voice chat.
             if any_frame_processed {
-                let should_print = state.main.voice_telemetry_print_at
+                let should_print = state
+                    .main
+                    .voice_telemetry_print_at
                     .map(|t| t.elapsed() >= Duration::from_secs(1))
                     .unwrap_or(true);
                 if should_print {
@@ -1565,7 +2113,10 @@ pub(crate) fn main_screen(
 
     let server_selected = state.main.selected_server.is_some();
     let channel_selected = state.main.selected_channel.is_some();
-    let is_text_channel = state.main.channels.iter()
+    let is_text_channel = state
+        .main
+        .channels
+        .iter()
         .find(|c| Some(c.id) == state.main.selected_channel)
         .map(|c| c.r#type == "text")
         .unwrap_or(false);
@@ -1574,14 +2125,23 @@ pub(crate) fn main_screen(
     if let Some((target_ch, target_srv)) = state.main.voice_switch_confirm {
         let mut do_switch = false;
         let mut do_cancel = false;
-        let cur_ch_name: String = state.main.channels.iter()
+        let cur_ch_name: String = state
+            .main
+            .channels
+            .iter()
             .find(|c| state.main.voice.channel_id == Some(c.id))
-            .map(|c| c.name.clone()).unwrap_or_default();
-        let cur_srv_name: String = state.main.servers.iter()
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        let cur_srv_name: String = state
+            .main
+            .servers
+            .iter()
             .find(|s| state.main.voice.server_id == Some(s.id))
-            .map(|s| s.name.clone()).unwrap_or_default();
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
         egui::Window::new("Переключить голосовой канал?")
-            .collapsible(false).resizable(false)
+            .collapsible(false)
+            .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(format!(
@@ -1592,8 +2152,12 @@ pub(crate) fn main_screen(
                 ui.label("Переключиться на новый канал?");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Переключить").clicked() { do_switch = true; }
-                    if ui.button("Отмена").clicked()      { do_cancel = true; }
+                    if ui.button("Переключить").clicked() {
+                        do_switch = true;
+                    }
+                    if ui.button("Отмена").clicked() {
+                        do_cancel = true;
+                    }
                 });
             });
         if do_switch {
@@ -1621,15 +2185,22 @@ pub(crate) fn main_screen(
                         state.main.voice.channel_id = Some(target_ch);
                         state.main.voice.server_id = Some(target_srv);
                         state.main.voice.participants = resp.participants.clone();
-                        state.main.channel_voice.insert(target_ch, resp.participants);
+                        state
+                            .main
+                            .channel_voice
+                            .insert(target_ch, resp.participants);
                         // Start new engine for the switched channel (LiveKit)
                         let rt = tokio::runtime::Handle::current();
                         let (tx, vf, done) = spawn_voice_engine(rt);
                         *video_frames = Some(vf);
                         let receiver_telemetry = Arc::new(PipelineTelemetry::new());
                         state.main.voice_receiver_telemetry = Some(Arc::clone(&receiver_telemetry));
-                        let session_stats = state.main.voice_stats
-                            .get_or_insert_with(|| Arc::new(Mutex::new(VoiceSessionStats::default())))
+                        let session_stats = state
+                            .main
+                            .voice_stats
+                            .get_or_insert_with(|| {
+                                Arc::new(Mutex::new(VoiceSessionStats::default()))
+                            })
                             .clone();
                         tx.send(VoiceCmd::Start {
                             livekit_url: resp.livekit_url.clone(),
@@ -1641,11 +2212,14 @@ pub(crate) fn main_screen(
                             speaking: Arc::clone(&state.main.voice.speaking),
                             session_stats,
                             receiver_telemetry: Some(receiver_telemetry),
-                        }).ok();
-                            tx.send(VoiceCmd::SetInputVolume(state.main.voice.input_volume)).ok();
-                            tx.send(VoiceCmd::SetOutputVolume(state.main.voice.output_volume)).ok();
-                            *engine_tx = Some(tx);
-                            *engine_done = Some(done);
+                        })
+                        .ok();
+                        tx.send(VoiceCmd::SetInputVolume(state.main.voice.input_volume))
+                            .ok();
+                        tx.send(VoiceCmd::SetOutputVolume(state.main.voice.output_volume))
+                            .ok();
+                        *engine_tx = Some(tx);
+                        *engine_done = Some(done);
                     }
                     Err(e) => eprintln!("voice join error: {e}"),
                 }
@@ -1662,17 +2236,25 @@ pub(crate) fn main_screen(
         let mut should_create = false;
         let mut should_cancel = false;
         egui::Window::new("Создать сервер")
-            .collapsible(false).resizable(false)
+            .collapsible(false)
+            .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label("Название сервера:");
                 ui.add_space(4.0);
-                ui.add(egui::TextEdit::singleline(&mut state.main.new_server_name)
-                    .hint_text("Мой сервер").desired_width(220.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.main.new_server_name)
+                        .hint_text("Мой сервер")
+                        .desired_width(220.0),
+                );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Создать").clicked() { should_create = true; }
-                    if ui.button("Отмена").clicked()  { should_cancel = true; }
+                    if ui.button("Создать").clicked() {
+                        should_create = true;
+                    }
+                    if ui.button("Отмена").clicked() {
+                        should_cancel = true;
+                    }
                 });
             });
         if should_create {
@@ -1702,33 +2284,46 @@ pub(crate) fn main_screen(
         let mut should_create = false;
         let mut should_cancel = false;
         egui::Window::new("Создать канал")
-            .collapsible(false).resizable(false)
+            .collapsible(false)
+            .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label("Название канала:");
                 ui.add_space(4.0);
-                ui.add(egui::TextEdit::singleline(&mut state.main.new_channel_name)
-                    .hint_text("общий").desired_width(220.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.main.new_channel_name)
+                        .hint_text("общий")
+                        .desired_width(220.0),
+                );
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut state.main.new_channel_is_voice, false, "Текстовый");
-                    ui.radio_value(&mut state.main.new_channel_is_voice, true,  "Голосовой");
+                    ui.radio_value(&mut state.main.new_channel_is_voice, true, "Голосовой");
                 });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Создать").clicked() { should_create = true; }
-                    if ui.button("Отмена").clicked()  { should_cancel = true; }
+                    if ui.button("Создать").clicked() {
+                        should_create = true;
+                    }
+                    if ui.button("Отмена").clicked() {
+                        should_cancel = true;
+                    }
                 });
             });
         if should_create {
             let name = state.main.new_channel_name.trim().to_string();
-            let ch_type = if state.main.new_channel_is_voice { "voice" } else { "text" };
+            let ch_type = if state.main.new_channel_is_voice {
+                "voice"
+            } else {
+                "text"
+            };
             if !name.is_empty() {
                 if let (Some(server_id), Some(ref token)) =
                     (state.main.selected_server, &state.access_token)
                 {
                     let token = token.clone();
-                    if let Ok(ch) = block_on(api.create_channel(&token, server_id, &name, ch_type)) {
+                    if let Ok(ch) = block_on(api.create_channel(&token, server_id, &name, ch_type))
+                    {
                         // WS broadcast will arrive; add locally too for instant feedback
                         if !state.main.channels.iter().any(|c| c.id == ch.id) {
                             state.main.channels.push(ch);
@@ -1750,11 +2345,16 @@ pub(crate) fn main_screen(
     if state.main.show_invite_dialog {
         let mut should_invite = false;
         let mut should_close = false;
-        let srv_label: String = state.main.servers.iter()
+        let srv_label: String = state
+            .main
+            .servers
+            .iter()
             .find(|s| Some(s.id) == state.main.selected_server)
-            .map(|s| s.name.clone()).unwrap_or_default();
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
         egui::Window::new(format!("Пригласить на «{}»", srv_label))
-            .collapsible(false).resizable(false)
+            .collapsible(false)
+            .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 if let Some(uid) = state.user_id {
@@ -1771,12 +2371,19 @@ pub(crate) fn main_screen(
                 }
                 ui.label("ID пользователя для приглашения:");
                 ui.add_space(4.0);
-                ui.add(egui::TextEdit::singleline(&mut state.main.invite_user_id_input)
-                    .hint_text("Числовой ID").desired_width(220.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.main.invite_user_id_input)
+                        .hint_text("Числовой ID")
+                        .desired_width(220.0),
+                );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Пригласить").clicked() { should_invite = true; }
-                    if ui.button("Закрыть").clicked()    { should_close  = true; }
+                    if ui.button("Пригласить").clicked() {
+                        should_invite = true;
+                    }
+                    if ui.button("Закрыть").clicked() {
+                        should_close = true;
+                    }
                 });
                 if let Some(ref msg) = state.main.invite_msg {
                     ui.add_space(4.0);
@@ -1796,7 +2403,8 @@ pub(crate) fn main_screen(
                             state.main.invite_user_id_input.clear();
                         }
                         Err(_) => {
-                            state.main.invite_msg = Some("Ошибка: не найден или уже в сервере.".to_string());
+                            state.main.invite_msg =
+                                Some("Ошибка: не найден или уже в сервере.".to_string());
                         }
                     }
                     ctx.request_repaint();
@@ -1817,7 +2425,7 @@ pub(crate) fn main_screen(
         let mut should_close = false;
         let mut do_nick = false;
         let mut do_avatar = false;
-        let mut new_input_vol:  Option<f32> = None;
+        let mut new_input_vol: Option<f32> = None;
         let mut new_output_vol: Option<f32> = None;
         egui::Window::new("Настройки")
             .collapsible(false).resizable(false)
@@ -1924,7 +2532,9 @@ pub(crate) fn main_screen(
                             nick
                         };
                     }
-                    Err(e) => { state.main.settings_msg = Some(format!("Ошибка: {e}")); }
+                    Err(e) => {
+                        state.main.settings_msg = Some(format!("Ошибка: {e}"));
+                    }
                 }
                 ctx.request_repaint();
             }
@@ -1942,8 +2552,12 @@ pub(crate) fn main_screen(
                         let mime = mime_from_path(&path);
                         let token = token.clone();
                         match block_on(api.set_avatar(&token, bytes, &mime)) {
-                            Ok(_) => { state.main.settings_msg = Some("Аватарка обновлена.".to_string()); }
-                            Err(e) => { state.main.settings_msg = Some(format!("Ошибка: {e}")); }
+                            Ok(_) => {
+                                state.main.settings_msg = Some("Аватарка обновлена.".to_string());
+                            }
+                            Err(e) => {
+                                state.main.settings_msg = Some(format!("Ошибка: {e}"));
+                            }
                         }
                         ctx.request_repaint();
                     }
@@ -1960,21 +2574,30 @@ pub(crate) fn main_screen(
 
     // ── Dialog: channel rename ────────────────────────────────────────────
     if let Some((ch_id, ref mut rename_input)) = state.main.channel_rename.clone() {
-        let ch_name_orig = state.main.channels.iter()
-            .find(|c| c.id == ch_id).map(|c| c.name.clone()).unwrap_or_default();
+        let ch_name_orig = state
+            .main
+            .channels
+            .iter()
+            .find(|c| c.id == ch_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
         let mut should_save = false;
         let mut should_cancel = false;
         let mut new_name = rename_input.clone();
         egui::Window::new(format!("Переименовать «{}»", ch_name_orig))
-            .collapsible(false).resizable(false)
+            .collapsible(false)
+            .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut new_name)
-                    .desired_width(220.0));
+                ui.add(egui::TextEdit::singleline(&mut new_name).desired_width(220.0));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Сохранить").clicked() { should_save = true; }
-                    if ui.button("Отмена").clicked()    { should_cancel = true; }
+                    if ui.button("Сохранить").clicked() {
+                        should_save = true;
+                    }
+                    if ui.button("Отмена").clicked() {
+                        should_cancel = true;
+                    }
                 });
             });
         if let Some(ref mut ri) = state.main.channel_rename.as_mut().map(|(_, ri)| ri) {
@@ -1987,7 +2610,10 @@ pub(crate) fn main_screen(
                     let token = token.clone();
                     if let Ok(ch) = block_on(api.rename_channel(&token, ch_id, &name)) {
                         for c in &mut state.main.channels {
-                            if c.id == ch.id { c.name = ch.name; break; }
+                            if c.id == ch.id {
+                                c.name = ch.name;
+                                break;
+                            }
                         }
                     }
                     ctx.request_repaint();
@@ -2002,8 +2628,8 @@ pub(crate) fn main_screen(
 
     // ── Unified horizontal line across all three blocks (channels, chat, members) ──
     egui::TopBottomPanel::top("unified_header_line")
-        .exact_height(40.0)
-        .show_separator_line(true)
+        .exact_height(1.0)
+        .show_separator_line(false)
         .show(ctx, |ui| {
             // Phase 3.5: sRGB diagnostic — log GL_FRAMEBUFFER_SRGB state when GPU video active.
             // If ASTRIX_VIDEO_DISABLE_FRAMEBUFFER_SRGB=1, also disable it (test for double sRGB).
@@ -2042,42 +2668,42 @@ pub(crate) fn main_screen(
         });
 
     // ── Left panel: server icons (guild_panel) ──────────────────────────────
+    let user_display = if state.main.my_display_name.is_empty() {
+        state.auth.username.clone()
+    } else {
+        state.main.my_display_name.clone()
+    };
+
     egui::SidePanel::left("panel_servers")
+        .frame(egui::Frame::none().fill(theme.bg_tertiary))
         .exact_width(guild_panel::GUILD_PANEL_WIDTH)
         .resizable(false)
+        .show_separator_line(false)
         .show(ctx, |ui| {
             let selected_server = state.main.selected_server;
-            let dark_mode = state.dark_mode;
             let servers = state.main.servers.clone();
-            let mut on_action = |act: guild_panel::GuildPanelAction| {
-                match act {
-                    guild_panel::GuildPanelAction::SelectDms => {
-                        state.main.selected_server = None;
-                    }
-                    guild_panel::GuildPanelAction::SelectServer(id) => {
-                        state.main.selected_server = Some(id);
-                        if let Some(uid) = state.user_id {
-                            state.settings.last_server.insert(uid.to_string(), id);
-                            state.settings.save();
-                        }
-                    }
-                    guild_panel::GuildPanelAction::AddServer => {
-                        state.main.show_create_server_dialog = true;
-                    }
-                    guild_panel::GuildPanelAction::Explore => {
-                        println!("Feature not implemented yet");
-                    }
-                    guild_panel::GuildPanelAction::DeleteServer(id) => {
-                        state.main.server_to_delete = Some(id);
-                    }
-                    guild_panel::GuildPanelAction::ThemeToggle => {
-                        state.dark_mode = !state.dark_mode;
-                        state.settings.dark_mode = state.dark_mode;
+            let mut on_action = |act: guild_panel::GuildPanelAction| match act {
+                guild_panel::GuildPanelAction::SelectDms => {
+                    state.main.selected_server = None;
+                }
+                guild_panel::GuildPanelAction::SelectServer(id) => {
+                    state.main.selected_server = Some(id);
+                    if let Some(uid) = state.user_id {
+                        state.settings.last_server.insert(uid.to_string(), id);
                         state.settings.save();
                     }
-                    guild_panel::GuildPanelAction::RetryServers => {
-                        state.main.retry_servers = true;
-                    }
+                }
+                guild_panel::GuildPanelAction::AddServer => {
+                    state.main.show_create_server_dialog = true;
+                }
+                guild_panel::GuildPanelAction::Explore => {
+                    todo_actions::todo_explore_servers();
+                }
+                guild_panel::GuildPanelAction::DeleteServer(id) => {
+                    state.main.server_to_delete = Some(id);
+                }
+                guild_panel::GuildPanelAction::RetryServers => {
+                    state.main.retry_servers = true;
                 }
             };
             let servers_loading = state.main.servers_load == LoadState::Loading;
@@ -2093,7 +2719,6 @@ pub(crate) fn main_screen(
                     servers: servers.as_slice(),
                     selected_server,
                     on_action: &mut on_action,
-                    dark_mode,
                     servers_loading,
                     servers_error,
                 },
@@ -2103,12 +2728,16 @@ pub(crate) fn main_screen(
     // ── Left panel: channels list (channel_panel) ───────────────────────────
     let mut should_logout = false;
     if server_selected {
-        let text_chs: Vec<(i64, String)> = state.main.channels
+        let text_chs: Vec<(i64, String)> = state
+            .main
+            .channels
             .iter()
             .filter(|c| c.r#type == "text")
             .map(|c| (c.id, c.name.clone()))
             .collect();
-        let voice_chs: Vec<(i64, String)> = state.main.channels
+        let voice_chs: Vec<(i64, String)> = state
+            .main
+            .channels
             .iter()
             .filter(|c| c.r#type == "voice")
             .map(|c| (c.id, c.name.clone()))
@@ -2118,24 +2747,27 @@ pub(crate) fn main_screen(
             server_id: state.main.voice.server_id,
             mic_muted: state.main.voice.mic_muted,
             output_muted: state.main.voice.output_muted,
+            camera_on: state.main.voice.camera_on,
+            screen_on: state.main.voice.screen_on,
             channel_voice: state.main.channel_voice.clone(),
             speaking: state.main.voice.speaking.lock().clone(),
+            local_volumes: state.main.voice.local_volumes.clone(),
+            locally_muted: state.main.voice.locally_muted.clone(),
         };
-        let server_name = state.main.servers
+        let server_name = state
+            .main
+            .servers
             .iter()
             .find(|s| Some(s.id) == state.main.selected_server)
             .map(|s| s.name.clone())
             .unwrap_or_default();
         let server_id = state.main.selected_server.unwrap_or(0);
-        let user_display = if state.main.my_display_name.is_empty() {
-            state.auth.username.clone()
-        } else {
-            state.main.my_display_name.clone()
-        };
         let mut channel_actions: Vec<ChannelPanelAction> = Vec::new();
         egui::SidePanel::left("panel_channels")
+            .frame(egui::Frame::none().fill(theme.bg_secondary))
             .exact_width(channel_panel::CHANNEL_PANEL_WIDTH)
             .resizable(false)
+            .show_separator_line(false)
             .show(ctx, |ui| {
                 let channels_load = match &state.main.channels_load {
                     LoadState::Idle => ChannelsLoadState::Idle,
@@ -2152,12 +2784,11 @@ pub(crate) fn main_screen(
                         server_id,
                         text_channels: &text_chs,
                         voice_channels: &voice_chs,
+                        unread_channel_ids: &state.main.unread_channels,
                         selected_channel_id: state.main.selected_channel,
                         voice: voice_snapshot.clone(),
-                        user_display: &user_display,
                         user_id: state.user_id,
                         on_action: &mut |a| channel_actions.push(a.clone()),
-                        avatar_texture: state.user_id.and_then(|id| avatar_textures.get(&id)),
                         channels_load,
                     },
                 );
@@ -2168,14 +2799,38 @@ pub(crate) fn main_screen(
             match act {
                 ChannelPanelAction::SelectChannel(id) => {
                     state.main.selected_channel = Some(id);
+                    state.main.unread_channels.remove(&id);
                 }
-                ChannelPanelAction::JoinVoice { channel_id, server_id: srv_id } => {
+                ChannelPanelAction::JoinVoice {
+                    channel_id,
+                    server_id: srv_id,
+                } => {
                     if state.main.voice.channel_id == Some(channel_id) {
                         // already in this channel
                     } else if state.main.voice.channel_id.is_none() {
-                    apply_voice_join(ctx, state, api, engine_tx, engine_done, video_frames, channel_id, srv_id, user_id);
+                        apply_voice_join(
+                            ctx,
+                            state,
+                            api,
+                            engine_tx,
+                            engine_done,
+                            video_frames,
+                            channel_id,
+                            srv_id,
+                            user_id,
+                        );
                     } else if state.main.voice.server_id == Some(srv_id) {
-                    apply_voice_join(ctx, state, api, engine_tx, engine_done, video_frames, channel_id, srv_id, user_id);
+                        apply_voice_join(
+                            ctx,
+                            state,
+                            api,
+                            engine_tx,
+                            engine_done,
+                            video_frames,
+                            channel_id,
+                            srv_id,
+                            user_id,
+                        );
                     } else {
                         state.main.voice_switch_confirm = Some((channel_id, srv_id));
                     }
@@ -2188,18 +2843,8 @@ pub(crate) fn main_screen(
                     if let Some(tx) = engine_tx.as_ref() {
                         tx.send(VoiceCmd::SetMicMuted(muted)).ok();
                     }
-                    if let (Some(ch_id), Some(ref token)) =
-                        (state.main.voice.channel_id, &state.access_token)
-                    {
-                        let token = token.clone();
-                        let _ = block_on(api.voice_update_state(
-                            &token,
-                            ch_id,
-                            state.main.voice.mic_muted,
-                            state.main.voice.camera_on,
-                            state.main.voice.screen_on,
-                        ));
-                    }
+                    sync_voice_presence(state, api);
+                    update_local_mic_flag(state, user_id, muted);
                     ctx.request_repaint();
                 }
                 ChannelPanelAction::SetOutputMuted(muted) => {
@@ -2208,6 +2853,32 @@ pub(crate) fn main_screen(
                         tx.send(VoiceCmd::SetOutputMuted(muted)).ok();
                     }
                     ctx.request_repaint();
+                }
+                ChannelPanelAction::SetParticipantMuted { user_id, muted } => {
+                    if muted {
+                        state.main.voice.locally_muted.insert(user_id);
+                    } else {
+                        state.main.voice.locally_muted.remove(&user_id);
+                    }
+                    sync_user_volume(engine_tx, &state.main.voice, user_id);
+                    ctx.request_repaint();
+                }
+                ChannelPanelAction::SetParticipantVolume { user_id, volume } => {
+                    let volume = volume.clamp(0.0, 3.0);
+                    state.main.voice.local_volumes.insert(user_id, volume);
+                    state
+                        .settings
+                        .voice_volume_by_user
+                        .insert(user_id.to_string(), volume);
+                    state.settings.save();
+                    sync_user_volume(engine_tx, &state.main.voice, user_id);
+                    ctx.request_repaint();
+                }
+                ChannelPanelAction::SetCameraEnabled(enabled) => {
+                    set_local_camera_enabled(ctx, state, api, engine_tx.as_ref(), user_id, enabled);
+                }
+                ChannelPanelAction::ToggleScreenShare => {
+                    toggle_local_screen_share(ctx, state, api, engine_tx.as_ref(), user_id);
                 }
                 ChannelPanelAction::CreateChannel => {
                     state.main.show_create_channel_dialog = true;
@@ -2239,17 +2910,94 @@ pub(crate) fn main_screen(
     }
 
     // ── Right panel: members (member_panel) ──────────────────────────────────
+    if server_selected {
+        let left_user_panel_width =
+            guild_panel::GUILD_PANEL_WIDTH + channel_panel::CHANNEL_PANEL_WIDTH;
+        let voice_bar_snapshot = BottomPanelVoiceSnapshot {
+            in_voice_channel: state.main.voice.channel_id.is_some(),
+            mic_muted: state.main.voice.mic_muted,
+            output_muted: state.main.voice.output_muted,
+        };
+        let mut bottom_actions: Vec<BottomPanelAction> = Vec::new();
+        let screen_rect = ctx.screen_rect();
+
+        egui::Area::new(egui::Id::new("left_user_panel"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(
+                screen_rect.left(),
+                screen_rect.bottom() - bottom_panel::BOTTOM_PANEL_HEIGHT,
+            ))
+            .show(ctx, |ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(left_user_panel_width, bottom_panel::BOTTOM_PANEL_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Min),
+                    |ui| {
+                        bottom_panel::show(
+                            ctx,
+                            ui,
+                            BottomPanelParams {
+                                theme,
+                                user_display: &user_display,
+                                voice: voice_bar_snapshot,
+                                avatar_texture: state
+                                    .user_id
+                                    .and_then(|id| avatar_textures.get(&id)),
+                                on_action: &mut |action| bottom_actions.push(action),
+                            },
+                        );
+                    },
+                );
+            });
+
+        for action in bottom_actions {
+            match action {
+                BottomPanelAction::SetMicMuted(muted) => {
+                    state.main.voice.mic_muted = muted;
+                    if let Some(tx) = engine_tx.as_ref() {
+                        tx.send(VoiceCmd::SetMicMuted(muted)).ok();
+                    }
+                    sync_voice_presence(state, api);
+                    update_local_mic_flag(state, state.user_id, muted);
+                    ctx.request_repaint();
+                }
+                BottomPanelAction::SetOutputMuted(muted) => {
+                    state.main.voice.output_muted = muted;
+                    if let Some(tx) = engine_tx.as_ref() {
+                        tx.send(VoiceCmd::SetOutputMuted(muted)).ok();
+                    }
+                    ctx.request_repaint();
+                }
+                BottomPanelAction::OpenSettings => {
+                    state.main.show_settings_dialog = true;
+                    state.main.settings_nickname_input = state.main.my_display_name.clone();
+                    state.main.settings_msg = None;
+                }
+            }
+        }
+    }
+
     let show_members = state.main.show_member_panel.unwrap_or(true);
     if server_selected && show_members {
         let online_count = state.main.online_users.len();
-        let server_owner_id = state.main.servers.iter()
+        let server_owner_id = state
+            .main
+            .servers
+            .iter()
             .find(|s| Some(s.id) == state.main.selected_server)
-            .map(|s| s.owner_id).unwrap_or(0);
-        let mut members_snap: Vec<MemberSnapshot> = state.main.server_members.iter()
+            .map(|s| s.owner_id)
+            .unwrap_or(0);
+        let mut members_snap: Vec<MemberSnapshot> = state
+            .main
+            .server_members
+            .iter()
             .map(|m| {
                 let online = state.main.online_users.contains(&m.user_id);
                 let is_owner = m.is_owner || m.user_id == server_owner_id;
-                let display = if m.display_name.is_empty() { m.username.clone() } else { m.display_name.clone() };
+                let display = if m.display_name.is_empty() {
+                    m.username.clone()
+                } else {
+                    m.display_name.clone()
+                };
                 MemberSnapshot {
                     user_id: m.user_id,
                     display_name: display,
@@ -2262,23 +3010,41 @@ pub(crate) fn main_screen(
         members_snap.sort_by(|a, b| b.online.cmp(&a.online)); // online first
 
         let speaking_snap = state.main.voice.speaking.lock().clone();
+        let mut member_actions: Vec<MemberPanelAction> = Vec::new();
 
         egui::SidePanel::right("panel_members")
+            .frame(egui::Frame::none().fill(theme.bg_secondary))
             .exact_width(member_panel::MEMBER_PANEL_WIDTH)
             .resizable(false)
+            .show_separator_line(false)
             .show(ctx, |ui| {
-                member_panel::show(ctx, ui, MemberPanelParams {
-                    theme,
-                    members: &members_snap,
-                    online_count,
-                    speaking: &speaking_snap,
-                    avatar_textures,
-                });
+                member_panel::show(
+                    ctx,
+                    ui,
+                    MemberPanelParams {
+                        theme,
+                        members: &members_snap,
+                        online_count,
+                        speaking: &speaking_snap,
+                        avatar_textures,
+                        on_action: &mut |action| member_actions.push(action),
+                    },
+                );
             });
+
+        for action in member_actions {
+            match action {
+                MemberPanelAction::OpenMemberProfile(user_id) => {
+                    todo_actions::todo_open_member_profile(user_id);
+                }
+            }
+        }
     }
 
     // ── Central panel: chat ───────────────────────────────────────────────
-    egui::CentralPanel::default().show(ctx, |ui| {
+    egui::CentralPanel::default()
+        .frame(egui::Frame::none().fill(theme.bg_primary))
+        .show(ctx, |ui| {
         if !channel_selected {
             ui.centered_and_justified(|ui| {
                 ui.label(if server_selected {
@@ -2321,6 +3087,7 @@ pub(crate) fn main_screen(
                 server_members: &state.main.server_members,
                 media_textures,
                 media_bytes,
+                avatar_textures,
                 on_action: &mut |a| chat_actions.push(a),
                 messages_load_error,
                 messages_loading,
@@ -2359,21 +3126,23 @@ pub(crate) fn main_screen(
                         state.main.pending_attachment = None;
                         state.main.pending_attachment_bytes = None;
                     }
-                    ChatPanelAction::Threads
-                    | ChatPanelAction::Notifications
-                    | ChatPanelAction::Pinned
-                    | ChatPanelAction::Search
-                    | ChatPanelAction::Inbox
-                    | ChatPanelAction::Help => {
-                        println!("Feature not implemented yet");
+                    ChatPanelAction::Threads => todo_actions::todo_open_threads(),
+                    ChatPanelAction::Notifications => {
+                        todo_actions::todo_open_notifications()
                     }
+                    ChatPanelAction::Pinned => todo_actions::todo_open_pins(),
+                    ChatPanelAction::Search => todo_actions::todo_search_messages(),
+                    ChatPanelAction::Inbox => todo_actions::todo_open_inbox(),
+                    ChatPanelAction::Help => todo_actions::todo_open_help(),
                     ChatPanelAction::ToggleMemberList => {
                         let current = state.main.show_member_panel.unwrap_or(true);
                         state.main.show_member_panel = Some(!current);
                         ctx.request_repaint();
                     }
-                    ChatPanelAction::StubGif | ChatPanelAction::StubEmoji | ChatPanelAction::StubStickers => {
-                        println!("Feature not implemented yet");
+                    ChatPanelAction::StubGif => todo_actions::todo_insert_gif(),
+                    ChatPanelAction::StubEmoji => todo_actions::todo_open_emoji_picker(),
+                    ChatPanelAction::StubStickers => {
+                        todo_actions::todo_open_sticker_picker()
                     }
                     ChatPanelAction::RetryMessages => {
                         state.main.retry_messages = true;
@@ -2701,16 +3470,10 @@ pub(crate) fn main_screen(
                                                 if ui.button(mute_label).clicked() {
                                                     if is_locally_muted {
                                                         state.main.voice.locally_muted.remove(&p.user_id);
-                                                        let restore = state.main.voice.local_volumes.get(&p.user_id).copied().unwrap_or(1.0);
-                                                        if let Some(tx) = engine_tx.as_ref() {
-                                                            tx.send(VoiceCmd::SetUserVolume(p.user_id, restore)).ok();
-                                                        }
                                                     } else {
                                                         state.main.voice.locally_muted.insert(p.user_id);
-                                                        if let Some(tx) = engine_tx.as_ref() {
-                                                            tx.send(VoiceCmd::SetUserVolume(p.user_id, 0.0)).ok();
-                                                        }
                                                     }
+                                                    sync_user_volume(engine_tx, &state.main.voice, p.user_id);
                                                     ui.close_menu();
                                                 }
                                                 ui.label("Громкость 0–300%, по умолчанию 100%");
@@ -2720,9 +3483,7 @@ pub(crate) fn main_screen(
                                                     state.main.voice.local_volumes.insert(uid, vol);
                                                     state.settings.voice_volume_by_user.insert(uid.to_string(), vol);
                                                     state.settings.save();
-                                                    if let Some(tx) = engine_tx.as_ref() {
-                                                        tx.send(VoiceCmd::SetUserVolume(uid, vol)).ok();
-                                                    }
+                                                    sync_user_volume(engine_tx, &state.main.voice, uid);
                                                 }
                                             });
                                         }
@@ -2787,9 +3548,8 @@ pub(crate) fn main_screen(
                             }
                             ui.ctx().request_repaint();
                         }
-                        let scr_label = if state.main.voice.screen_on { "📺 Демо вкл" } else { "📺 Демо экрана" };
-                        if ui.button(scr_label).on_hover_text(if state.main.voice.screen_on { "Остановить демонстрацию" } else { "Демонстрация экрана" }).clicked() {
-                            if state.main.voice.screen_on {
+                        if state.main.voice.screen_on {
+                            if ui.button("📺 Остановить трансляцию").on_hover_text("Остановить демонстрацию").clicked() {
                                 state.main.voice.screen_on = false;
                                 if let Some(tx) = engine_tx.as_ref() {
                                     tx.send(VoiceCmd::StopScreen).ok();
@@ -2810,8 +3570,10 @@ pub(crate) fn main_screen(
                                         }
                                     }
                                 }
-                            } else {
-                                // Enumerate real displays (deduplicated) for the picker.
+                                ui.ctx().request_repaint();
+                            }
+                        } else {
+                            if ui.button("🖥 Выбрать источник").on_hover_text("Выбрать экран или окно для трансляции").clicked() {
                                 let monitors = crate::voice_livekit::enumerate_unique_screens();
                                 state.main.screen_sources = monitors
                                     .iter()
@@ -2849,8 +3611,49 @@ pub(crate) fn main_screen(
                                     })
                                     .collect();
                                 state.main.show_screen_source_picker = true;
+                                ui.ctx().request_repaint();
                             }
-                            ui.ctx().request_repaint();
+                            let start_clicked = ui
+                                .add_enabled(
+                                    state.main.selected_stream_source.is_some(),
+                                    egui::Button::new("📺 Начать трансляцию"),
+                                )
+                                .on_hover_text(if state.main.selected_stream_source.is_some() {
+                                    "Запустить трансляцию с выбранного источника"
+                                } else {
+                                    "Сначала выберите источник"
+                                })
+                                .clicked();
+                            if start_clicked {
+                                if let Some(source) = state.main.selected_stream_source.as_ref().map(|entry| entry.target.clone()) {
+                                    let preset = state.main.screen_preset;
+                                    state.main.voice.screen_on = true;
+                                    if let Some(tx) = engine_tx.as_ref() {
+                                        tx.send(VoiceCmd::StartScreen { source, preset }).ok();
+                                    }
+                                    if let (Some(ch_id), Some(ref token)) = (state.main.voice.channel_id, &state.access_token) {
+                                        let token = token.clone();
+                                        let _ = block_on(api.voice_update_state(&token, ch_id, state.main.voice.mic_muted, state.main.voice.camera_on, state.main.voice.screen_on));
+                                    }
+                                    if let Some(uid) = state.user_id {
+                                        for p in &mut state.main.voice.participants {
+                                            if p.user_id == uid { p.streaming = true; break; }
+                                        }
+                                        if let Some(ch_id) = state.main.voice.channel_id {
+                                            if let Some(list) = state.main.channel_voice.get_mut(&ch_id) {
+                                                for p in list.iter_mut() {
+                                                    if p.user_id == uid { p.streaming = true; break; }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                        }
+                        if let Some(source) = state.main.selected_stream_source.as_ref() {
+                            ui.label(egui::RichText::new(format!("Источник: {}", source.label)).small())
+                                .on_hover_text(&source.label);
                         }
                         let stream_audio_label = if state.main.voice.screen_audio_muted {
                             "🔇 Звук стрима"
@@ -2884,22 +3687,51 @@ pub(crate) fn main_screen(
 
     // Voice statistics window (separate window)
     if state.main.show_voice_stats_window {
-        let stats = state.main.voice_stats.as_ref().map(|s| s.lock().clone()).unwrap_or_default();
+        let stats = state
+            .main
+            .voice_stats
+            .as_ref()
+            .map(|s| s.lock().clone())
+            .unwrap_or_default();
         egui::Window::new("Статистика")
             .collapsible(false)
             .resizable(true)
             .default_width(320.0)
             .show(ctx, |ui| {
-                let fmt_rtt = stats.latency_rtt_ms.map(|x| format!("{:.0}", x)).unwrap_or_else(|| "—".to_string());
-                let fmt_fps = stats.stream_fps.map(|x| format!("{:.1}", x)).unwrap_or_else(|| "—".to_string());
-                let fmt_res = stats.resolution.map(|(w, h)| format!("{}×{}", w, h)).unwrap_or_else(|| "—".to_string());
-                let fmt_fps2 = stats.frames_per_second.map(|x| format!("{:.1}", x)).unwrap_or_else(|| "—".to_string());
-                let fmt_mbps = stats.connection_speed_mbps.map(|x| format!("{:.2}", x)).unwrap_or_else(|| "—".to_string());
-                let fmt_in_mbps = stats.incoming_speed_mbps.map(|x| format!("{:.2}", x)).unwrap_or_else(|| "—".to_string());
+                let fmt_rtt = stats
+                    .latency_rtt_ms
+                    .map(|x| format!("{:.0}", x))
+                    .unwrap_or_else(|| "—".to_string());
+                let fmt_fps = stats
+                    .stream_fps
+                    .map(|x| format!("{:.1}", x))
+                    .unwrap_or_else(|| "—".to_string());
+                let fmt_res = stats
+                    .resolution
+                    .map(|(w, h)| format!("{}×{}", w, h))
+                    .unwrap_or_else(|| "—".to_string());
+                let fmt_fps2 = stats
+                    .frames_per_second
+                    .map(|x| format!("{:.1}", x))
+                    .unwrap_or_else(|| "—".to_string());
+                let fmt_mbps = stats
+                    .connection_speed_mbps
+                    .map(|x| format!("{:.2}", x))
+                    .unwrap_or_else(|| "—".to_string());
+                let fmt_in_mbps = stats
+                    .incoming_speed_mbps
+                    .map(|x| format!("{:.2}", x))
+                    .unwrap_or_else(|| "—".to_string());
                 let fmt_enc = stats.encoding_path.as_deref().unwrap_or("—");
                 let fmt_dec = stats.decoding_path.as_deref().unwrap_or("—");
-                let fmt_threads = stats.encoder_threads.map(|n| n.to_string()).unwrap_or_else(|| "—".to_string());
-                let fmt_dec_threads = stats.decoder_threads.map(|n| n.to_string()).unwrap_or_else(|| "—".to_string());
+                let fmt_threads = stats
+                    .encoder_threads
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "—".to_string());
+                let fmt_dec_threads = stats
+                    .decoder_threads
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "—".to_string());
                 ui.heading("Трансляция и соединение");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -2954,10 +3786,10 @@ pub(crate) fn main_screen(
     // Screen source picker dialog (before starting stream).
     if state.main.show_screen_source_picker {
         let mut close_picker = false;
-        let mut start_source: Option<StreamSourceTarget> = None;
         let screen_sources = state.main.screen_sources.clone();
         let window_sources = state.main.window_sources.clone();
         let current_preset = state.main.screen_preset;
+        let selected_source = state.main.selected_stream_source.clone();
         egui::Window::new("Выбор источника трансляции")
             .collapsible(false)
             .resizable(true)
@@ -2976,6 +3808,8 @@ pub(crate) fn main_screen(
                 });
                 ui.add_space(8.0);
                 ui.separator();
+                ui.label("Выбор источника не запускает стрим. Для запуска используйте кнопку \"Начать трансляцию\".");
+                ui.add_space(8.0);
                 ui.heading("Экран");
                 ui.add_space(4.0);
                 if screen_sources.is_empty() {
@@ -2983,8 +3817,12 @@ pub(crate) fn main_screen(
                 } else {
                     ui.horizontal_wrapped(|ui| {
                         for source in &screen_sources {
-                            if ui.button(&source.label).clicked() {
-                                start_source = Some(source.target.clone());
+                            let is_selected = selected_source
+                                .as_ref()
+                                .map(|entry| entry.target == source.target)
+                                .unwrap_or(false);
+                            if ui.selectable_label(is_selected, &source.label).clicked() {
+                                state.main.selected_stream_source = Some(source.clone());
                                 close_picker = true;
                             }
                             ui.add_space(4.0);
@@ -3001,8 +3839,12 @@ pub(crate) fn main_screen(
                         .max_height(260.0)
                         .show(ui, |ui| {
                             for source in &window_sources {
-                                if ui.button(&source.label).clicked() {
-                                    start_source = Some(source.target.clone());
+                                let is_selected = selected_source
+                                    .as_ref()
+                                    .map(|entry| entry.target == source.target)
+                                    .unwrap_or(false);
+                                if ui.selectable_label(is_selected, &source.label).clicked() {
+                                    state.main.selected_stream_source = Some(source.clone());
                                     close_picker = true;
                                 }
                                 ui.add_space(4.0);
@@ -3016,29 +3858,6 @@ pub(crate) fn main_screen(
             });
         if close_picker {
             state.main.show_screen_source_picker = false;
-            if let Some(source) = start_source {
-                let preset = state.main.screen_preset;
-                state.main.voice.screen_on = true;
-                if let Some(tx) = engine_tx.as_ref() {
-                    tx.send(VoiceCmd::StartScreen { source, preset }).ok();
-                }
-                if let (Some(ch_id), Some(ref token)) = (state.main.voice.channel_id, &state.access_token) {
-                    let token = token.clone();
-                    let _ = block_on(api.voice_update_state(&token, ch_id, state.main.voice.mic_muted, state.main.voice.camera_on, state.main.voice.screen_on));
-                }
-                if let Some(uid) = state.user_id {
-                    for p in &mut state.main.voice.participants {
-                        if p.user_id == uid { p.streaming = true; break; }
-                    }
-                    if let Some(ch_id) = state.main.voice.channel_id {
-                        if let Some(list) = state.main.channel_voice.get_mut(&ch_id) {
-                            for p in list.iter_mut() {
-                                if p.user_id == uid { p.streaming = true; break; }
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -3051,13 +3870,21 @@ pub(crate) fn main_screen(
             .show(ctx, |ui| {
                 // Window rect: always (0,0) origin (window-relative), size from viewport.
                 // Fixes overlay "moving away" when window is moved and ensures it fits in window.
-                let viewport = ctx.input(|i| i.viewport().inner_rect).unwrap_or_else(|| ctx.screen_rect());
+                let viewport = ctx
+                    .input(|i| i.viewport().inner_rect)
+                    .unwrap_or_else(|| ctx.screen_rect());
                 let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, viewport.size());
                 ui.allocate_rect(screen, egui::Sense::hover()); // Ensure Area covers full window
-                ui.painter().rect_filled(screen, egui::Rounding::ZERO, egui::Color32::from_black_alpha(240));
+                ui.painter().rect_filled(
+                    screen,
+                    egui::Rounding::ZERO,
+                    egui::Color32::from_black_alpha(240),
+                );
                 let stream_key = video_frame_key(uid, true);
                 // Phase 3.5: prefer GPU zero-copy texture, fall back to CPU-uploaded.
-                let shown = if let Some(&(_, gl_tex_id, w, h)) = state.main.voice_video_gpu_textures.get(&stream_key) {
+                let shown = if let Some(&(_, gl_tex_id, w, h)) =
+                    state.main.voice_video_gpu_textures.get(&stream_key)
+                {
                     let max_w = screen.width();
                     let max_h = screen.height();
                     // Scale to fill window; allow upscaling when window is larger than video.
@@ -3074,7 +3901,10 @@ pub(crate) fn main_screen(
                     let scale = (max_w / tex_size.x).min(max_h / tex_size.y);
                     let size = tex_size * scale;
                     let pos = screen.center() - size / 2.0;
-                    ui.put(egui::Rect::from_min_size(pos, size), egui::Image::new(tex).fit_to_exact_size(size));
+                    ui.put(
+                        egui::Rect::from_min_size(pos, size),
+                        egui::Image::new(tex).fit_to_exact_size(size),
+                    );
                     true
                 } else {
                     false
@@ -3085,13 +3915,22 @@ pub(crate) fn main_screen(
                     });
                 } else {
                     // FPS overlay: отрисованные кадры/сек (не полученные/декодированные)
-                    let fps = state.main.voice_render_fps.get_mut(&stream_key).map(|t| t.update_and_get()).unwrap_or(0.0);
+                    let fps = state
+                        .main
+                        .voice_render_fps
+                        .get_mut(&stream_key)
+                        .map(|t| t.update_and_get())
+                        .unwrap_or(0.0);
                     if fps > 0.0 {
                         let fps_text = format!("{:.0} fps", fps);
                         let pos = screen.left_bottom() + egui::vec2(16.0, -28.0);
                         let size = egui::vec2(48.0, 22.0);
                         let bg_rect = egui::Rect::from_min_size(pos, size);
-                        ui.painter().rect_filled(bg_rect, egui::Rounding::same(4.0), egui::Color32::from_black_alpha(200));
+                        ui.painter().rect_filled(
+                            bg_rect,
+                            egui::Rounding::same(4.0),
+                            egui::Color32::from_black_alpha(200),
+                        );
                         ui.painter().text(
                             pos + egui::vec2(8.0, 4.0),
                             egui::Align2::LEFT_TOP,
@@ -3108,7 +3947,8 @@ pub(crate) fn main_screen(
                 ui.allocate_ui_at_rect(controls_rect, |ui| {
                     ui.horizontal(|ui| {
                         show_stream_audio_button(ui, state, engine_tx, uid);
-                        if ui.button("⛶ Закрыть полноэкранный режим").clicked() {
+                        if ui.button("⛶ Закрыть полноэкранный режим").clicked()
+                        {
                             state.main.fullscreen_stream_user = None;
                         }
                     });
@@ -3120,6 +3960,28 @@ pub(crate) fn main_screen(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+fn effective_user_volume(voice: &VoiceState, user_id: i64) -> f32 {
+    if voice.locally_muted.contains(&user_id) {
+        0.0
+    } else {
+        voice.local_volumes.get(&user_id).copied().unwrap_or(1.0)
+    }
+}
+
+fn sync_user_volume(
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    voice: &VoiceState,
+    user_id: i64,
+) {
+    if let Some(tx) = engine_tx.as_ref() {
+        tx.send(VoiceCmd::SetUserVolume(
+            user_id,
+            effective_user_volume(voice, user_id),
+        ))
+        .ok();
+    }
+}
 
 fn effective_stream_volume(voice: &VoiceState, user_id: i64) -> f32 {
     if voice.stream_muted.contains(&user_id) {
@@ -3135,7 +3997,11 @@ fn sync_stream_volume(
     user_id: i64,
 ) {
     if let Some(tx) = engine_tx.as_ref() {
-        tx.send(VoiceCmd::SetStreamVolume(user_id, effective_stream_volume(voice, user_id))).ok();
+        tx.send(VoiceCmd::SetStreamVolume(
+            user_id,
+            effective_stream_volume(voice, user_id),
+        ))
+        .ok();
     }
 }
 
@@ -3152,7 +4018,11 @@ fn set_stream_subscription(
         state.main.voice.stream_muted.remove(&user_id);
     }
     if let Some(tx) = engine_tx.as_ref() {
-        tx.send(VoiceCmd::SetStreamSubscription { user_id, subscribed }).ok();
+        tx.send(VoiceCmd::SetStreamSubscription {
+            user_id,
+            subscribed,
+        })
+        .ok();
     }
     if subscribed {
         sync_stream_volume(engine_tx, &state.main.voice, user_id);
@@ -3183,7 +4053,13 @@ fn show_stream_audio_button(
     }
     response.context_menu(|ui| {
         ui.label("Громкость трансляции 0-400%, по умолчанию 100%");
-        let mut volume = state.main.voice.stream_volumes.get(&user_id).copied().unwrap_or(1.0);
+        let mut volume = state
+            .main
+            .voice
+            .stream_volumes
+            .get(&user_id)
+            .copied()
+            .unwrap_or(1.0);
         if ui
             .add(
                 egui::Slider::new(&mut volume, 0.0..=4.0)
@@ -3194,7 +4070,10 @@ fn show_stream_audio_button(
         {
             let volume = volume.clamp(0.0, 4.0);
             state.main.voice.stream_volumes.insert(user_id, volume);
-            state.settings.stream_volume_by_user.insert(user_id.to_string(), volume);
+            state
+                .settings
+                .stream_volume_by_user
+                .insert(user_id.to_string(), volume);
             state.settings.save();
             state.main.voice.stream_muted.remove(&user_id);
             sync_stream_volume(engine_tx, &state.main.voice, user_id);
@@ -3203,22 +4082,28 @@ fn show_stream_audio_button(
 }
 
 fn mime_from_path(path: &PathBuf) -> String {
-    match path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
-        Some("png")         => "image/png",
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
         Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("gif")         => "image/gif",
-        Some("webp")        => "image/webp",
-        Some("mp4")         => "video/mp4",
-        Some("webm")        => "video/webm",
-        Some("avi")         => "video/avi",
-        Some("zip")         => "application/zip",
-        Some("rar")         => "application/x-rar-compressed",
-        Some("7z")          => "application/x-7z-compressed",
-        Some("tar")         => "application/x-tar",
-        Some("gz")          => "application/gzip",
-        Some("pdf")         => "application/pdf",
-        _                   => "application/octet-stream",
-    }.to_string()
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("avi") => "video/avi",
+        Some("zip") => "application/zip",
+        Some("rar") => "application/x-rar-compressed",
+        Some("7z") => "application/x-7z-compressed",
+        Some("tar") => "application/x-tar",
+        Some("gz") => "application/gzip",
+        Some("pdf") => "application/pdf",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }
 
 fn fmt_size(bytes: i64) -> String {
@@ -3231,7 +4116,11 @@ fn fmt_size(bytes: i64) -> String {
     }
 }
 
-fn save_media_to_disk(media_id: i64, filename: &str, media_bytes: &HashMap<i64, (Vec<u8>, String)>) {
+fn save_media_to_disk(
+    media_id: i64,
+    filename: &str,
+    media_bytes: &HashMap<i64, (Vec<u8>, String)>,
+) {
     if let Some((bytes, _)) = media_bytes.get(&media_id) {
         if let Some(save_path) = rfd::FileDialog::new().set_file_name(filename).save_file() {
             let _ = std::fs::write(save_path, bytes);

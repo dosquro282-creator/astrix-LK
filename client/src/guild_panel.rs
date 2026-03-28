@@ -1,16 +1,14 @@
-//! Левая колонка UI: Home/DMs, список серверов, Add Server, Explore Servers.
-//! Discord-like: круглые иконки, анимации hover, вертикальная полоска у активного сервера.
+//! Far-left server rail.
 
 use eframe::egui;
 
+use crate::bottom_panel;
 use crate::components::buttons;
 use crate::net::Server;
 use crate::theme::Theme;
 
-/// Ширина левой панели (как в Discord).
 pub const GUILD_PANEL_WIDTH: f32 = 72.0;
 
-/// Действие пользователя в панели серверов (один колбэк вместо нескольких заимствований).
 #[derive(Debug, Clone, Copy)]
 pub enum GuildPanelAction {
     SelectDms,
@@ -18,136 +16,134 @@ pub enum GuildPanelAction {
     AddServer,
     Explore,
     DeleteServer(i64),
-    ThemeToggle,
     RetryServers,
 }
 
-/// Параметры для отрисовки панели серверов.
 pub struct GuildPanelParams<'a> {
     pub theme: &'a Theme,
     pub servers: &'a [Server],
-    /// Текущий выбор: `None` = Home/DMs, `Some(id)` = сервер.
     pub selected_server: Option<i64>,
-    /// Единый колбэк при любом действии (переключение сервера, кнопки, тема).
     pub on_action: &'a mut dyn FnMut(GuildPanelAction),
-    pub dark_mode: bool,
     pub servers_loading: bool,
     pub servers_error: Option<&'a str>,
 }
 
-/// Отрисовка левой колонки: Home, серверы, Add, Explore, переключатель темы внизу.
 pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: GuildPanelParams<'_>) {
     let GuildPanelParams {
         theme,
         servers,
         selected_server,
         on_action,
-        dark_mode,
         servers_loading,
         servers_error,
     } = params;
 
-    let icon_size = 24.0_f32 * 2.0 + 24.0;
-    let scroll_h = (ui.available_height() - icon_size).max(40.0);
+    ui.painter()
+        .rect_filled(ui.max_rect(), egui::Rounding::ZERO, theme.bg_tertiary);
+
+    egui::TopBottomPanel::bottom("guild_panel_footer")
+        .exact_height(bottom_panel::BOTTOM_PANEL_HEIGHT)
+        .show_separator_line(false)
+        .show_inside(ui, |_ui| {});
 
     egui::ScrollArea::vertical()
         .id_source("guild_panel_scroll")
-        .max_height(scroll_h)
         .show(ui, |ui| {
-            ui.add_space(8.0);
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 8.0);
+            ui.vertical_centered(|ui| {
+                ui.add_space(12.0);
 
-            // ─── Home / DMs ───────────────────────────────────────────────────
-            let dms_selected = selected_server.is_none();
-            let resp = buttons::icon_circle(
-                ctx,
-                ui,
-                theme,
-                "⌂",
-                "Home",
-                dms_selected,
-                "guild_home",
-            );
-            if resp.clicked() {
-                (*on_action)(GuildPanelAction::SelectDms);
-            }
-            ui.add_space(4.0);
-
-            // ─── Разделитель (тонкая линия между Home и серверами) ───────────
-            ui.add_space(4.0);
-            let sep_rect = ui.allocate_exact_size(
-                egui::vec2(GUILD_PANEL_WIDTH - 16.0, 1.0),
-                egui::Sense::hover(),
-            ).0;
-            ui.painter().rect_filled(sep_rect, 0.0, theme.border);
-            ui.add_space(8.0);
-
-            if servers_loading && servers.is_empty() {
-                ui.vertical_centered(|ui| {
-                    ui.spinner();
-                });
-            } else if let Some(err) = servers_error {
-                if servers.is_empty() {
-                    let resp = buttons::icon_circle(ctx, ui, theme, "↻", err, false, "guild_retry");
-                    if resp.clicked() {
-                        (*on_action)(GuildPanelAction::RetryServers);
-                    }
-                }
-            }
-
-            // ─── Список серверов ─────────────────────────────────────────────
-            for server in servers.iter() {
-                let letter = server
-                    .name
-                    .chars()
-                    .next()
-                    .map(|c| c.to_uppercase().to_string())
-                    .unwrap_or_else(|| "?".to_string());
-                let sel = selected_server == Some(server.id);
-                let resp = buttons::icon_circle(
+                let home = buttons::icon_circle(
                     ctx,
                     ui,
                     theme,
-                    &letter,
-                    &server.name,
-                    sel,
-                    format!("guild_srv_{}", server.id),
+                    "A",
+                    "Home",
+                    selected_server.is_none(),
+                    "guild_home",
                 );
-                if resp.clicked() {
-                    (*on_action)(GuildPanelAction::SelectServer(server.id));
+                if home.clicked() {
+                    (*on_action)(GuildPanelAction::SelectDms);
                 }
-                resp.context_menu(|ui| {
-                    if ui.button("🗑 Удалить / Покинуть").clicked() {
-                        (*on_action)(GuildPanelAction::DeleteServer(server.id));
-                        ui.close_menu();
+
+                ui.add_space(8.0);
+                let sep_rect = ui
+                    .allocate_exact_size(egui::vec2(32.0, 2.0), egui::Sense::hover())
+                    .0;
+                ui.painter()
+                    .rect_filled(sep_rect, 1.0, theme.bg_active.linear_multiply(0.75));
+                ui.add_space(8.0);
+
+                if servers_loading && servers.is_empty() {
+                    ui.spinner();
+                    ui.add_space(8.0);
+                }
+
+                if let Some(err) = servers_error.filter(|_| servers.is_empty()) {
+                    let retry =
+                        buttons::icon_circle(ctx, ui, theme, "!", err, false, "guild_retry");
+                    if retry.clicked() {
+                        (*on_action)(GuildPanelAction::RetryServers);
                     }
-                });
-                ui.add_space(4.0);
-            }
+                    ui.add_space(8.0);
+                }
 
-            // ─── Add Server ─────────────────────────────────────────────────
-            let resp = buttons::icon_circle(ctx, ui, theme, "+", "Создать сервер", false, "guild_add");
-            if resp.clicked() {
-                (*on_action)(GuildPanelAction::AddServer);
-            }
-            ui.add_space(4.0);
+                for server in servers {
+                    let glyph = server
+                        .name
+                        .split_whitespace()
+                        .take(2)
+                        .filter_map(|segment| segment.chars().next())
+                        .collect::<String>()
+                        .chars()
+                        .take(2)
+                        .collect::<String>()
+                        .to_uppercase();
+                    let response = buttons::icon_circle(
+                        ctx,
+                        ui,
+                        theme,
+                        if glyph.is_empty() {
+                            "?"
+                        } else {
+                            glyph.as_str()
+                        },
+                        &server.name,
+                        selected_server == Some(server.id),
+                        format!("guild_srv_{}", server.id),
+                    );
+                    if response.clicked() {
+                        (*on_action)(GuildPanelAction::SelectServer(server.id));
+                    }
+                    response.context_menu(|ui| {
+                        if ui.button("Delete / Leave server").clicked() {
+                            (*on_action)(GuildPanelAction::DeleteServer(server.id));
+                            ui.close_menu();
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
 
-            // ─── Explore Servers ─────────────────────────────────────────────
-            let resp = buttons::icon_circle(ctx, ui, theme, "◇", "Explore Servers", false, "guild_explore");
-            if resp.clicked() {
-                (*on_action)(GuildPanelAction::Explore);
-            }
+                let add =
+                    buttons::icon_circle(ctx, ui, theme, "+", "Create server", false, "guild_add");
+                if add.clicked() {
+                    (*on_action)(GuildPanelAction::AddServer);
+                }
+                ui.add_space(8.0);
+
+                let explore = buttons::icon_circle(
+                    ctx,
+                    ui,
+                    theme,
+                    "o",
+                    "Explore servers",
+                    false,
+                    "guild_explore",
+                );
+                if explore.clicked() {
+                    (*on_action)(GuildPanelAction::Explore);
+                }
+                ui.add_space(8.0);
+            });
         });
-
-    // ─── Нижняя зона: переключатель темы ─────────────────────────────────────
-    ui.add_space(4.0);
-    ui.separator();
-    ui.add_space(4.0);
-    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-        let icon = if dark_mode { "☀" } else { "🌙" };
-        let tip = if dark_mode { "Светлая тема" } else { "Тёмная тема" };
-        let resp = buttons::icon_circle(ctx, ui, theme, icon, tip, dark_mode, "guild_theme");
-        if resp.clicked() {
-            (*on_action)(GuildPanelAction::ThemeToggle);
-        }
-    });
 }
