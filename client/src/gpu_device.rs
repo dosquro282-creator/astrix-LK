@@ -17,7 +17,7 @@ use windows::Win32::Graphics::Direct3D::{
 };
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG,
-    D3D11_SDK_VERSION, ID3D11Device, ID3D11DeviceContext,
+    D3D11_SDK_VERSION, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ADAPTER_DESC1, IDXGIAdapter,
@@ -49,11 +49,39 @@ pub enum GpuDeviceError {
 pub struct AdapterInfo {
     pub name: String,
     pub adapter_idx: u32,
+    pub vendor_id: u32,
+    pub device_id: u32,
     pub dedicated_video_memory: u64,
     pub shared_system_memory: u64,
     pub software: bool,
     /// `true` if DedicatedVideoMemory > 512 MB.
     pub is_discrete: bool,
+}
+
+impl AdapterInfo {
+    pub fn is_nvidia(&self) -> bool {
+        self.vendor_id == 0x10DE
+    }
+
+    pub fn is_amd(&self) -> bool {
+        self.vendor_id == 0x1002 || self.vendor_id == 0x1022
+    }
+
+    pub fn is_intel(&self) -> bool {
+        self.vendor_id == 0x8086
+    }
+
+    pub fn vendor_name(&self) -> &'static str {
+        if self.is_nvidia() {
+            "NVIDIA"
+        } else if self.is_amd() {
+            "AMD"
+        } else if self.is_intel() {
+            "Intel"
+        } else {
+            "Unknown"
+        }
+    }
 }
 
 /// D3D11 device + context on selected GPU adapter.
@@ -107,6 +135,26 @@ impl GpuDevice {
             best_idx
         };
 
+        Self::create_for_adapter_idx(idx)
+    }
+
+    /// Create a D3D11 device on the specified DXGI adapter index.
+    pub fn create_for_adapter_idx(idx: u32) -> Result<Self, GpuDeviceError> {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+
+        let adapters = Self::enumerate();
+        if adapters.is_empty() {
+            return Err(GpuDeviceError::NoAdapter);
+        }
+        if idx as usize >= adapters.len() {
+            return Err(GpuDeviceError::InvalidAdapterIndex(
+                idx,
+                (adapters.len() as u32).saturating_sub(1),
+            ));
+        }
+
         let info = &adapters[idx as usize];
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };
         let adapter1: IDXGIAdapter1 = unsafe { factory.EnumAdapters1(idx)? };
@@ -148,6 +196,15 @@ impl GpuDevice {
         let context = context.ok_or(GpuDeviceError::DeviceCreation(
             windows::core::Error::from(windows::core::HRESULT(-1)),
         ))?;
+
+        if let Ok(multithread) = context.cast::<ID3D11Multithread>() {
+            unsafe {
+                let _ = multithread.SetMultithreadProtected(true);
+            }
+            eprintln!("[gpu_device] D3D11 multithread protection ENABLED");
+        } else {
+            eprintln!("[gpu_device] D3D11 multithread protection unavailable on immediate context");
+        }
 
         if feature_level.0 < D3D_FEATURE_LEVEL_11_0.0 {
             return Err(GpuDeviceError::FeatureLevelNotSatisfied);
@@ -222,6 +279,8 @@ impl GpuDevice {
                     name
                 },
                 adapter_idx: i,
+                vendor_id: desc.VendorId,
+                device_id: desc.DeviceId,
                 dedicated_video_memory: dedicated,
                 shared_system_memory: shared,
                 software,
@@ -262,6 +321,8 @@ impl GpuDevice {
                 name
             },
             adapter_idx: 0,
+            vendor_id: desc.VendorId,
+            device_id: desc.DeviceId,
             dedicated_video_memory: dedicated,
             shared_system_memory: shared,
             software,

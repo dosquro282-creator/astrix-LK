@@ -9,7 +9,7 @@
 #![cfg(all(target_os = "windows", feature = "wgc-capture"))]
 
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use thiserror::Error;
 use windows::core::{Interface, BOOL};
@@ -20,6 +20,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
     D3D11_BIND_UNORDERED_ACCESS, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
     D3D11_MAP_READ, D3D11_MAP_WRITE, D3D11_MAP_WRITE_DISCARD,
+    D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
     D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
     D3D11_USAGE_STAGING,
     D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CAPS,
@@ -33,7 +34,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC_0, D3D11_UAV_DIMENSION_TEXTURE2D,
     D3D11_TEX2D_UAV,
     ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView,
-    ID3D11Texture2D, ID3D11UnorderedAccessView, ID3D11VideoContext, ID3D11VideoDevice,
+    ID3D11Query, ID3D11Texture2D, ID3D11UnorderedAccessView, ID3D11VideoContext, ID3D11VideoDevice,
     ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView,
     ID3D11VideoProcessorOutputView,
 };
@@ -130,6 +131,8 @@ pub enum D3d11Nv12Error {
     BgraInputNotSupported,
     #[error("Video processor has no rate conversion caps (RateConversionCapsCount == 0); CreateVideoProcessor index 0 would be invalid")]
     NoRateConversionCaps,
+    #[error("Timed out waiting for NV12 output readiness after {0} ms")]
+    OutputReadyTimeout(u32),
 }
 
 /// BGRA → NV12 converter with hardware scaling.
@@ -140,7 +143,8 @@ pub struct D3d11BgraToNv12 {
     video_context: ID3D11VideoContext,
     _processor_enum: ID3D11VideoProcessorEnumerator,
     processor: ID3D11VideoProcessor,
-    output_texture: ID3D11Texture2D,
+    output_textures: Vec<ID3D11Texture2D>,
+    output_views: Vec<ID3D11VideoProcessorOutputView>,
     /// Input (WGC native) dimensions — used for SourceRect.
     input_width: u32,
     input_height: u32,
@@ -156,9 +160,51 @@ pub struct D3d11BgraToNv12 {
     intermediate_tex: parking_lot::Mutex<Option<ID3D11Texture2D>>,
     /// Guard for per-frame diagnostic logs: true after first successful VP frame is logged.
     vp_logged_once: AtomicBool,
+    /// Round-robin over several NV12 surfaces so async MFT can keep frames in flight.
+    output_ring_cursor: AtomicU32,
+    /// Last successfully written NV12 surface (used by static re-encode path).
+    last_output_index: AtomicU32,
+    /// GPU fence for diagnosing whether submit waits on VP/CS completion.
+    ready_query: ID3D11Query,
+    /// Per-frame Flush() serializes the GPU queue. Keep only a small startup window so
+    /// NVENC sees the first converted surfaces without stalling forever after that.
+    flush_frames_remaining: AtomicU32,
 }
 
 impl D3d11BgraToNv12 {
+    fn startup_flush_frames() -> u32 {
+        std::env::var("ASTRIX_DXGI_NV12_FLUSH_FRAMES")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(3)
+    }
+
+    fn output_ring_size() -> u32 {
+        std::env::var("ASTRIX_DXGI_NV12_RING")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            // Keep several NV12 surfaces in flight so async encoded backends
+            // (especially NVENC) do not stall on a single shared output slot.
+            .unwrap_or(4)
+            .clamp(1, 8)
+    }
+
+    fn next_output_index(&self) -> usize {
+        let ring_len = self.output_textures.len().max(1) as u32;
+        (self.output_ring_cursor.fetch_add(1, Ordering::Relaxed) % ring_len) as usize
+    }
+
+    fn last_output_index(&self) -> usize {
+        let ring_len = self.output_textures.len().max(1) as u32;
+        self.last_output_index
+            .load(Ordering::Relaxed)
+            .min(ring_len.saturating_sub(1)) as usize
+    }
+
+    fn immediate_context(&self) -> Result<ID3D11DeviceContext, D3d11Nv12Error> {
+        self.video_context.cast().map_err(D3d11Nv12Error::Windows)
+    }
+
     /// Create converter that scales `input_width×input_height` → `output_width×output_height`
     /// and converts BGRA → NV12 in one pass on the GPU.
     ///
@@ -176,6 +222,16 @@ impl D3d11BgraToNv12 {
         eprintln!(
             "[d3d11_nv12] Creating converter: {}x{} → {}x{} @ {} fps",
             input_width, input_height, output_width, output_height, fps
+        );
+        let startup_flush_frames = Self::startup_flush_frames();
+        eprintln!(
+            "[d3d11_nv12] Flush policy: startup-only ({} frame(s))",
+            startup_flush_frames
+        );
+        let output_ring_size = Self::output_ring_size();
+        eprintln!(
+            "[d3d11_nv12] NV12 output ring: {} surface(s)",
+            output_ring_size
         );
         let video_device: ID3D11VideoDevice = device
             .cast()
@@ -251,19 +307,28 @@ impl D3d11BgraToNv12 {
             video_device.CreateVideoProcessor(&processor_enum, rate_conversion_index)?
         };
 
-        let output_texture = create_nv12_texture(device, output_width, output_height)?;
+        let (output_textures, output_views) = create_nv12_output_ring(
+            device,
+            &video_device,
+            &processor_enum,
+            output_width,
+            output_height,
+            output_ring_size,
+        )?;
+        let ready_query = create_event_query(device)?;
         {
             let mut nv12_desc = D3D11_TEXTURE2D_DESC::default();
-            unsafe { output_texture.GetDesc(&mut nv12_desc) };
+            unsafe { output_textures[0].GetDesc(&mut nv12_desc) };
             eprintln!(
-                "[d3d11_nv12] NV12Tex desc: {}x{} format={:?} mip={} array={} sample={} bind=0x{:x}",
+                "[d3d11_nv12] NV12Tex desc: {}x{} format={:?} mip={} array={} sample={} bind=0x{:x} ring={}",
                 nv12_desc.Width,
                 nv12_desc.Height,
                 nv12_desc.Format,
                 nv12_desc.MipLevels,
                 nv12_desc.ArraySize,
                 nv12_desc.SampleDesc.Count,
-                nv12_desc.BindFlags
+                nv12_desc.BindFlags,
+                output_ring_size,
             );
         }
 
@@ -273,7 +338,8 @@ impl D3d11BgraToNv12 {
             video_context,
             _processor_enum: processor_enum,
             processor,
-            output_texture,
+            output_textures,
+            output_views,
             input_width,
             input_height,
             output_width,
@@ -282,31 +348,36 @@ impl D3d11BgraToNv12 {
             cs_fallback: parking_lot::Mutex::new(None),
             intermediate_tex: parking_lot::Mutex::new(None),
             vp_logged_once: AtomicBool::new(false),
+            output_ring_cursor: AtomicU32::new(0),
+            last_output_index: AtomicU32::new(0),
+            ready_query,
+            flush_frames_remaining: AtomicU32::new(startup_flush_frames),
         })
     }
 
-    /// Convert BGRA texture to NV12. Returns reference to internal output_texture.
+    /// Convert BGRA texture to NV12. Returns the NV12 surface written for this frame.
     ///
-    /// Caller must hold context_mutex if context is shared with other threads (e.g. WGC callback).
+    /// Serializes command submission on a shared immediate context (e.g. capture thread + encoder).
     /// On first VideoProcessorBlt E_INVALIDARG, falls back to compute shader (Phase 4).
     pub fn convert(
         &self,
         context: &ID3D11DeviceContext,
         input: &ID3D11Texture2D,
         context_mutex: &parking_lot::Mutex<()>,
-    ) -> Result<&ID3D11Texture2D, D3d11Nv12Error> {
+    ) -> Result<ID3D11Texture2D, D3d11Nv12Error> {
+        let _ctx_guard = context_mutex.lock();
         if self.use_cs_fallback.load(Ordering::Relaxed) {
-            return self.convert_cs(context, input, context_mutex);
+            return self.convert_cs(context, input);
         }
 
         match self.convert_vp(input) {
-            Ok(()) => return Ok(&self.output_texture),
+            Ok(output_texture) => return Ok(output_texture),
             Err(D3d11Nv12Error::Windows(e)) => {
                 let hr = e.code().0 as u32;
                 if hr == E_INVALIDARG {
                     eprintln!("[d3d11_nv12] convert_vp E_INVALIDARG hr=0x{:x} (CreateInputView/OutputView/Blt), switching to CS fallback", hr);
                     self.use_cs_fallback.store(true, Ordering::Relaxed);
-                    return self.convert_cs(context, input, context_mutex);
+                    return self.convert_cs(context, input);
                 }
                 return Err(D3d11Nv12Error::Windows(e));
             }
@@ -314,9 +385,12 @@ impl D3d11BgraToNv12 {
         }
     }
 
-    fn convert_vp(&self, input: &ID3D11Texture2D) -> Result<(), D3d11Nv12Error> {
+    fn convert_vp(&self, input: &ID3D11Texture2D) -> Result<ID3D11Texture2D, D3d11Nv12Error> {
         // first_frame = true only on the very first successful call (or after resize).
         let first_frame = !self.vp_logged_once.load(Ordering::Relaxed);
+        let output_index = self.next_output_index();
+        let output_texture = &self.output_textures[output_index];
+        let output_view = self.output_views[output_index].clone();
 
         let mut input_desc = D3D11_TEXTURE2D_DESC::default();
         unsafe { input.GetDesc(&mut input_desc) };
@@ -398,7 +472,6 @@ impl D3d11BgraToNv12 {
         }
 
         let input_view = create_input_view(&self.video_device, &self._processor_enum, vp_input)?;
-        let output_view = create_output_view(&self.video_device, &self._processor_enum, &self.output_texture)?;
 
         if first_frame {
             eprintln!("[d3d11_nv12] input_view and output_view created (non-null)");
@@ -500,15 +573,20 @@ impl D3d11BgraToNv12 {
             self.vp_logged_once.store(true, Ordering::Relaxed);
         }
 
-        Ok(())
+        let ctx = self.immediate_context()?;
+        unsafe {
+            ctx.End(&self.ready_query);
+        }
+        self.last_output_index
+            .store(output_index as u32, Ordering::Relaxed);
+        Ok(output_texture.clone())
     }
 
     fn convert_cs(
         &self,
         context: &ID3D11DeviceContext,
         input: &ID3D11Texture2D,
-        context_mutex: &parking_lot::Mutex<()>,
-    ) -> Result<&ID3D11Texture2D, D3d11Nv12Error> {
+    ) -> Result<ID3D11Texture2D, D3d11Nv12Error> {
         let mut guard = self.cs_fallback.lock();
         if guard.is_none() {
             let mut tex_desc = D3D11_TEXTURE2D_DESC::default();
@@ -531,8 +609,15 @@ impl D3d11BgraToNv12 {
             }
         }
         let cs = guard.as_ref().unwrap();
-        cs.convert(&self._device, context, input, &self.output_texture, context_mutex)?;
-        Ok(&self.output_texture)
+        let output_index = self.next_output_index();
+        let output_texture = &self.output_textures[output_index];
+        cs.convert(&self._device, context, input, output_texture)?;
+        unsafe {
+            context.End(&self.ready_query);
+        }
+        self.last_output_index
+            .store(output_index as u32, Ordering::Relaxed);
+        Ok(output_texture.clone())
     }
 
     /// Recreate processor and output texture for new dimensions.
@@ -587,13 +672,22 @@ impl D3d11BgraToNv12 {
 
         let processor = unsafe { video_device.CreateVideoProcessor(&processor_enum, 0)? };
 
-        let output_texture = create_nv12_texture(device, output_width, output_height)?;
+        let (output_textures, output_views) = create_nv12_output_ring(
+            device,
+            &video_device,
+            &processor_enum,
+            output_width,
+            output_height,
+            Self::output_ring_size(),
+        )?;
+        let ready_query = create_event_query(device)?;
 
         self.video_device = video_device;
         self.video_context = video_context;
         self._processor_enum = processor_enum;
         self.processor = processor;
-        self.output_texture = output_texture;
+        self.output_textures = output_textures;
+        self.output_views = output_views;
         self.input_width = input_width;
         self.input_height = input_height;
         self.output_width = output_width;
@@ -601,6 +695,11 @@ impl D3d11BgraToNv12 {
         *self.cs_fallback.lock() = None;
         *self.intermediate_tex.lock() = None;
         self.vp_logged_once.store(false, Ordering::Relaxed);
+        self.output_ring_cursor.store(0, Ordering::Relaxed);
+        self.last_output_index.store(0, Ordering::Relaxed);
+        self.ready_query = ready_query;
+        self.flush_frames_remaining
+            .store(Self::startup_flush_frames(), Ordering::Relaxed);
 
         Ok(())
     }
@@ -612,7 +711,59 @@ impl D3d11BgraToNv12 {
         self.output_height
     }
     pub fn output_texture(&self) -> &ID3D11Texture2D {
-        &self.output_texture
+        &self.output_textures[self.last_output_index()]
+    }
+
+    pub fn output_textures(&self) -> &[ID3D11Texture2D] {
+        &self.output_textures
+    }
+
+    pub fn poll_output_ready(&self) -> Result<bool, D3d11Nv12Error> {
+        let ctx = self.immediate_context()?;
+        unsafe {
+            match ctx.GetData(&self.ready_query, None, 0, 0) {
+                Ok(()) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        }
+    }
+
+    pub fn wait_output_ready(&self, timeout_ms: u32) -> Result<u64, D3d11Nv12Error> {
+        let ctx = self.immediate_context()?;
+        let start = std::time::Instant::now();
+        let deadline = start + std::time::Duration::from_millis(timeout_ms as u64);
+        unsafe {
+            loop {
+                match ctx.GetData(&self.ready_query, None, 0, 0) {
+                    Ok(()) => return Ok(start.elapsed().as_micros() as u64),
+                    Err(_) => {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(D3d11Nv12Error::OutputReadyTimeout(timeout_ms));
+                        }
+                        std::thread::yield_now();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Flush the D3D11 context used by the BGRA->NV12 converter.
+    /// Startup-only by default: enough to avoid the first ProcessInput blocking on
+    /// some NVIDIA drivers, without paying a per-frame Flush() penalty forever.
+    pub fn flush(&self, context_mutex: &parking_lot::Mutex<()>) -> Result<(), D3d11Nv12Error> {
+        let remaining = self.flush_frames_remaining.load(Ordering::Relaxed);
+        if remaining == 0 {
+            return Ok(());
+        }
+        self.flush_frames_remaining
+            .store(remaining.saturating_sub(1), Ordering::Relaxed);
+        let _ctx_guard = context_mutex.lock();
+        let ctx: ID3D11DeviceContext =
+            self.video_context.cast().map_err(D3d11Nv12Error::Windows)?;
+        unsafe {
+            ctx.Flush();
+        }
+        Ok(())
     }
 }
 
@@ -684,7 +835,6 @@ impl D3d11BgraToNv12Cs {
         context: &ID3D11DeviceContext,
         input: &ID3D11Texture2D,
         output: &ID3D11Texture2D,
-        _context_mutex: &parking_lot::Mutex<()>,
     ) -> Result<(), D3d11Nv12Error> {
         let srv = create_srv_for_texture(device, input).map_err(|e| {
             eprintln!("[d3d11_nv12] CS create_srv failed: {:?}", e); e
@@ -1079,6 +1229,39 @@ fn create_nv12_texture(
     let mut texture = None;
     unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture))? };
     texture.ok_or_else(|| D3d11Nv12Error::Windows(windows::core::Error::from(windows::core::HRESULT(-1))))
+}
+
+fn create_nv12_output_ring(
+    device: &ID3D11Device,
+    video_device: &ID3D11VideoDevice,
+    processor_enum: &ID3D11VideoProcessorEnumerator,
+    width: u32,
+    height: u32,
+    ring_size: u32,
+) -> Result<(Vec<ID3D11Texture2D>, Vec<ID3D11VideoProcessorOutputView>), D3d11Nv12Error> {
+    let mut textures = Vec::with_capacity(ring_size as usize);
+    let mut views = Vec::with_capacity(ring_size as usize);
+    for _ in 0..ring_size {
+        let texture = create_nv12_texture(device, width, height)?;
+        let view = create_output_view(video_device, processor_enum, &texture)?;
+        textures.push(texture);
+        views.push(view);
+    }
+    Ok((textures, views))
+}
+
+fn create_event_query(device: &ID3D11Device) -> Result<ID3D11Query, D3d11Nv12Error> {
+    let desc = D3D11_QUERY_DESC {
+        Query: D3D11_QUERY_EVENT,
+        MiscFlags: 0,
+    };
+    let mut query = None;
+    unsafe {
+        device.CreateQuery(&desc, Some(&mut query))?;
+    }
+    query.ok_or_else(|| {
+        D3d11Nv12Error::Windows(windows::core::Error::from(windows::core::HRESULT(-1)))
+    })
 }
 
 fn create_input_view(

@@ -854,6 +854,7 @@ fn apply_voice_join(
     state: &mut State,
     api: &ApiClient,
     engine_tx: &mut Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    engine_done: &mut Option<std::sync::mpsc::Receiver<()>>,
     video_frames: &mut Option<VideoFrames>,
     channel_id: i64,
     server_id: i64,
@@ -875,9 +876,7 @@ fn apply_voice_join(
                     state.main.voice.local_volumes.insert(p.user_id, vol);
                 }
                 state.main.voice.mic_muted = false;
-                if let Some(old_tx) = engine_tx.take() {
-                    old_tx.send(VoiceCmd::Stop).ok();
-                }
+                stop_voice_engine(engine_tx, engine_done);
                 // Priority: external env var > UI settings > default "mft".
                 // External env var is read here (before we overwrite it below).
                 // This allows `$env:ASTRIX_DECODE_PATH=mft cargo run` to override
@@ -905,7 +904,7 @@ fn apply_voice_join(
                 }
                 std::env::set_var("ASTRIX_DECODE_PATH", decode_path);
                 let rt = tokio::runtime::Handle::current();
-                let (tx, vf) = spawn_voice_engine(rt);
+                let (tx, vf, done) = spawn_voice_engine(rt);
                 *video_frames = Some(vf);
                 let receiver_telemetry = Arc::new(PipelineTelemetry::new());
                 state.main.voice_receiver_telemetry = Some(Arc::clone(&receiver_telemetry));
@@ -926,10 +925,29 @@ fn apply_voice_join(
                 tx.send(VoiceCmd::SetInputVolume(state.main.voice.input_volume)).ok();
                 tx.send(VoiceCmd::SetOutputVolume(state.main.voice.output_volume)).ok();
                 *engine_tx = Some(tx);
+                *engine_done = Some(done);
             }
             Err(e) => eprintln!("voice join error: {e}"),
         }
         ctx.request_repaint();
+    }
+}
+
+fn stop_voice_engine(
+    engine_tx: &mut Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    engine_done: &mut Option<std::sync::mpsc::Receiver<()>>,
+) {
+    if let Some(tx) = engine_tx.take() {
+        tx.send(VoiceCmd::Stop).ok();
+    }
+    if let Some(done_rx) = engine_done.take() {
+        match done_rx.recv_timeout(Duration::from_millis(1500)) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                eprintln!("[voice][livekit] previous engine did not stop within 1500 ms");
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+        }
     }
 }
 
@@ -939,15 +957,14 @@ fn apply_voice_leave(
     state: &mut State,
     api: &ApiClient,
     engine_tx: &mut Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    engine_done: &mut Option<std::sync::mpsc::Receiver<()>>,
     video_frames: &mut Option<VideoFrames>,
 ) {
     if let (Some(ch_id), Some(ref token)) = (state.main.voice.channel_id, &state.access_token) {
         let token = token.clone();
         let _ = block_on(api.voice_leave(&token, ch_id));
     }
-    if let Some(tx) = engine_tx.take() {
-        tx.send(VoiceCmd::Stop).ok();
-    }
+    stop_voice_engine(engine_tx, engine_done);
     state.main.voice = VoiceState::default();
     state.main.voice_video_textures.clear();
     state.main.voice_render_fps.clear();
@@ -973,6 +990,7 @@ pub(crate) fn main_screen(
     media_bytes: &HashMap<i64, (Vec<u8>, String)>,
     avatar_textures: &HashMap<i64, egui::TextureHandle>,
     engine_tx: &mut Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    engine_done: &mut Option<std::sync::mpsc::Receiver<()>>,
     video_frames: &mut Option<VideoFrames>,
     // Phase 3.5: OpenGL context for GPU texture management (WGL_NV_DX_interop2).
     #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
@@ -1242,9 +1260,7 @@ pub(crate) fn main_screen(
                 }
             }
             // Stop current engine
-            if let Some(tx) = engine_tx.take() {
-                tx.send(VoiceCmd::Stop).ok();
-            }
+            stop_voice_engine(engine_tx, engine_done);
             state.main.voice = VoiceState::default();
             state.main.voice_video_textures.clear();
             state.main.voice_render_fps.clear();
@@ -1262,7 +1278,7 @@ pub(crate) fn main_screen(
                         state.main.channel_voice.insert(target_ch, resp.participants);
                         // Start new engine for the switched channel (LiveKit)
                         let rt = tokio::runtime::Handle::current();
-                        let (tx, vf) = spawn_voice_engine(rt);
+                        let (tx, vf, done) = spawn_voice_engine(rt);
                         *video_frames = Some(vf);
                         let receiver_telemetry = Arc::new(PipelineTelemetry::new());
                         state.main.voice_receiver_telemetry = Some(Arc::clone(&receiver_telemetry));
@@ -1283,6 +1299,7 @@ pub(crate) fn main_screen(
                             tx.send(VoiceCmd::SetInputVolume(state.main.voice.input_volume)).ok();
                             tx.send(VoiceCmd::SetOutputVolume(state.main.voice.output_volume)).ok();
                             *engine_tx = Some(tx);
+                            *engine_done = Some(done);
                     }
                     Err(e) => eprintln!("voice join error: {e}"),
                 }
@@ -1804,15 +1821,15 @@ pub(crate) fn main_screen(
                     if state.main.voice.channel_id == Some(channel_id) {
                         // already in this channel
                     } else if state.main.voice.channel_id.is_none() {
-                        apply_voice_join(ctx, state, api, engine_tx, video_frames, channel_id, srv_id, user_id);
+                    apply_voice_join(ctx, state, api, engine_tx, engine_done, video_frames, channel_id, srv_id, user_id);
                     } else if state.main.voice.server_id == Some(srv_id) {
-                        apply_voice_join(ctx, state, api, engine_tx, video_frames, channel_id, srv_id, user_id);
+                    apply_voice_join(ctx, state, api, engine_tx, engine_done, video_frames, channel_id, srv_id, user_id);
                     } else {
                         state.main.voice_switch_confirm = Some((channel_id, srv_id));
                     }
                 }
                 ChannelPanelAction::LeaveVoice => {
-                    apply_voice_leave(ctx, state, api, engine_tx, video_frames);
+                    apply_voice_leave(ctx, state, api, engine_tx, engine_done, video_frames);
                 }
                 ChannelPanelAction::SetMicMuted(muted) => {
                     state.main.voice.mic_muted = muted;
@@ -1865,7 +1882,7 @@ pub(crate) fn main_screen(
         }
 
         if state.main.voice_pending_leave {
-            apply_voice_leave(ctx, state, api, engine_tx, video_frames);
+            apply_voice_leave(ctx, state, api, engine_tx, engine_done, video_frames);
         }
     }
 

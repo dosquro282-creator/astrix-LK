@@ -40,6 +40,7 @@ pub struct AstrixApp {
     media_pending: VecDeque<i64>,
     media_bytes: HashMap<i64, (Vec<u8>, String)>,
     voice_engine_tx: Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    voice_engine_done: Option<std::sync::mpsc::Receiver<()>>,
     voice_video_frames: Option<VideoFrames>,
     /// Phase 3.5: WGL_NV_DX_interop2 manager for zero-copy D3D11→GL texture sharing.
     /// None until first update() (requires active GL context), or if init failed.
@@ -81,6 +82,7 @@ impl AstrixApp {
             media_pending: VecDeque::new(),
             media_bytes: HashMap::new(),
             voice_engine_tx: None,
+            voice_engine_done: None,
             voice_video_frames: None,
             #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
             gl_interop: None,
@@ -729,6 +731,7 @@ impl eframe::App for AstrixApp {
             &self.media_bytes,
             &self.avatar_textures,
             &mut self.voice_engine_tx,
+            &mut self.voice_engine_done,
             &mut self.voice_video_frames,
             #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
             gl_ctx,

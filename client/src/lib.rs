@@ -26,8 +26,16 @@ pub mod d3d11_nv12;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod gpu_device;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+pub mod dxgi_duplication;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod mft_encoder;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod mft_device;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod d3d11_gl_interop;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+pub mod nvenc_d11;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+pub mod encoded_h264;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+mod nvenc_d11_bridge;

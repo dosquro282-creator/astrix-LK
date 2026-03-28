@@ -29,6 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &gpu.context,
         width,
         height,
+        width,
+        height,
         fps,
     )?;
     println!("D3d11BgraToNv12 created");

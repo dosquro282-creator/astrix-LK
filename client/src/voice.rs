@@ -82,7 +82,10 @@ impl ScreenPreset {
             Self::P1080F120 => (1920, 1080, 120.0, 20_000_000),
             Self::P1440F30  => (2560, 1440, 30.0, 12_000_000),
             Self::P1440F60  => (2560, 1440, 60.0, 18_000_000),
-            Self::P1440F90  => (2560, 1440, 90.0, 24_000_000),
+            // 24 Mbps is too tight for 1440p90, but 60 Mbps creates heavy
+            // bursts on periodic IDRs and can destabilize the subscriber path.
+            // Keep this roomy, but below the point where receiver jitter grows.
+            Self::P1440F90  => (2560, 1440, 90.0, 35_000_000),
         }
     }
 
@@ -136,6 +139,8 @@ impl Default for ScreenPreset {
 /// Encoding path for outgoing screen share (Phase 5).
 #[derive(Debug, Clone)]
 pub enum EncodingPath {
+    /// GPU, direct D3D11 + NVIDIA NVENC path.
+    NvencD3d11 { adapter: String },
     /// GPU, hardware MFT (e.g. NVIDIA NVENC, AMD AMF).
     MftHardware { adapter: String },
     /// CPU, software MFT (e.g. H264 Encoder MFT).
@@ -147,6 +152,7 @@ pub enum EncodingPath {
 impl EncodingPath {
     pub fn to_display_string(&self) -> String {
         match self {
+            Self::NvencD3d11 { adapter } => format!("NVENC D3D11 ({}, hardware)", adapter.trim_end_matches('\0')),
             Self::MftHardware { adapter } => format!("MFT GPU ({}, hardware)", adapter.trim_end_matches('\0')),
             Self::MftSoftware => "MFT software".into(),
             Self::OpenH264 { threads, gpu_capture } => {
@@ -286,12 +292,18 @@ pub enum VoiceCmd {
 /// Returns `(cmd_sender, video_frames)` — the caller stores both.
 pub fn spawn_voice_engine(
     rt: tokio::runtime::Handle,
-) -> (tokio::sync::mpsc::UnboundedSender<VoiceCmd>, VideoFrames) {
+) -> (
+    tokio::sync::mpsc::UnboundedSender<VoiceCmd>,
+    VideoFrames,
+    std::sync::mpsc::Receiver<()>,
+) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
     let video_frames: VideoFrames = Arc::new(Mutex::new(HashMap::new()));
     let vf = Arc::clone(&video_frames);
     rt.spawn(async move {
         crate::voice_livekit::run_engine(rx, vf).await;
+        let _ = done_tx.send(());
     });
-    (tx, video_frames)
+    (tx, video_frames, done_rx)
 }

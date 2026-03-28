@@ -179,6 +179,8 @@ fn quick_init_check() -> Result<String, Box<dyn std::error::Error>> {
         &gpu.context,
         width,
         height,
+        width,
+        height,
         fps,
     ) {
         Ok(_) => println!("OK"),

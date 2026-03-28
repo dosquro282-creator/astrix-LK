@@ -26,7 +26,8 @@ use windows::Win32::Media::MediaFoundation::{
     MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_REGISTER_TYPE_INFO,
     MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
     MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MFVideoFormat_H264, MFVideoFormat_NV12,
-    MFMediaType_Video, MFVideoInterlace_Progressive, MF_E_TRANSFORM_NEED_MORE_INPUT,
+    MFMediaType_Video, MFVideoInterlace_Progressive, MF_E_NOTACCEPTING,
+    MF_E_TRANSFORM_NEED_MORE_INPUT,
     MF_TRANSFORM_ASYNC_UNLOCK, MFTEnumEx,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
@@ -83,6 +84,136 @@ const CODECAPI_AVEncVideoEncodeSliceSizeControlMode: GUID =
 /// Raw MediaEventType values (avoids type ambiguity across windows-rs versions).
 const ME_TRANSFORM_NEED_INPUT: u32 = 601;
 const ME_TRANSFORM_HAVE_OUTPUT: u32 = 602;
+const ASYNC_HAVE_OUTPUT_WAIT_MS: u32 = 8;
+
+#[derive(Default, Clone, Copy)]
+struct PolledEvents {
+    found: bool,
+    need_input: u32,
+    have_output: u32,
+}
+
+#[derive(Default, Clone, Copy)]
+struct AsyncWaitTrace {
+    found: bool,
+    buffered: bool,
+    need_input: u32,
+    have_output: u32,
+    wait_us: u64,
+    poll_loops: u32,
+}
+
+#[derive(Default, Clone, Copy)]
+struct DrainPendingTrace {
+    found_output: bool,
+    queued_frame: bool,
+    wait: AsyncWaitTrace,
+    drain_us: u64,
+    encode_us: u64,
+}
+
+#[derive(Default)]
+struct SubmitDiagWindow {
+    submits: u64,
+    sample_us_total: u64,
+    initial_ok: u64,
+    initial_not_accepting: u64,
+    initial_err: u64,
+    initial_us_total: u64,
+    need_wait_calls: u64,
+    need_wait_found: u64,
+    need_wait_buffered: u64,
+    need_wait_us_total: u64,
+    need_wait_loops_total: u64,
+    need_wait_seen_need_total: u64,
+    need_wait_seen_have_total: u64,
+    after_need_ok: u64,
+    after_need_not_accepting: u64,
+    after_need_err: u64,
+    after_need_us_total: u64,
+    drain_calls: u64,
+    drain_found_output: u64,
+    drain_queued_frame: u64,
+    drain_wait_us_total: u64,
+    drain_output_us_total: u64,
+    drain_encode_us_total: u64,
+    retry_after_drain_ok: u64,
+    retry_after_drain_not_accepting: u64,
+    retry_after_drain_err: u64,
+    retry_after_drain_us_total: u64,
+    total_submit_us_total: u64,
+    meta_queue_max: usize,
+    pending_outputs_max: usize,
+    need_input_buffered_max: u32,
+    have_output_buffered_max: u32,
+}
+
+impl SubmitDiagWindow {
+    fn avg_us(total: u64, count: u64) -> u64 {
+        if count == 0 { 0 } else { total / count }
+    }
+
+    fn maybe_log(&mut self, window_start: &mut std::time::Instant, encoder_name: &str) {
+        let elapsed = window_start.elapsed();
+        if elapsed < std::time::Duration::from_secs(1) || self.submits == 0 {
+            return;
+        }
+        let secs = elapsed.as_secs_f32().max(0.001);
+        eprintln!(
+            "[mft_encoder][submit][summary] encoder=\"{}\" rate={:.1}/s sample_avg={}us initial ok={} not_accepting={} err={} avg={}us wait_need call={} found={} buffered={} avg={}us loops_avg={:.1} seen_need_avg={:.1} seen_have_avg={:.1}",
+            encoder_name,
+            self.submits as f32 / secs,
+            Self::avg_us(self.sample_us_total, self.submits),
+            self.initial_ok,
+            self.initial_not_accepting,
+            self.initial_err,
+            Self::avg_us(self.initial_us_total, self.submits),
+            self.need_wait_calls,
+            self.need_wait_found,
+            self.need_wait_buffered,
+            Self::avg_us(self.need_wait_us_total, self.need_wait_calls),
+            if self.need_wait_calls == 0 {
+                0.0
+            } else {
+                self.need_wait_loops_total as f32 / self.need_wait_calls as f32
+            },
+            if self.need_wait_calls == 0 {
+                0.0
+            } else {
+                self.need_wait_seen_need_total as f32 / self.need_wait_calls as f32
+            },
+            if self.need_wait_calls == 0 {
+                0.0
+            } else {
+                self.need_wait_seen_have_total as f32 / self.need_wait_calls as f32
+            },
+        );
+        eprintln!(
+            "[mft_encoder][submit][summary] after_need ok={} not_accepting={} err={} avg={}us drain call={} found_output={} queued={} wait_avg={}us drain_avg={}us drained_encode_avg={}us retry ok={} not_accepting={} err={} avg={}us total_avg={}us meta_q_max={} pending_max={} need_buf_max={} have_buf_max={}",
+            self.after_need_ok,
+            self.after_need_not_accepting,
+            self.after_need_err,
+            Self::avg_us(self.after_need_us_total, self.after_need_ok + self.after_need_not_accepting + self.after_need_err),
+            self.drain_calls,
+            self.drain_found_output,
+            self.drain_queued_frame,
+            Self::avg_us(self.drain_wait_us_total, self.drain_calls),
+            Self::avg_us(self.drain_output_us_total, self.drain_found_output),
+            Self::avg_us(self.drain_encode_us_total, self.drain_queued_frame),
+            self.retry_after_drain_ok,
+            self.retry_after_drain_not_accepting,
+            self.retry_after_drain_err,
+            Self::avg_us(self.retry_after_drain_us_total, self.retry_after_drain_ok + self.retry_after_drain_not_accepting + self.retry_after_drain_err),
+            Self::avg_us(self.total_submit_us_total, self.submits),
+            self.meta_queue_max,
+            self.pending_outputs_max,
+            self.need_input_buffered_max,
+            self.have_output_buffered_max,
+        );
+        *self = Self::default();
+        *window_start = std::time::Instant::now();
+    }
+}
 
 /// Get event from IMFMediaEventGenerator with MF_EVENT_FLAG_NO_WAIT (non-blocking).
 unsafe fn get_event_no_wait(
@@ -102,24 +233,26 @@ unsafe fn get_event_blocking(
     )
 }
 
-/// Non-blocking: drain events until target is found. Returns true if found, false if no event.
-/// When searching for HaveOutput, this may consume NeedInput events — the count of consumed
-/// NeedInput events is returned in the second tuple element so the caller can buffer them
-/// for submit() to use.
+/// Non-blocking: drain queued events until the target is found or the queue is empty.
+/// Any non-target NeedInput / HaveOutput events are counted so the caller can buffer them
+/// instead of silently dropping async MFT state transitions.
 /// Phase 4.6 pipelined collect.
-fn poll_event_no_wait(event_gen: &IMFMediaEventGenerator, target_type: u32) -> (bool, u32) {
-    let mut need_input_consumed: u32 = 0;
+fn poll_event_no_wait(event_gen: &IMFMediaEventGenerator, target_type: u32) -> PolledEvents {
+    let mut events = PolledEvents::default();
     loop {
         let event = match unsafe { get_event_no_wait(event_gen) } {
             Ok(e) => e,
-            Err(_) => return (false, need_input_consumed),
+            Err(_) => return events,
         };
         let mt: u32 = unsafe { event.GetType() }.unwrap_or(0);
         if mt == target_type {
-            return (true, need_input_consumed);
+            events.found = true;
+            return events;
         }
         if mt == ME_TRANSFORM_NEED_INPUT {
-            need_input_consumed += 1;
+            events.need_input += 1;
+        } else if mt == ME_TRANSFORM_HAVE_OUTPUT {
+            events.have_output += 1;
         }
     }
 }
@@ -127,44 +260,45 @@ fn poll_event_no_wait(event_gen: &IMFMediaEventGenerator, target_type: u32) -> (
 /// Wait for a specific MFT media event. First tries a non-blocking poll (zero jitter for
 /// the common case where the event is already queued), then falls back to a blocking
 /// GetEvent call which suspends the thread until the MFT signals — no busy-wait, no sleep jitter.
-/// Returns (found, consumed_need_input_count) so callers can buffer consumed NeedInput events.
-fn poll_event(event_gen: &IMFMediaEventGenerator, target_type: u32, timeout_ms: u32) -> (bool, u32) {
+/// Returns buffered counts for any non-target NeedInput / HaveOutput events that were observed.
+fn poll_event_trace(
+    event_gen: &IMFMediaEventGenerator,
+    target_type: u32,
+    timeout_ms: u32,
+) -> (PolledEvents, u32) {
     let deadline = std::time::Instant::now()
         + std::time::Duration::from_millis(timeout_ms as u64);
-    let mut need_input_consumed: u32 = 0;
+    let mut events = PolledEvents::default();
+    let mut poll_loops: u32 = 0;
 
-    // Fast path: check if event is already queued (non-blocking).
-    if let Ok(event) = unsafe { get_event_no_wait(event_gen) } {
-        let mt: u32 = unsafe { event.GetType() }.unwrap_or(0);
-        if mt == target_type {
-            return (true, need_input_consumed);
-        }
-        if mt == ME_TRANSFORM_NEED_INPUT {
-            need_input_consumed += 1;
-        }
-    }
-
-    // Slow path: blocking wait. GetEvent(0) suspends the thread until the MFT signals
-    // an event, avoiding busy-poll jitter. Loop in case we get a different event type.
     loop {
-        if std::time::Instant::now() >= deadline {
-            return (false, need_input_consumed);
-        }
-        match unsafe { get_event_blocking(event_gen) } {
-            Ok(event) => {
-                let mt: u32 = unsafe { event.GetType() }.unwrap_or(0);
-                if mt == target_type {
-                    return (true, need_input_consumed);
-                }
-                if mt == ME_TRANSFORM_NEED_INPUT {
-                    need_input_consumed += 1;
-                }
+        if let Ok(event) = unsafe { get_event_no_wait(event_gen) } {
+            let mt: u32 = unsafe { event.GetType() }.unwrap_or(0);
+            if mt == target_type {
+                events.found = true;
+                return (events, poll_loops);
             }
-            Err(_) => {
-                return (false, need_input_consumed);
+            if mt == ME_TRANSFORM_NEED_INPUT {
+                events.need_input += 1;
+            } else if mt == ME_TRANSFORM_HAVE_OUTPUT {
+                events.have_output += 1;
             }
+            continue;
         }
+
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return (events, poll_loops);
+        }
+
+        let remaining = deadline.saturating_duration_since(now);
+        poll_loops = poll_loops.saturating_add(1);
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(1)));
     }
+}
+
+fn poll_event(event_gen: &IMFMediaEventGenerator, target_type: u32, timeout_ms: u32) -> PolledEvents {
+    poll_event_trace(event_gen, target_type, timeout_ms).0
 }
 
 #[derive(Error, Debug)]
@@ -197,6 +331,14 @@ struct FrameMeta {
     rtp_ts: u32,
     capture_us: i64,
     submit_time: std::time::Instant,
+    requested_key_frame: bool,
+}
+
+struct PendingOutput {
+    frame: EncodedFrame,
+    rtp_ts: u32,
+    capture_us: i64,
+    encode_us: u64,
 }
 
 /// MFT H.264 encoder. Zero-copy via IMFDXGIBuffer.
@@ -221,6 +363,16 @@ pub struct MftH264Encoder {
     /// searching for HaveOutput. Track how many NeedInput events were consumed so
     /// submit() can skip the event wait when one is already buffered.
     need_input_buffered: u32,
+    /// Symmetric buffer for HaveOutput events consumed while another caller is
+    /// waiting for NeedInput. Dropping these events breaks the async MFT contract
+    /// and can leave the encoder permanently MF_E_NOTACCEPTING.
+    have_output_buffered: u32,
+    /// Encoded outputs drained inside submit() when the async MFT reports
+    /// MF_E_NOTACCEPTING. collect()/collect_blocking() returns them first.
+    pending_outputs: VecDeque<PendingOutput>,
+    submit_diag_window_start: std::time::Instant,
+    submit_diag: SubmitDiagWindow,
+    submit_trace_verbose: bool,
 }
 
 impl MftH264Encoder {
@@ -279,8 +431,17 @@ impl MftH264Encoder {
                 eprintln!("[mft_encoder] MF_LOW_LATENCY set on MFT");
             }
         }
-        // ICodecAPI: B-frames=0, low-latency mode, rate control, GOP=2 sec, mean bitrate
+        // ICodecAPI: B-frames=0, low-latency mode, rate control, long GOP, mean bitrate
         if let Ok(codec) = transform.cast::<ICodecAPI>() {
+            // Keep the MFT's own GOP much longer than the old 2 s default.
+            // We already drive recovery with startup IDRs + periodic forced IDR/GIR.
+            // A short internal GOP adds large intra spikes that collapse WAN FPS.
+            let gop_secs = std::env::var("ASTRIX_MFT_GOP_SECS")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(12)
+                .max(1);
+            let gop = fps.saturating_mul(gop_secs);
             unsafe {
                 let _ = codec.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &VARIANT::from(0u32));
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonLowLatency, &VARIANT::from(1u32));
@@ -292,8 +453,6 @@ impl MftH264Encoder {
                     let _ = codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::from(0u32));
                 }
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(bitrate_bps));
-                // GOP = fps*2: keyframe every 2 seconds (e.g. 60 fps → GOP 120)
-                let gop = fps.saturating_mul(2);
                 let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(gop));
                 // Phase 4.2: speed tuning — software MFT ~20–50% faster, hardware typically ignores
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonQualityVsSpeed, &VARIANT::from(100u32));
@@ -318,7 +477,7 @@ impl MftH264Encoder {
                     }
                 }
             }
-            eprintln!("[mft_encoder] ICodecAPI: B-frames=0, low-latency, rate-control={}, GOP={}, bitrate={} bps, QualityVsSpeed=100, CABAC=0, WorkerThreads=4", if fps >= 60 { "CBR" } else { "LowDelayVBR" }, fps.saturating_mul(2), bitrate_bps);
+            eprintln!("[mft_encoder] ICodecAPI: B-frames=0, low-latency, rate-control={}, GOP={}, bitrate={} bps, QualityVsSpeed=100, CABAC=0, WorkerThreads=4", if fps >= 60 { "CBR" } else { "LowDelayVBR" }, gop, bitrate_bps);
         }
 
         // Detect async MFT: try to get IMFMediaEventGenerator (only present on async MFTs).
@@ -349,6 +508,13 @@ impl MftH264Encoder {
             is_async,
             meta_queue: VecDeque::new(),
             need_input_buffered: 0,
+            have_output_buffered: 0,
+            pending_outputs: VecDeque::new(),
+            submit_diag_window_start: std::time::Instant::now(),
+            submit_diag: SubmitDiagWindow::default(),
+            submit_trace_verbose: std::env::var("ASTRIX_MFT_SUBMIT_TRACE")
+                .map(|v| v != "0")
+                .unwrap_or(false),
         })
     }
 
@@ -367,46 +533,75 @@ impl MftH264Encoder {
         let sample = create_sample_from_texture(texture, timestamp_us, self.fps)?;
 
         if self.is_async {
-            return self.encode_async(sample, timestamp_us);
+            let mut frames = self.encode_async(sample, timestamp_us, key_frame)?;
+            for frame in frames.iter_mut() {
+                frame.key_frame = key_frame;
+            }
+            return Ok(frames);
         }
 
         unsafe {
             self.transform.ProcessInput(0, &sample, 0)?;
         }
         self.frame_count += 1;
-        self.drain_output(timestamp_us)
+        let mut frames = self.drain_output(timestamp_us)?;
+        for frame in frames.iter_mut() {
+            frame.key_frame = key_frame;
+        }
+        Ok(frames)
     }
 
     /// Event-driven encode for async MFTs (NVIDIA NVENC).
     /// Uses IMFMediaEventGenerator to wait for NeedInput/HaveOutput events.
-    fn encode_async(&mut self, sample: IMFSample, original_timestamp_us: i64) -> Result<Vec<EncodedFrame>, MftEncoderError> {
-        let event_gen = self.event_gen.as_ref().ok_or_else(|| {
-            MftEncoderError::Encode("async MFT missing IMFMediaEventGenerator".into())
-        })?;
-
+    fn encode_async(
+        &mut self,
+        sample: IMFSample,
+        original_timestamp_us: i64,
+        key_frame: bool,
+    ) -> Result<Vec<EncodedFrame>, MftEncoderError> {
         let mut frames = Vec::new();
+        let output_wait_ms = self.async_output_timeout_ms(key_frame);
 
-        // Wait for METransformNeedInput before calling ProcessInput.
-        let (found_ni, _) = poll_event(event_gen, ME_TRANSFORM_NEED_INPUT, 500);
-        if !found_ni {
-            return Err(MftEncoderError::Encode(
-                "async MFT: timeout waiting for METransformNeedInput".into(),
-            ));
-        }
-
-        unsafe {
-            self.transform.ProcessInput(0, &sample, 0).map_err(|e| {
-                MftEncoderError::Encode(format!("async ProcessInput: {:?}", e))
-            })?;
+        // Some async NVIDIA MFTs accept the first input before they emit a
+        // NeedInput event. Try ProcessInput directly first; only wait for
+        // NeedInput when the transform reports MF_E_NOTACCEPTING.
+        let process_input = unsafe { self.transform.ProcessInput(0, &sample, 0) };
+        if let Err(e) = process_input {
+            if e.code() != MF_E_NOTACCEPTING {
+                return Err(MftEncoderError::Encode(format!("async ProcessInput: {:?}", e)));
+            }
+            if let Some(frame) =
+                self.drain_async_ready_output(original_timestamp_us, output_wait_ms)?
+            {
+                frames.push(frame);
+            } else {
+                return Err(MftEncoderError::Encode(
+                    "async MFT: timeout waiting for METransformHaveOutput".into(),
+                ));
+            }
+            match unsafe { self.transform.ProcessInput(0, &sample, 0) } {
+                Ok(()) => {}
+                Err(err) if err.code() == MF_E_NOTACCEPTING => {
+                    return Err(MftEncoderError::Encode(
+                        "async MFT: still not accepting after draining output".into(),
+                    ));
+                }
+                Err(err) => {
+                    return Err(MftEncoderError::Encode(format!(
+                        "async ProcessInput after drain: {:?}",
+                        err
+                    )));
+                }
+            }
         }
         self.frame_count += 1;
 
         // Wait for METransformHaveOutput, then drain one frame. Async MFT (NVENC) signals
-        // one HaveOutput per output sample; calling ProcessOutput again without another
-        // HaveOutput returns E_UNEXPECTED. Sync MFT uses drain_output (full loop).
-        let (found_ho, _) = poll_event(event_gen, ME_TRANSFORM_HAVE_OUTPUT, 500);
-        if found_ho {
-            frames.extend(self.drain_output_once(original_timestamp_us)?);
+        // one HaveOutput per output sample; calling ProcessOutput without a matching
+        // event can return E_UNEXPECTED or worse on NVIDIA. Buffered events let us
+        // keep strict event ordering even if another wait consumed the signal earlier.
+        if let Some(frame) = self.drain_async_ready_output(original_timestamp_us, output_wait_ms)? {
+            frames.push(frame);
         }
 
         Ok(frames)
@@ -421,6 +616,7 @@ impl MftH264Encoder {
         key_frame: bool,
         rtp_ts: u32,
         capture_us: i64,
+        need_input_timeout_ms: u32,
     ) -> Result<(), MftEncoderError> {
         if !self.is_async {
             return Err(MftEncoderError::Encode(
@@ -430,34 +626,396 @@ impl MftH264Encoder {
         if key_frame {
             self.force_key_frame()?;
         }
+        self.submit_diag
+            .maybe_log(&mut self.submit_diag_window_start, &self.encoder_name);
+        let submit_idx = self.frame_count + 1;
+        let submit_start = std::time::Instant::now();
+        let meta_before = self.meta_queue.len();
+        let pending_before = self.pending_outputs.len();
+        let need_buf_before = self.need_input_buffered;
+        let have_buf_before = self.have_output_buffered;
+
+        let sample_start = std::time::Instant::now();
         let sample = create_sample_from_texture(texture, ts_us, self.fps)?;
-        let event_gen = self.event_gen.as_ref().ok_or_else(|| {
-            MftEncoderError::Encode("async MFT missing IMFMediaEventGenerator".into())
-        })?;
-        // Keyframes at 1440p can take 50–80ms; use 300ms to avoid startup failure.
-        // Phase 4.6 fix: collect() may have already consumed NeedInput events while
-        // searching for HaveOutput. Use the buffered count before waiting for a new one.
-        if self.need_input_buffered > 0 {
-            self.need_input_buffered -= 1;
-        } else {
-            let (found, _) = poll_event(event_gen, ME_TRANSFORM_NEED_INPUT, 300);
-            if !found {
-                return Err(MftEncoderError::Encode(
-                    "async MFT: timeout waiting for METransformNeedInput".into(),
-                ));
+        let sample_us = sample_start.elapsed().as_micros() as u64;
+
+        let initial_pi_start = std::time::Instant::now();
+        let initial_process_input = unsafe { self.transform.ProcessInput(0, &sample, 0) };
+        let initial_pi_us = initial_pi_start.elapsed().as_micros() as u64;
+
+        let mut need_wait_trace = AsyncWaitTrace::default();
+        let mut need_wait_used = false;
+        let mut after_need_pi_us: u64 = 0;
+        let mut after_need_state = "skipped";
+        let mut drain_trace = DrainPendingTrace::default();
+        let mut retry_after_drain_us: u64 = 0;
+        let mut retry_after_drain_state = "skipped";
+
+        if let Err(ref e) = initial_process_input {
+            if e.code() != MF_E_NOTACCEPTING {
+                if self.submit_trace_verbose {
+                    eprintln!(
+                        "[mft_encoder][submit #{}] key={} ts_us={} meta_q {}->{} pending {}->{} need_buf {}->{} have_buf {}->{} initial=err total={}us err={:?}",
+                        submit_idx,
+                        key_frame,
+                        ts_us,
+                        meta_before,
+                        self.meta_queue.len(),
+                        pending_before,
+                        self.pending_outputs.len(),
+                        need_buf_before,
+                        self.need_input_buffered,
+                        have_buf_before,
+                        self.have_output_buffered,
+                        submit_start.elapsed().as_micros() as u64,
+                        e,
+                    );
+                }
+                return Err(MftEncoderError::Encode(format!("async ProcessInput: {:?}", e)));
             }
-        }
-        unsafe {
-            self.transform.ProcessInput(0, &sample, 0).map_err(|e| {
-                MftEncoderError::Encode(format!("async ProcessInput: {:?}", e))
-            })?;
+            // Some async MFTs can accept another input after METransformNeedInput
+            // without having a completed output ready yet. Try that first to keep
+            // the pipeline depth >1; only fall back to draining output when the
+            // transform still refuses more input.
+            let mut accepted_after_need_input = false;
+            need_wait_used = true;
+            need_wait_trace =
+                self.wait_async_event_trace(ME_TRANSFORM_NEED_INPUT, need_input_timeout_ms)?;
+            if need_wait_trace.found {
+                let after_need_start = std::time::Instant::now();
+                match unsafe { self.transform.ProcessInput(0, &sample, 0) } {
+                    Ok(()) => {
+                        accepted_after_need_input = true;
+                        after_need_state = "ok";
+                    }
+                    Err(err) if err.code() == MF_E_NOTACCEPTING => {
+                        after_need_state = "not_accepting";
+                    }
+                    Err(err) => {
+                        after_need_pi_us = after_need_start.elapsed().as_micros() as u64;
+                        if self.submit_trace_verbose {
+                            eprintln!(
+                                "[mft_encoder][submit #{}] key={} ts_us={} initial=not_accepting wait_need(found={}, buffered={}, us={}, loops={}, seen_need={}, seen_have={}) after_need=err us={} meta_q {}->{} pending {}->{} err={:?}",
+                                submit_idx,
+                                key_frame,
+                                ts_us,
+                                need_wait_trace.found,
+                                need_wait_trace.buffered,
+                                need_wait_trace.wait_us,
+                                need_wait_trace.poll_loops,
+                                need_wait_trace.need_input,
+                                need_wait_trace.have_output,
+                                after_need_pi_us,
+                                meta_before,
+                                self.meta_queue.len(),
+                                pending_before,
+                                self.pending_outputs.len(),
+                                err,
+                            );
+                        }
+                        return Err(MftEncoderError::Encode(format!(
+                            "async ProcessInput after NeedInput: {:?}",
+                            err
+                        )));
+                    }
+                }
+                after_need_pi_us = after_need_start.elapsed().as_micros() as u64;
+            } else {
+                after_need_state = "need_input_timeout";
+            }
+            if !accepted_after_need_input {
+                drain_trace = self.drain_output_to_pending_trace(need_input_timeout_ms)?;
+                if !drain_trace.queued_frame {
+                    if self.submit_trace_verbose {
+                        eprintln!(
+                            "[mft_encoder][submit #{}] key={} ts_us={} initial=not_accepting wait_need(found={}, buffered={}, us={}, loops={}, seen_need={}, seen_have={}) after_need={} us={} drain(found_output={}, queued={}, wait_us={}, drain_us={}, drained_encode_us={}) total={}us meta_q {}->{} pending {}->{} need_buf {}->{} have_buf {}->{}",
+                            submit_idx,
+                            key_frame,
+                            ts_us,
+                            need_wait_trace.found,
+                            need_wait_trace.buffered,
+                            need_wait_trace.wait_us,
+                            need_wait_trace.poll_loops,
+                            need_wait_trace.need_input,
+                            need_wait_trace.have_output,
+                            after_need_state,
+                            after_need_pi_us,
+                            drain_trace.found_output,
+                            drain_trace.queued_frame,
+                            drain_trace.wait.wait_us,
+                            drain_trace.drain_us,
+                            drain_trace.encode_us,
+                            submit_start.elapsed().as_micros() as u64,
+                            meta_before,
+                            self.meta_queue.len(),
+                            pending_before,
+                            self.pending_outputs.len(),
+                            need_buf_before,
+                            self.need_input_buffered,
+                            have_buf_before,
+                            self.have_output_buffered,
+                        );
+                    }
+                    return Err(MftEncoderError::Encode(
+                        "async MFT: timeout waiting for METransformHaveOutput".into(),
+                    ));
+                }
+                let retry_after_drain_start = std::time::Instant::now();
+                match unsafe { self.transform.ProcessInput(0, &sample, 0) } {
+                    Ok(()) => {
+                        retry_after_drain_state = "ok";
+                    }
+                    Err(err) if err.code() == MF_E_NOTACCEPTING => {
+                        retry_after_drain_us =
+                            retry_after_drain_start.elapsed().as_micros() as u64;
+                        retry_after_drain_state = "not_accepting";
+                        if self.submit_trace_verbose {
+                            eprintln!(
+                                "[mft_encoder][submit #{}] key={} ts_us={} initial=not_accepting wait_need(found={}, buffered={}, us={}, loops={}, seen_need={}, seen_have={}) after_need={} us={} drain(found_output={}, queued={}, wait_us={}, drain_us={}, drained_encode_us={}) retry_after_drain={} us={} total={}us meta_q {}->{} pending {}->{} need_buf {}->{} have_buf {}->{}",
+                                submit_idx,
+                                key_frame,
+                                ts_us,
+                                need_wait_trace.found,
+                                need_wait_trace.buffered,
+                                need_wait_trace.wait_us,
+                                need_wait_trace.poll_loops,
+                                need_wait_trace.need_input,
+                                need_wait_trace.have_output,
+                                after_need_state,
+                                after_need_pi_us,
+                                drain_trace.found_output,
+                                drain_trace.queued_frame,
+                                drain_trace.wait.wait_us,
+                                drain_trace.drain_us,
+                                drain_trace.encode_us,
+                                retry_after_drain_state,
+                                retry_after_drain_us,
+                                submit_start.elapsed().as_micros() as u64,
+                                meta_before,
+                                self.meta_queue.len(),
+                                pending_before,
+                                self.pending_outputs.len(),
+                                need_buf_before,
+                                self.need_input_buffered,
+                                have_buf_before,
+                                self.have_output_buffered,
+                            );
+                        }
+                        return Err(MftEncoderError::Encode(
+                            "async MFT: still not accepting after draining output".into(),
+                        ));
+                    }
+                    Err(err) => {
+                        retry_after_drain_us =
+                            retry_after_drain_start.elapsed().as_micros() as u64;
+                        retry_after_drain_state = "err";
+                        if self.submit_trace_verbose {
+                            eprintln!(
+                                "[mft_encoder][submit #{}] key={} ts_us={} initial=not_accepting wait_need(found={}, buffered={}, us={}, loops={}, seen_need={}, seen_have={}) after_need={} us={} drain(found_output={}, queued={}, wait_us={}, drain_us={}, drained_encode_us={}) retry_after_drain=err us={} total={}us meta_q {}->{} pending {}->{} need_buf {}->{} have_buf {}->{} err={:?}",
+                                submit_idx,
+                                key_frame,
+                                ts_us,
+                                need_wait_trace.found,
+                                need_wait_trace.buffered,
+                                need_wait_trace.wait_us,
+                                need_wait_trace.poll_loops,
+                                need_wait_trace.need_input,
+                                need_wait_trace.have_output,
+                                after_need_state,
+                                after_need_pi_us,
+                                drain_trace.found_output,
+                                drain_trace.queued_frame,
+                                drain_trace.wait.wait_us,
+                                drain_trace.drain_us,
+                                drain_trace.encode_us,
+                                retry_after_drain_us,
+                                submit_start.elapsed().as_micros() as u64,
+                                meta_before,
+                                self.meta_queue.len(),
+                                pending_before,
+                                self.pending_outputs.len(),
+                                need_buf_before,
+                                self.need_input_buffered,
+                                have_buf_before,
+                                self.have_output_buffered,
+                                err,
+                            );
+                        }
+                        return Err(MftEncoderError::Encode(format!(
+                            "async ProcessInput after drain: {:?}",
+                            err
+                        )));
+                    }
+                }
+                retry_after_drain_us = retry_after_drain_start.elapsed().as_micros() as u64;
+            }
         }
         self.frame_count += 1;
         self.meta_queue.push_back(FrameMeta {
             rtp_ts,
             capture_us,
             submit_time: std::time::Instant::now(),
+            requested_key_frame: key_frame,
         });
+        let total_submit_us = submit_start.elapsed().as_micros() as u64;
+        self.submit_diag.submits = self.submit_diag.submits.saturating_add(1);
+        self.submit_diag.sample_us_total =
+            self.submit_diag.sample_us_total.saturating_add(sample_us);
+        self.submit_diag.initial_us_total =
+            self.submit_diag.initial_us_total.saturating_add(initial_pi_us);
+        match &initial_process_input {
+            Ok(()) => self.submit_diag.initial_ok = self.submit_diag.initial_ok.saturating_add(1),
+            Err(err) if err.code() == MF_E_NOTACCEPTING => {
+                self.submit_diag.initial_not_accepting =
+                    self.submit_diag.initial_not_accepting.saturating_add(1)
+            }
+            Err(_) => self.submit_diag.initial_err = self.submit_diag.initial_err.saturating_add(1),
+        }
+        if need_wait_used {
+            self.submit_diag.need_wait_calls =
+                self.submit_diag.need_wait_calls.saturating_add(1);
+            if need_wait_trace.found {
+                self.submit_diag.need_wait_found =
+                    self.submit_diag.need_wait_found.saturating_add(1);
+            }
+            if need_wait_trace.buffered {
+                self.submit_diag.need_wait_buffered =
+                    self.submit_diag.need_wait_buffered.saturating_add(1);
+            }
+            self.submit_diag.need_wait_us_total = self
+                .submit_diag
+                .need_wait_us_total
+                .saturating_add(need_wait_trace.wait_us);
+            self.submit_diag.need_wait_loops_total = self
+                .submit_diag
+                .need_wait_loops_total
+                .saturating_add(need_wait_trace.poll_loops as u64);
+            self.submit_diag.need_wait_seen_need_total = self
+                .submit_diag
+                .need_wait_seen_need_total
+                .saturating_add(need_wait_trace.need_input as u64);
+            self.submit_diag.need_wait_seen_have_total = self
+                .submit_diag
+                .need_wait_seen_have_total
+                .saturating_add(need_wait_trace.have_output as u64);
+        }
+        if need_wait_used && need_wait_trace.found {
+            self.submit_diag.after_need_us_total = self
+                .submit_diag
+                .after_need_us_total
+                .saturating_add(after_need_pi_us);
+            match after_need_state {
+                "ok" => self.submit_diag.after_need_ok =
+                    self.submit_diag.after_need_ok.saturating_add(1),
+                "not_accepting" => self.submit_diag.after_need_not_accepting =
+                    self.submit_diag.after_need_not_accepting.saturating_add(1),
+                "err" => self.submit_diag.after_need_err =
+                    self.submit_diag.after_need_err.saturating_add(1),
+                _ => {}
+            }
+        }
+        if need_wait_used && after_need_state != "ok" {
+            self.submit_diag.drain_calls = self.submit_diag.drain_calls.saturating_add(1);
+            if drain_trace.found_output {
+                self.submit_diag.drain_found_output =
+                    self.submit_diag.drain_found_output.saturating_add(1);
+            }
+            if drain_trace.queued_frame {
+                self.submit_diag.drain_queued_frame =
+                    self.submit_diag.drain_queued_frame.saturating_add(1);
+            }
+            self.submit_diag.drain_wait_us_total = self
+                .submit_diag
+                .drain_wait_us_total
+                .saturating_add(drain_trace.wait.wait_us);
+            self.submit_diag.drain_output_us_total = self
+                .submit_diag
+                .drain_output_us_total
+                .saturating_add(drain_trace.drain_us);
+            self.submit_diag.drain_encode_us_total = self
+                .submit_diag
+                .drain_encode_us_total
+                .saturating_add(drain_trace.encode_us);
+            if drain_trace.queued_frame {
+                self.submit_diag.retry_after_drain_us_total = self
+                    .submit_diag
+                    .retry_after_drain_us_total
+                    .saturating_add(retry_after_drain_us);
+                match retry_after_drain_state {
+                    "ok" => self.submit_diag.retry_after_drain_ok = self
+                        .submit_diag
+                        .retry_after_drain_ok
+                        .saturating_add(1),
+                    "not_accepting" => self.submit_diag.retry_after_drain_not_accepting = self
+                        .submit_diag
+                        .retry_after_drain_not_accepting
+                        .saturating_add(1),
+                    "err" => self.submit_diag.retry_after_drain_err = self
+                        .submit_diag
+                        .retry_after_drain_err
+                        .saturating_add(1),
+                    _ => {}
+                }
+            }
+        }
+        self.submit_diag.total_submit_us_total = self
+            .submit_diag
+            .total_submit_us_total
+            .saturating_add(total_submit_us);
+        self.submit_diag.meta_queue_max =
+            self.submit_diag.meta_queue_max.max(self.meta_queue.len());
+        self.submit_diag.pending_outputs_max = self
+            .submit_diag
+            .pending_outputs_max
+            .max(self.pending_outputs.len());
+        self.submit_diag.need_input_buffered_max = self
+            .submit_diag
+            .need_input_buffered_max
+            .max(self.need_input_buffered);
+        self.submit_diag.have_output_buffered_max = self
+            .submit_diag
+            .have_output_buffered_max
+            .max(self.have_output_buffered);
+        if self.submit_trace_verbose {
+            let initial_state = match &initial_process_input {
+                Ok(()) => "ok",
+                Err(err) if err.code() == MF_E_NOTACCEPTING => "not_accepting",
+                Err(_) => "err",
+            };
+            eprintln!(
+                "[mft_encoder][submit #{}] key={} ts_us={} sample={}us initial={}({}us) wait_need(found={}, buffered={}, us={}, loops={}, seen_need={}, seen_have={}) after_need={}({}us) drain(found_output={}, queued={}, wait_us={}, drain_us={}, drained_encode_us={}) retry_after_drain={}({}us) total={}us meta_q {}->{} pending {}->{} need_buf {}->{} have_buf {}->{}",
+                submit_idx,
+                key_frame,
+                ts_us,
+                sample_us,
+                initial_state,
+                initial_pi_us,
+                need_wait_trace.found,
+                need_wait_trace.buffered,
+                need_wait_trace.wait_us,
+                need_wait_trace.poll_loops,
+                need_wait_trace.need_input,
+                need_wait_trace.have_output,
+                after_need_state,
+                after_need_pi_us,
+                drain_trace.found_output,
+                drain_trace.queued_frame,
+                drain_trace.wait.wait_us,
+                drain_trace.drain_us,
+                drain_trace.encode_us,
+                retry_after_drain_state,
+                retry_after_drain_us,
+                total_submit_us,
+                meta_before,
+                self.meta_queue.len(),
+                pending_before,
+                self.pending_outputs.len(),
+                need_buf_before,
+                self.need_input_buffered,
+                have_buf_before,
+                self.have_output_buffered,
+            );
+        }
         Ok(())
     }
 
@@ -468,11 +1026,10 @@ impl MftH264Encoder {
                 "submit/collect only for async MFT; use encode() for sync".into(),
             ));
         }
-        let event_gen = self.event_gen.as_ref().ok_or_else(|| {
-            MftEncoderError::Encode("async MFT missing IMFMediaEventGenerator".into())
-        })?;
-        let (found, consumed_ni) = poll_event_no_wait(event_gen, ME_TRANSFORM_HAVE_OUTPUT);
-        self.need_input_buffered += consumed_ni;
+        if let Some(pending) = self.pending_outputs.pop_front() {
+            return Ok(Some((vec![pending.frame], pending.rtp_ts, pending.capture_us, pending.encode_us)));
+        }
+        let found = self.poll_async_event_no_wait(ME_TRANSFORM_HAVE_OUTPUT)?;
         if !found {
             return Ok(None);
         }
@@ -487,11 +1044,10 @@ impl MftH264Encoder {
                 "submit/collect only for async MFT; use encode() for sync".into(),
             ));
         }
-        let event_gen = self.event_gen.as_ref().ok_or_else(|| {
-            MftEncoderError::Encode("async MFT missing IMFMediaEventGenerator".into())
-        })?;
-        let (found, consumed_ni) = poll_event(event_gen, ME_TRANSFORM_HAVE_OUTPUT, timeout_ms);
-        self.need_input_buffered += consumed_ni;
+        if let Some(pending) = self.pending_outputs.pop_front() {
+            return Ok(Some((vec![pending.frame], pending.rtp_ts, pending.capture_us, pending.encode_us)));
+        }
+        let found = self.wait_async_event(ME_TRANSFORM_HAVE_OUTPUT, timeout_ms)?;
         if !found {
             return Ok(None);
         }
@@ -499,14 +1055,19 @@ impl MftH264Encoder {
     }
 
     fn collect_inner(&mut self) -> Result<Option<(Vec<EncodedFrame>, u32, i64, u64)>, MftEncoderError> {
+        let Some(frame) = self.drain_output_once(0)? else {
+            return Ok(None);
+        };
         let meta = self.meta_queue.pop_front().unwrap_or_else(|| FrameMeta {
             rtp_ts: 0,
             capture_us: 0,
             submit_time: std::time::Instant::now(),
+            requested_key_frame: false,
         });
         let encode_us = meta.submit_time.elapsed().as_micros() as u64;
-        let frames = self.drain_output_once(0)?;
-        Ok(frames.map(|f| (vec![f], meta.rtp_ts, meta.capture_us, encode_us)))
+        let mut frame = frame;
+        frame.key_frame = meta.requested_key_frame;
+        Ok(Some((vec![frame], meta.rtp_ts, meta.capture_us, encode_us)))
     }
 
     fn force_key_frame(&self) -> Result<(), MftEncoderError> {
@@ -562,8 +1123,23 @@ impl MftH264Encoder {
     }
 
     /// Update bitrate on the fly (CODECAPI_AVEncCommonMeanBitRate).
-    /// TODO: implement via ICodecAPI when Win32_Media_DirectShow is added.
     pub fn set_bitrate(&mut self, bps: u32) -> Result<(), MftEncoderError> {
+        if bps == 0 || self.bitrate_bps == bps {
+            return Ok(());
+        }
+        if let Ok(codec) = self.transform.cast::<ICodecAPI>() {
+            unsafe {
+                codec
+                    .SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(bps))
+                    .map_err(|e| MftEncoderError::Encode(format!("Set bitrate: {:?}", e)))?;
+            }
+        }
+        if let Ok(mt) = unsafe { self.transform.GetOutputCurrentType(0) } {
+            let attrs: &IMFAttributes = &mt;
+            unsafe {
+                let _ = attrs.SetUINT32(&MF_MT_AVG_BITRATE, bps);
+            }
+        }
         self.bitrate_bps = bps;
         Ok(())
     }
@@ -585,6 +1161,144 @@ impl MftH264Encoder {
     }
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    fn async_output_timeout_ms(&self, key_frame: bool) -> u32 {
+        if self.frame_count < 3 || key_frame {
+            120
+        } else {
+            ((2_000u32 / self.fps.max(1)).max(ASYNC_HAVE_OUTPUT_WAIT_MS)).clamp(8, 40)
+        }
+    }
+
+    fn buffer_async_events(&mut self, events: PolledEvents) {
+        self.need_input_buffered = self.need_input_buffered.saturating_add(events.need_input);
+        self.have_output_buffered = self.have_output_buffered.saturating_add(events.have_output);
+    }
+
+    fn take_buffered_event(&mut self, target_type: u32) -> bool {
+        match target_type {
+            ME_TRANSFORM_NEED_INPUT if self.need_input_buffered > 0 => {
+                self.need_input_buffered -= 1;
+                true
+            }
+            ME_TRANSFORM_HAVE_OUTPUT if self.have_output_buffered > 0 => {
+                self.have_output_buffered -= 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn wait_async_event(
+        &mut self,
+        target_type: u32,
+        timeout_ms: u32,
+    ) -> Result<bool, MftEncoderError> {
+        Ok(self.wait_async_event_trace(target_type, timeout_ms)?.found)
+    }
+
+    fn wait_async_event_trace(
+        &mut self,
+        target_type: u32,
+        timeout_ms: u32,
+    ) -> Result<AsyncWaitTrace, MftEncoderError> {
+        let start = std::time::Instant::now();
+        if self.take_buffered_event(target_type) {
+            return Ok(AsyncWaitTrace {
+                found: true,
+                buffered: true,
+                wait_us: start.elapsed().as_micros() as u64,
+                ..Default::default()
+            });
+        }
+        let event_gen = self.event_gen.as_ref().ok_or_else(|| {
+            MftEncoderError::Encode("async MFT missing IMFMediaEventGenerator".into())
+        })?;
+        let (events, poll_loops) = poll_event_trace(event_gen, target_type, timeout_ms);
+        self.buffer_async_events(events);
+        Ok(AsyncWaitTrace {
+            found: events.found,
+            buffered: false,
+            need_input: events.need_input,
+            have_output: events.have_output,
+            wait_us: start.elapsed().as_micros() as u64,
+            poll_loops,
+        })
+    }
+
+    fn poll_async_event_no_wait(&mut self, target_type: u32) -> Result<bool, MftEncoderError> {
+        if self.take_buffered_event(target_type) {
+            return Ok(true);
+        }
+        let event_gen = self.event_gen.as_ref().ok_or_else(|| {
+            MftEncoderError::Encode("async MFT missing IMFMediaEventGenerator".into())
+        })?;
+        let events = poll_event_no_wait(event_gen, target_type);
+        self.buffer_async_events(events);
+        Ok(events.found)
+    }
+
+    fn drain_async_ready_output(
+        &mut self,
+        original_timestamp_us: i64,
+        timeout_ms: u32,
+    ) -> Result<Option<EncodedFrame>, MftEncoderError> {
+        if !self.wait_async_event(ME_TRANSFORM_HAVE_OUTPUT, timeout_ms)? {
+            return Ok(None);
+        }
+        self.drain_output_once(original_timestamp_us)
+    }
+
+    fn drain_output_to_pending(&mut self, timeout_ms: u32) -> Result<bool, MftEncoderError> {
+        Ok(self.drain_output_to_pending_trace(timeout_ms)?.queued_frame)
+    }
+
+    fn drain_output_to_pending_trace(
+        &mut self,
+        timeout_ms: u32,
+    ) -> Result<DrainPendingTrace, MftEncoderError> {
+        let wait = self.wait_async_event_trace(ME_TRANSFORM_HAVE_OUTPUT, timeout_ms)?;
+        if !wait.found {
+            return Ok(DrainPendingTrace {
+                found_output: false,
+                queued_frame: false,
+                wait,
+                ..Default::default()
+            });
+        }
+        let drain_start = std::time::Instant::now();
+        let Some(frame) = self.drain_output_once(0)? else {
+            return Ok(DrainPendingTrace {
+                found_output: true,
+                queued_frame: false,
+                wait,
+                drain_us: drain_start.elapsed().as_micros() as u64,
+                ..Default::default()
+            });
+        };
+        let meta = self.meta_queue.pop_front().unwrap_or_else(|| FrameMeta {
+            rtp_ts: 0,
+            capture_us: 0,
+            submit_time: std::time::Instant::now(),
+            requested_key_frame: false,
+        });
+        let encode_us = meta.submit_time.elapsed().as_micros() as u64;
+        let mut frame = frame;
+        frame.key_frame = meta.requested_key_frame;
+        self.pending_outputs.push_back(PendingOutput {
+            frame,
+            rtp_ts: meta.rtp_ts,
+            capture_us: meta.capture_us,
+            encode_us,
+        });
+        Ok(DrainPendingTrace {
+            found_output: true,
+            queued_frame: true,
+            wait,
+            drain_us: drain_start.elapsed().as_micros() as u64,
+            encode_us,
+        })
     }
 }
 
@@ -938,7 +1652,7 @@ fn extract_h264_from_sample(
     output_buf.extend_from_slice(data);
     unsafe { buffer.Unlock()? };
 
-    let key_frame = is_key_frame_sample(sample);
+    let key_frame = is_key_frame_sample(sample, output_buf);
 
     Ok(Some(EncodedFrame {
         data: output_buf.clone(),
@@ -947,15 +1661,46 @@ fn extract_h264_from_sample(
     }))
 }
 
-fn is_key_frame_sample(sample: &IMFSample) -> bool {
+fn is_key_frame_sample(sample: &IMFSample, annex_b: &[u8]) -> bool {
+    if contains_idr_nal(annex_b) {
+        return true;
+    }
     use windows::Win32::Media::MediaFoundation::MFSampleExtension_VideoEncodePictureType;
 
     unsafe {
         let attrs: &IMFAttributes = sample;
         if let Ok(pt) = attrs.GetUINT32(&MFSampleExtension_VideoEncodePictureType) {
-            pt == 0 // 0 = I-frame (PictureType_I)
+            pt == 0 // 0 = I-frame (PictureType_I); fallback only when Annex B parse failed.
         } else {
             false
         }
     }
+}
+
+fn contains_idr_nal(data: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i + 4 < data.len() {
+        let start_len = if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+            3usize
+        } else if i + 5 < data.len()
+            && data[i] == 0
+            && data[i + 1] == 0
+            && data[i + 2] == 0
+            && data[i + 3] == 1
+        {
+            4usize
+        } else {
+            i += 1;
+            continue;
+        };
+        let nal_header_idx = i + start_len;
+        if nal_header_idx < data.len() {
+            let nal_type = data[nal_header_idx] & 0x1f;
+            if nal_type == 5 {
+                return true;
+            }
+        }
+        i = nal_header_idx.saturating_add(1);
+    }
+    false
 }

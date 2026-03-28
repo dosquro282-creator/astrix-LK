@@ -204,9 +204,21 @@ impl GraphicsCaptureApi {
 
         let pixel_format = DirectXPixelFormat(color_format as i32);
 
-        // Create frame pool (3 buffers: with 1, pool overflows if handler doesn't take frame immediately)
-        let frame_pool =
-            Direct3D11CaptureFramePool::Create(&direct3d_device, pixel_format, 3, item.Size()?)?;
+        // Create frame pool (3 buffers: with 1, pool overflows if handler doesn't take frame immediately).
+        // Prefer the free-threaded pool when available: Microsoft documents that it removes the
+        // DispatcherQueue dependency and raises FrameArrived on the pool's internal worker thread.
+        // That is a better fit for a real-time capture pipeline where the callback must stay out of
+        // the UI/dispatcher path.
+        let frame_pool = if Self::is_free_threaded_frame_pool_supported()? {
+            Direct3D11CaptureFramePool::CreateFreeThreaded(
+                &direct3d_device,
+                pixel_format,
+                3,
+                item.Size()?,
+            )?
+        } else {
+            Direct3D11CaptureFramePool::Create(&direct3d_device, pixel_format, 3, item.Size()?)?
+        };
         let frame_pool = Arc::new(frame_pool);
 
         // Create capture session
@@ -587,6 +599,15 @@ impl GraphicsCaptureApi {
         Ok(ApiInformation::IsPropertyPresent(
             &HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
             &HSTRING::from("DirtyRegionMode"),
+        )? && Self::is_supported()?)
+    }
+
+    /// Checks if the free-threaded frame pool factory is available on this system.
+    #[inline]
+    pub fn is_free_threaded_frame_pool_supported() -> Result<bool, Error> {
+        Ok(ApiInformation::IsMethodPresent(
+            &HSTRING::from("Windows.Graphics.Capture.Direct3D11CaptureFramePool"),
+            &HSTRING::from("CreateFreeThreaded"),
         )? && Self::is_supported()?)
     }
 }

@@ -33,6 +33,8 @@ use crate::d3d11_i420::{D3d11RgbaToI420, D3d11RgbaToI420Scaled, GpuConvertTiming
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::d3d11_nv12::D3d11BgraToNv12;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use crate::dxgi_duplication::{DxgiDuplicationCapture, DxgiDuplicationError};
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::d3d11_rgba::{decode_gpu_failed, mark_decode_gpu_failed, D3d11I420ToRgba, D3d11Nv12ToRgba};
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use webrtc_sys::video_frame_buffer::ffi::{
@@ -40,7 +42,9 @@ use webrtc_sys::video_frame_buffer::ffi::{
     video_frame_buffer_is_d3d11, i420_to_yuv8, yuv8_to_yuv, VideoFrameBuffer,
 };
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-use crate::mft_encoder::MftH264Encoder;
+use crate::encoded_h264::{EncodedBackendKind, EncodedH264Encoder, EncodedH264EncoderError};
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use crate::nvenc_d11::NvencD3d11Error;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::screen_encoder::{EncoderOutput, RawFrame, select_screen_encoder};
 use crate::voice::{decoder_threads_for_resolution, encoder_threads_for_resolution, video_frame_key, EncodingPath, ScreenPreset, VideoFrames, VoiceCmd, VoiceSessionStats};
@@ -71,6 +75,121 @@ fn resample_linear(samples: &[i16], target_len: usize) -> Vec<i16> {
 
 /// Message to mixer: (user_id, 10ms mono i16 samples).
 type MixerFrameMsg = (i64, Vec<i16>);
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+#[derive(Default)]
+struct DxgiPushTraceStats {
+    ticks: u64,
+    slot_ready: u64,
+    slot_missing: u64,
+    pool_missing: u64,
+    late_drop_ticks: u64,
+    late_drop_frames: u64,
+    need_init_ticks: u64,
+    new_content_ticks: u64,
+    reuse_content_ticks: u64,
+    static_reencode_ticks: u64,
+    static_reencode_ok: u64,
+    empty_output_ticks: u64,
+    convert_ok: u64,
+    convert_fail: u64,
+    convert_us_total: u64,
+    flush_ok: u64,
+    flush_fail: u64,
+    flush_us_total: u64,
+    ready_immediate: u64,
+    ready_waited: u64,
+    ready_timeout: u64,
+    ready_wait_us_total: u64,
+    submit_ok: u64,
+    submit_fail: u64,
+    submit_us_total: u64,
+    collect_some: u64,
+    collect_none: u64,
+    collect_err: u64,
+    collect_frames: u64,
+    collect_us_total: u64,
+    encode_ok: u64,
+    encode_fail: u64,
+    encode_us_total: u64,
+    send_calls: u64,
+    sent_frames: u64,
+    send_us_total: u64,
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+impl DxgiPushTraceStats {
+    fn rate(count: u64, secs: f32) -> f32 {
+        count as f32 / secs.max(0.001)
+    }
+
+    fn avg_us(total: u64, count: u64) -> u64 {
+        if count == 0 { 0 } else { total / count }
+    }
+
+    fn maybe_log(
+        &mut self,
+        window_start: &mut std::time::Instant,
+        target_fps: f64,
+        schedule_fps: f64,
+        mode: &str,
+    ) {
+        let elapsed = window_start.elapsed();
+        if elapsed < Duration::from_secs(1) || self.ticks == 0 {
+            return;
+        }
+        let secs = elapsed.as_secs_f32().max(0.001);
+        eprintln!(
+            "[voice][screen][push][summary] tick={:.1} slot_ready={:.1} slot_miss={:.1} pool_miss={} late_ticks={} drop_frames={} need_init={} new_content={} reuse_content={} static_reuse={} empty={} sent={:.1} target={:.0} schedule={:.0} mode={}",
+            Self::rate(self.ticks, secs),
+            Self::rate(self.slot_ready, secs),
+            Self::rate(self.slot_missing, secs),
+            self.pool_missing,
+            self.late_drop_ticks,
+            self.late_drop_frames,
+            self.need_init_ticks,
+            self.new_content_ticks,
+            self.reuse_content_ticks,
+            self.static_reencode_ticks,
+            self.empty_output_ticks,
+            Self::rate(self.sent_frames, secs),
+            target_fps,
+            schedule_fps,
+            mode,
+        );
+        eprintln!(
+            "[voice][screen][push][timing] convert={}/{} avg={}us flush={}/{} avg={}us ready=imm:{} wait:{} timeout:{} avg={}us submit={}/{} avg={}us collect=some:{} none:{} err:{} frames={:.1} avg={}us encode={}/{} avg={}us send_calls={:.1} avg_send={}us",
+            self.convert_ok,
+            self.convert_fail,
+            Self::avg_us(self.convert_us_total, self.convert_ok),
+            self.flush_ok,
+            self.flush_fail,
+            Self::avg_us(self.flush_us_total, self.flush_ok),
+            self.ready_immediate,
+            self.ready_waited,
+            self.ready_timeout,
+            Self::avg_us(self.ready_wait_us_total, self.ready_waited),
+            self.submit_ok,
+            self.submit_fail,
+            Self::avg_us(self.submit_us_total, self.submit_ok),
+            self.collect_some,
+            self.collect_none,
+            self.collect_err,
+            Self::rate(self.collect_frames, secs),
+            Self::avg_us(self.collect_us_total, self.collect_some + self.collect_none),
+            self.encode_ok,
+            self.encode_fail,
+            Self::avg_us(self.encode_us_total, self.encode_ok + self.encode_fail),
+            Self::rate(self.send_calls, secs),
+            Self::avg_us(self.send_us_total, self.send_calls),
+        );
+        *self = Self::default();
+        *window_start = std::time::Instant::now();
+    }
+}
+
+/// RTP clock for video tracks. WebRTC/H264 uses a 90 kHz timestamp base.
+const VIDEO_RTP_CLOCK_HZ: u64 = 90_000;
 
 /// Runs the LiveKit voice engine: receives commands, on Start connects to the room,
 /// publishes mic, subscribes to remotes, updates speaking map. Exits on Stop or channel close.
@@ -185,7 +304,7 @@ async fn run_session(
 
     let ring_for_mic = Arc::clone(&mic_ring);
     let stop_for_mic = Arc::clone(&mic_stop);
-    std::thread::Builder::new()
+    let mic_thread = std::thread::Builder::new()
         .name("livekit-mic-capture".into())
         .spawn(move || {
             if let Err(e) = capture_mic_to_ring(ring_for_mic, stop_for_mic) {
@@ -263,11 +382,13 @@ async fn run_session(
         .await;
     });
 
+    let speaker_stop = Arc::new(AtomicBool::new(false));
     let out_buf_play = Arc::clone(&output_buffer);
-    std::thread::Builder::new()
+    let stop_for_speaker = Arc::clone(&speaker_stop);
+    let speaker_thread = std::thread::Builder::new()
         .name("livekit-speaker".into())
         .spawn(move || {
-            let _ = run_speaker_output(out_buf_play);
+            let _ = run_speaker_output(out_buf_play, stop_for_speaker);
         })
         .ok();
 
@@ -278,7 +399,8 @@ async fn run_session(
     let mut screen_sid: Option<TrackSid> = None;
     // Stop flag for the screen capture OS thread; replaced on each StartScreen.
     let mut screen_stop_flag: Option<Arc<AtomicBool>> = None;
-    // MFT→CPU fallback: when Auto mode MFT fails, encoder thread sends a Native track here.
+    // Encoded-path -> CPU fallback: when the encoded H.264 backend hard-fails,
+    // the encoder thread sends a Native track here.
     let mut screen_fallback_rx: Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>> = None;
     // Publish options saved for potential fallback republish.
     let mut screen_publish_opts_saved: Option<(u64, f64)> = None; // (max_bitrate, max_framerate)
@@ -288,6 +410,7 @@ async fn run_session(
     // preventing multiple tasks from concurrently calling inc_recv_frame_count() on the
     // same telemetry object, which causes recv_fps to grow unboundedly across restarts.
     let mut video_stream_tasks: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+    let mut audio_stream_tasks: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
     let telemetry_enabled = is_telemetry_enabled();
 
     let mut incoming_stats_interval = tokio::time::interval(Duration::from_secs(1));
@@ -330,13 +453,17 @@ async fn run_session(
                     Some(RoomEvent::TrackSubscribed { track, publication, participant }) => {
                         if let RemoteTrack::Audio(audio_track) = track.clone() {
                             let identity = participant.identity().to_string();
+                            let task_key = format!("{}:audio:{}", identity, publication.sid());
+                            if let Some(old) = audio_stream_tasks.remove(&task_key) {
+                                old.abort();
+                            }
                             let tx = mixer_tx.clone();
                             let mut stream = livekit::webrtc::audio_stream::native::NativeAudioStream::new(
                                 audio_track.rtc_track(),
                                 SAMPLE_RATE as i32,
                                 1,
                             );
-                            tokio::spawn(async move {
+                            let handle = tokio::spawn(async move {
                                 while let Some(frame) = stream.next().await {
                                     let uid: i64 = match identity.parse() {
                                         Ok(u) => u,
@@ -348,6 +475,7 @@ async fn run_session(
                                     }
                                 }
                             });
+                            audio_stream_tasks.insert(task_key, handle);
                         }
                         if let RemoteTrack::Video(video_track) = track {
                             let identity = participant.identity().to_string();
@@ -425,6 +553,9 @@ async fn run_session(
                                     let mut first_frame_logged = false;
                                     let mut convert_count: u32 = 0;
                                     let mut last_playout = std::time::Instant::now();
+                                    let mut convert_window_frames: u32 = 0;
+                                    let mut convert_window_coalesced: u64 = 0;
+                                    let mut convert_window_start = std::time::Instant::now();
                                     loop {
                                         let first = match frame_rx.recv() {
                                             Ok(f) => f,
@@ -436,6 +567,8 @@ async fn run_session(
                                             drained += 1;
                                             frame = newer;
                                         }
+                                        convert_window_coalesced =
+                                            convert_window_coalesced.saturating_add(drained.saturating_sub(1));
                                         if crate::telemetry::is_telemetry_enabled() {
                                             tel_conv.record_recv_coalesce(drained);
                                         }
@@ -500,6 +633,20 @@ async fn run_session(
                                                     shared_handle,
                                                 },
                                             );
+                                            convert_window_frames += 1;
+                                            let elapsed = convert_window_start.elapsed();
+                                            if elapsed >= Duration::from_secs(1) {
+                                                let convert_fps =
+                                                    convert_window_frames as f32 / elapsed.as_secs_f32().max(0.001);
+                                                eprintln!(
+                                                    "[voice][screen][viewer] convert rate: {:.1} fps (coalesced_drop={})",
+                                                    convert_fps,
+                                                    convert_window_coalesced
+                                                );
+                                                convert_window_frames = 0;
+                                                convert_window_coalesced = 0;
+                                                convert_window_start = std::time::Instant::now();
+                                            }
                                         }
                                         if crate::telemetry::is_telemetry_enabled() {
                                             tel_conv.record_recv_conv_iter_peak(
@@ -545,6 +692,11 @@ async fn run_session(
                                         if fps > 1.0 {
                                             auto_expected_us = (1_000_000.0 / fps) as u64;
                                             // Do not push auto_expected_us into pacing slot — see pacing_slot_ema.
+                                            eprintln!(
+                                                "[voice][screen][viewer] recv rate: {:.1} fps (ts_step={} us)",
+                                                fps,
+                                                pacing_slot_ema
+                                            );
                                         }
                                         fps_window_frames = 0;
                                         fps_window_start = std::time::Instant::now();
@@ -605,6 +757,13 @@ async fn run_session(
                         }
                     }
                     Some(RoomEvent::TrackUnsubscribed { track, publication, participant }) => {
+                        if track.kind() == TrackKind::Audio {
+                            let identity = participant.identity().to_string();
+                            let task_key = format!("{}:audio:{}", identity, publication.sid());
+                            if let Some(old) = audio_stream_tasks.remove(&task_key) {
+                                old.abort();
+                            }
+                        }
                         if track.kind() == TrackKind::Video {
                             let identity = participant.identity().to_string();
                             let src = publication.source();
@@ -673,6 +832,7 @@ async fn run_session(
                         // Without unpublishing, viewers stay subscribed to the stale track and see a frozen frame.
                         if let Some(flag) = screen_stop_flag.take() {
                             flag.store(true, Ordering::Relaxed);
+                            tokio::time::sleep(Duration::from_millis(80)).await;
                         }
                         if let Some(sid) = screen_sid.take() {
                             let _ = lp.unpublish_track(&sid).await;
@@ -709,6 +869,7 @@ async fn run_session(
                     Some(VoiceCmd::StopScreen) => {
                         if let Some(flag) = screen_stop_flag.take() {
                             flag.store(true, Ordering::Relaxed);
+                            tokio::time::sleep(Duration::from_millis(80)).await;
                         }
                         if let Some(sid) = screen_sid.take() {
                             let _ = lp.unpublish_track(&sid).await;
@@ -737,7 +898,8 @@ async fn run_session(
                     _ => {}
                 }
             }
-            // MFT→CPU fallback: encoder thread sent a Native track because MFT failed.
+            // Encoded-path -> CPU fallback: encoder thread sent a Native track because
+            // the encoded backend hard-failed.
             // Unpublish the Encoded track and republish the Native (I420) one.
             fallback_track = async {
                 match screen_fallback_rx.as_mut() {
@@ -750,7 +912,7 @@ async fn run_session(
             }, if screen_fallback_rx.is_some() => {
                 screen_fallback_rx = None;
                 if let Some(track) = fallback_track {
-                    eprintln!("[voice][screen] Republishing screen track as Native (MFT→CPU fallback)");
+                    eprintln!("[voice][screen] Republishing screen track as Native (encoded-path -> CPU fallback)");
                     if let Some(sid) = screen_sid.take() {
                         let _ = lp.unpublish_track(&sid).await;
                     }
@@ -777,9 +939,37 @@ async fn run_session(
     mic_stop.store(true, Ordering::Relaxed);
     if let Some(flag) = screen_stop_flag.take() {
         flag.store(true, Ordering::Relaxed);
+        // Let the detached screen/encoder thread observe the stop flag and
+        // release its EncodedVideoTrackSource clone before the next join.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    let mut room_stream_tasks = Vec::with_capacity(
+        video_stream_tasks.len().saturating_add(audio_stream_tasks.len()),
+    );
+    room_stream_tasks.extend(video_stream_tasks.drain().map(|(_, handle)| handle));
+    room_stream_tasks.extend(audio_stream_tasks.drain().map(|(_, handle)| handle));
+    for handle in &room_stream_tasks {
+        handle.abort();
+    }
+    for handle in room_stream_tasks {
+        let _ = handle.await;
     }
     mic_timer_task.abort();
+    let _ = mic_timer_task.await;
     mixer_task.abort();
+    let _ = mixer_task.await;
+    speaker_stop.store(true, Ordering::Relaxed);
+    if let Some(handle) = speaker_thread {
+        handle.thread().unpark();
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = handle.join();
+        })
+        .await;
+    }
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = mic_thread.join();
+    })
+    .await;
     drop(room);
     Ok(())
 }
@@ -841,6 +1031,7 @@ async fn run_remote_audio_mixer(
 /// Speaker output: read mono i16 from output_buffer, play via cpal.
 fn run_speaker_output(
     output_buffer: Arc<Mutex<VecDeque<i16>>>,
+    stop: Arc<AtomicBool>,
 ) -> Result<(), String> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     let host = cpal::default_host();
@@ -871,7 +1062,9 @@ fn run_speaker_output(
         )
         .map_err(|e| e.to_string())?;
     stream.play().map_err(|e| e.to_string())?;
-    std::thread::park();
+    while !stop.load(Ordering::Relaxed) {
+        std::thread::park_timeout(Duration::from_millis(100));
+    }
     Ok(())
 }
 
@@ -1358,15 +1551,123 @@ fn convert_rgba_to_i420(
 /// Warmup: first 10 frames published at 15 fps to let LiveKit BWE stabilise before
 ///   full framerate, eliminating startup stutter.
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn start_screen_capture_xcap(
+    screen_index: Option<usize>,
+    preset: ScreenPreset,
+    stop_flag: Arc<AtomicBool>,
+    session_stats: Arc<Mutex<VoiceSessionStats>>,
+) -> (Option<LocalVideoTrack>, Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>) {
+    let (video_width, video_height, max_fps, bitrate) = preset.params();
+    {
+        let mut st = session_stats.lock();
+        st.resolution = Some((video_width, video_height));
+        st.stream_fps = Some(max_fps as f32);
+        st.frames_per_second = Some(max_fps as f32);
+        st.connection_speed_mbps = Some(bitrate as f32 / 1_000_000.0);
+        st.encoding_path = Some(
+            EncodingPath::OpenH264 {
+                threads: encoder_threads_for_resolution(video_width, video_height),
+                gpu_capture: false,
+            }
+            .to_display_string(),
+        );
+        st.encoder_threads = Some(encoder_threads_for_resolution(video_width, video_height));
+    }
+    let frame_interval_ms = (1000.0 / max_fps).round() as u64;
+    let resolution = VideoResolution { width: video_width, height: video_height };
+    let source = NativeVideoSource::new(resolution, true);
+    let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
+
+    let stop_for_thread = Arc::clone(&stop_flag);
+    std::thread::Builder::new()
+        .name("livekit-screen-xcap".into())
+        .spawn(move || {
+            let monitors = enumerate_unique_screens();
+            if monitors.is_empty() {
+                eprintln!("[voice][screen] no monitors found");
+                return;
+            }
+            let idx = screen_index.unwrap_or(0).min(monitors.len() - 1);
+            let monitor = monitors.into_iter().nth(idx).unwrap();
+            eprintln!(
+                "[voice][screen] xcap capturing monitor {} ({}×{})",
+                idx,
+                monitor.width(),
+                monitor.height()
+            );
+
+            let mut frame_count: i64 = 0;
+            let mut i420_buffers = XcapI420Buffers::new(video_width, video_height);
+            let mut fps_window_frames: u32 = 0;
+            let mut fps_window_start = std::time::Instant::now();
+            while !stop_for_thread.load(Ordering::Relaxed) {
+                let t0 = std::time::Instant::now();
+                match monitor.capture_image() {
+                    Ok(img) => {
+                        let src_w = img.width();
+                        let src_h = img.height();
+                        let raw = img.as_raw();
+                        if let Some(vf) = i420_buffers.rgba_to_i420_scaled_reuse(
+                            raw,
+                            src_w,
+                            src_h,
+                            video_width,
+                            video_height,
+                            frame_count,
+                        ) {
+                            source.capture_frame(&vf);
+                            frame_count += 1;
+                            fps_window_frames += 1;
+                        }
+                    }
+                    Err(e) => eprintln!("[voice][screen] capture error: {}", e),
+                }
+                let elapsed = fps_window_start.elapsed();
+                if elapsed >= Duration::from_secs(1) {
+                    let actual_fps = fps_window_frames as f32 / elapsed.as_secs_f32().max(0.001);
+                    eprintln!(
+                        "[voice][screen] xcap capture_frame rate: {:.1} fps (target {})",
+                        actual_fps,
+                        max_fps
+                    );
+                    fps_window_frames = 0;
+                    fps_window_start = std::time::Instant::now();
+                }
+                let elapsed_ms = t0.elapsed().as_millis() as u64;
+                let to_sleep = frame_interval_ms.saturating_sub(elapsed_ms);
+                if to_sleep > 0 {
+                    std::thread::sleep(Duration::from_millis(to_sleep));
+                }
+            }
+            eprintln!("[voice][screen] xcap capture thread stopped");
+        })
+        .ok();
+
+    (Some(track), None)
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 fn start_screen_capture(
     screen_index: Option<usize>,
     preset: ScreenPreset,
     stop_flag: Arc<AtomicBool>,
     session_stats: Arc<Mutex<VoiceSessionStats>>,
 ) -> (Option<LocalVideoTrack>, Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>) {
+    let capture_backend = std::env::var("ASTRIX_SCREEN_CAPTURE_BACKEND")
+        .unwrap_or_else(|_| "wgc".to_string());
+    if capture_backend.eq_ignore_ascii_case("xcap") {
+        eprintln!("[voice][screen] capture backend override: xcap");
+        return start_screen_capture_xcap(screen_index, preset, stop_flag, session_stats);
+    }
+    let use_dxgi = capture_backend.eq_ignore_ascii_case("dxgi");
+    if use_dxgi {
+        eprintln!("[voice][screen] capture backend override: dxgi");
+        eprintln!("[voice][screen] DXGI build marker: hardfail-fallback-v2");
+    }
     use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering};
     use windows::Win32::Graphics::Direct3D11::{
-        D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Texture2D,
+        D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
+        D3D11_USAGE_DEFAULT, ID3D11Texture2D,
     };
     use windows_capture::{
         capture::{Context, GraphicsCaptureApiHandler},
@@ -1441,10 +1742,11 @@ fn start_screen_capture(
 
     let resolution = VideoResolution { width: video_width, height: video_height };
 
-    // Phase 5.8: encode path — mft (MFT GPU/software), cpu (OpenH264 I420), auto (try MFT first).
+    // Encode path — mft (force MFT), cpu (OpenH264 I420), auto (prefer NVENC D3D11 on NVIDIA,
+    // then fall back to MFT, then to OpenH264 if encoded backends hard-fail).
     // Phase 1.3-1.4 implemented: NativeEncodedVideoSource::push_frame now delivers H.264 to viewers
     // via ExternalH264Encoder → EncodedImageCallback → WebRTC RTP layer.
-    // auto defaults to MFT hardware → MFT software → CPU OpenH264 fallback chain.
+    // auto defaults to NVENC D3D11 → MFT hardware/software → CPU OpenH264 fallback chain.
     #[derive(Clone, Copy, PartialEq)]
     enum EncodePath { Mft, Cpu, Auto }
     let encode_path: EncodePath = match std::env::var("ASTRIX_SCREEN_CAPTURE_PATH").as_deref() {
@@ -1453,9 +1755,10 @@ fn start_screen_capture(
         Ok("auto") | _ => EncodePath::Auto,
     };
 
-    // Phase 5.1: MFT path uses NativeEncodedVideoSource; CPU path uses NativeVideoSource.
-    // MFT mode always has a fallback channel: if BGRA→NV12 or MFT encode fails, encoder thread
-    // creates a Native (I420) track and sends it to the async context for republish.
+    // Encoded path uses NativeEncodedVideoSource; CPU path uses NativeVideoSource.
+    // The encoded path always has a CPU fallback channel: if BGRA->NV12 or the encoded
+    // H.264 backend hard-fails, the encoder thread creates a Native (I420) track and
+    // sends it to the async context for republish.
     let source: Option<NativeVideoSource>;
     let encoded_source: Option<NativeEncodedVideoSource>;
     let track: LocalVideoTrack;
@@ -1537,7 +1840,15 @@ fn start_screen_capture(
     let gpu_encode_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     // ── WGC callback struct ───────────────────────────────────────────────────
-    /// Diagnostic: (frame_count_at_last_log, start of current 1s window). Used to log WGC delivery fps.
+    /// Diagnostic:
+    /// - frame_count_at_last_log
+    /// - start of current 1s wall-clock window
+    /// - WGC frame timestamp (100 ns) observed at the previous log point
+    ///
+    /// We intentionally track both callback cadence and compositor cadence. On heavy scenes,
+    /// FrameArrived callbacks can bunch up or stall independently of the captured content's
+    /// timestamp progression, and using callback cadence alone was causing false source-FPS
+    /// drops and over-aggressive sender downshifts.
     let pool_creation_started: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let pool_creation_failed: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     struct WgcFlags {
@@ -1549,7 +1860,8 @@ fn start_screen_capture(
         pool_creation_started: Arc<AtomicBool>,
         pool_creation_failed: Arc<AtomicBool>,
         wgc_frame_count: Arc<AtomicU64>,
-        wgc_log_state: Arc<Mutex<(u64, Option<std::time::Instant>)>>,
+        wgc_source_fps_milli: Arc<AtomicU64>,
+        wgc_log_state: Arc<Mutex<(u64, Option<std::time::Instant>, i64)>>,
         telemetry: Arc<PipelineTelemetry>,
     }
     struct ScreenHandler {
@@ -1561,7 +1873,8 @@ fn start_screen_capture(
         pool_creation_started: Arc<AtomicBool>,
         pool_creation_failed: Arc<AtomicBool>,
         wgc_frame_count: Arc<AtomicU64>,
-        wgc_log_state: Arc<Mutex<(u64, Option<std::time::Instant>)>>,
+        wgc_source_fps_milli: Arc<AtomicU64>,
+        wgc_log_state: Arc<Mutex<(u64, Option<std::time::Instant>, i64)>>,
         telemetry: Arc<PipelineTelemetry>,
     }
 
@@ -1579,6 +1892,7 @@ fn start_screen_capture(
                 pool_creation_started: ctx.flags.pool_creation_started,
                 pool_creation_failed: ctx.flags.pool_creation_failed,
                 wgc_frame_count: ctx.flags.wgc_frame_count,
+                wgc_source_fps_milli: ctx.flags.wgc_source_fps_milli,
                 wgc_log_state: ctx.flags.wgc_log_state,
                 telemetry: ctx.flags.telemetry,
             })
@@ -1593,18 +1907,37 @@ fn start_screen_capture(
                 capture_control.stop();
                 return Ok(());
             }
-            // Diagnostic: log WGC delivery rate every second. Use try_lock so we never block the WGC thread.
+            // Diagnostic: log both callback cadence and compositor cadence every second.
+            // Use try_lock so we never block the WGC thread.
             let total = self.wgc_frame_count.fetch_add(1, Ordering::Relaxed) + 1;
             let now = std::time::Instant::now();
+            let frame_timestamp_100ns = frame.timestamp().Duration;
             if let Some(mut guard) = self.wgc_log_state.try_lock() {
-                let (last_count, last_t) = *guard;
+                let (last_count, last_t, last_frame_timestamp_100ns) = *guard;
                 match last_t {
-                    None => *guard = (total, Some(now)),
+                    None => *guard = (total, Some(now), frame_timestamp_100ns),
                     Some(t0) if now.duration_since(t0) >= std::time::Duration::from_secs(1) => {
                         let elapsed_sec = now.duration_since(t0).as_secs_f32().max(0.001);
-                        let fps = (total - last_count) as f32 / elapsed_sec;
-                        eprintln!("[voice][screen] WGC on_frame_arrived rate: {:.1} fps (source)", fps);
-                        *guard = (total, Some(now));
+                        let callback_fps = (total - last_count) as f32 / elapsed_sec;
+                        let frames = total.saturating_sub(last_count);
+                        let compositor_fps = if last_frame_timestamp_100ns > 0
+                            && frame_timestamp_100ns > last_frame_timestamp_100ns
+                            && frames > 1
+                        {
+                            let compositor_elapsed_sec = (frame_timestamp_100ns - last_frame_timestamp_100ns)
+                                as f32
+                                / 10_000_000.0;
+                            (frames - 1) as f32 / compositor_elapsed_sec.max(0.001)
+                        } else {
+                            callback_fps
+                        };
+                        self.wgc_source_fps_milli
+                            .store((compositor_fps * 1000.0) as u64, Ordering::Relaxed);
+                        eprintln!(
+                            "[voice][screen] WGC rate: callback {:.1} fps, compositor {:.1} fps",
+                            callback_fps, compositor_fps
+                        );
+                        *guard = (total, Some(now), frame_timestamp_100ns);
                     }
                     _ => {}
                 }
@@ -1632,7 +1965,8 @@ fn start_screen_capture(
                             let pool_fail = Arc::clone(&self.pool_creation_failed);
                             let mut our_desc = desc;
                             our_desc.Usage = D3D11_USAGE_DEFAULT;
-                            our_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE.0 as u32;
+                            our_desc.BindFlags =
+                                (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32;
                             our_desc.CPUAccessFlags = 0;
                             our_desc.MipLevels = 1;
                             our_desc.ArraySize = 1;
@@ -1681,7 +2015,11 @@ fn start_screen_capture(
 
                     // Copy frame into our pool texture. OBS-style: overwrite "other" slot, store as latest.
                     // Double buffer: WGC writes to slot encoder isn't reading.
-                    // Flush after CopyResource ensures the copy is submitted before encoder reads.
+                    // Do not Flush() here: forcing the immediate context to submit inside
+                    // FrameArrived can stall the callback long enough for WGC to drop into
+                    // half-rate/low-rate delivery on heavy scenes. The encoder uses the same
+                    // immediate context behind context_mutex, so command order is preserved
+                    // without a synchronous flush from the callback.
                     //
                     // CRITICAL: never block in FrameArrived. If we block >~16 ms, WGC throttles to 30 FPS.
                     // Use try_lock for both pool_ref and context_mutex; skip frame if either is busy.
@@ -1714,7 +2052,6 @@ fn start_screen_capture(
                             let capture_start = std::time::Instant::now();
                             unsafe {
                                 context.CopyResource(&our_tex, texture);
-                                context.Flush();
                             }
                             self.telemetry.set_capture(capture_start.elapsed().as_micros() as u64);
                             self.latest_slot.store(write_slot);
@@ -1749,7 +2086,199 @@ fn start_screen_capture(
         }
     }
 
-    let monitors = WgcMonitor::enumerate().unwrap_or_default();
+    let wgc_frame_count = Arc::new(AtomicU64::new(0));
+    let wgc_source_fps_milli = Arc::new(AtomicU64::new(0));
+    let wgc_log_state = Arc::new(Mutex::new((0u64, None::<std::time::Instant>, 0i64)));
+    let telemetry_sender = Arc::new(PipelineTelemetry::new());
+
+    if use_dxgi {
+        let stop_dxgi = Arc::clone(&stop_flag);
+        let latest_slot_dxgi = Arc::clone(&latest_slot);
+        let pool_ref_dxgi = Arc::clone(&pool_ref);
+        let wgc_frame_count_dxgi = Arc::clone(&wgc_frame_count);
+        let wgc_source_fps_milli_dxgi = Arc::clone(&wgc_source_fps_milli);
+        let wgc_log_state_dxgi = Arc::clone(&wgc_log_state);
+        let telemetry_dxgi = Arc::clone(&telemetry_sender);
+        std::thread::Builder::new()
+            .name("livekit-screen-dxgi".into())
+            .spawn(move || {
+                let mut capture = match DxgiDuplicationCapture::new(screen_index) {
+                    Ok(capture) => capture,
+                    Err(e) => {
+                        eprintln!("[voice][screen] DXGI init failed: {e}");
+                        return;
+                    }
+                };
+
+                loop {
+                    if stop_dxgi.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let frame = match capture.acquire_next_frame(33) {
+                        Ok(Some(frame)) => frame,
+                        Ok(None) => continue,
+                        Err(DxgiDuplicationError::AccessLost) => {
+                            eprintln!("[voice][screen] DXGI access lost, reinitializing duplication");
+                            capture = match DxgiDuplicationCapture::new(screen_index) {
+                                Ok(capture) => capture,
+                                Err(e) => {
+                                    eprintln!("[voice][screen] DXGI reinit failed: {e}");
+                                    break;
+                                }
+                            };
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!("[voice][screen] DXGI error: {e}");
+                            break;
+                        }
+                    };
+
+                    let total = wgc_frame_count_dxgi.fetch_add(1, Ordering::Relaxed) + 1;
+                    let now = std::time::Instant::now();
+                    let frame_timestamp_100ns = frame.info.LastPresentTime;
+                    if let Some(mut guard) = wgc_log_state_dxgi.try_lock() {
+                        let (last_count, last_t, last_frame_timestamp_100ns) = *guard;
+                        match last_t {
+                            None => *guard = (total, Some(now), frame_timestamp_100ns),
+                            Some(t0) if now.duration_since(t0) >= std::time::Duration::from_secs(1) => {
+                                let elapsed_sec = now.duration_since(t0).as_secs_f32().max(0.001);
+                                let callback_fps = (total - last_count) as f32 / elapsed_sec;
+                                let frames = total.saturating_sub(last_count);
+                                let compositor_fps = if last_frame_timestamp_100ns > 0
+                                    && frame_timestamp_100ns > last_frame_timestamp_100ns
+                                    && frames > 1
+                                {
+                                    let compositor_elapsed_sec = (frame_timestamp_100ns - last_frame_timestamp_100ns)
+                                        as f32
+                                        / 10_000_000.0;
+                                    (frames - 1) as f32 / compositor_elapsed_sec.max(0.001)
+                                } else {
+                                    callback_fps
+                                };
+                                wgc_source_fps_milli_dxgi
+                                    .store((compositor_fps * 1000.0) as u64, Ordering::Relaxed);
+                                eprintln!(
+                                    "[voice][screen] DXGI rate: callback {:.1} fps, compositor {:.1} fps",
+                                    callback_fps, compositor_fps
+                                );
+                                *guard = (total, Some(now), frame_timestamp_100ns);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    let texture = match frame.texture() {
+                        Ok(texture) => texture,
+                        Err(e) => {
+                            eprintln!("[voice][screen] DXGI frame cast failed: {:?}", e);
+                            continue;
+                        }
+                    };
+                    let mut desc = D3D11_TEXTURE2D_DESC::default();
+                    unsafe { texture.GetDesc(&mut desc) };
+
+                    {
+                        let mut pool_guard = pool_ref_dxgi.lock();
+                        let needs_recreate = pool_guard
+                            .as_ref()
+                            .map_or(true, |pool| pool.width != desc.Width || pool.height != desc.Height);
+                        if needs_recreate {
+                            let mut our_desc = desc;
+                            our_desc.Usage = D3D11_USAGE_DEFAULT;
+                            our_desc.BindFlags =
+                                (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32;
+                            our_desc.CPUAccessFlags = 0;
+                            our_desc.MipLevels = 1;
+                            our_desc.ArraySize = 1;
+                            our_desc.MiscFlags = 0;
+                            {
+                                use windows::Win32::Graphics::Dxgi::Common::{
+                                    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+                                };
+                                if our_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB.into() {
+                                    eprintln!("[voice][screen] DXGI texture is SRGB, forcing UNORM for VideoProcessor compatibility");
+                                    our_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM.into();
+                                }
+                            }
+
+                            let mut textures: [Option<ID3D11Texture2D>; LATEST_SLOT_COUNT] =
+                                std::array::from_fn(|_| None);
+                            let mut pool_ok = true;
+                            for (i, slot) in textures.iter_mut().enumerate() {
+                                if let Err(e) = unsafe {
+                                    capture.device.CreateTexture2D(
+                                        &our_desc,
+                                        None,
+                                        Some(std::ptr::from_mut(slot)),
+                                    )
+                                } {
+                                    eprintln!("[voice][screen] DXGI CreateTexture2D[{}] failed: {:?}", i, e);
+                                    pool_ok = false;
+                                    break;
+                                }
+                            }
+                            if !pool_ok {
+                                continue;
+                            }
+                            let textures = textures.map(|t| t.expect("DXGI CreateTexture2D null"));
+                            eprintln!(
+                                "[voice][screen] DXGI texture pool created: {}x{} format {:?} ({} slots, latest-frame)",
+                                our_desc.Width, our_desc.Height, our_desc.Format, LATEST_SLOT_COUNT
+                            );
+                            *pool_guard = Some(GpuTexturePool {
+                                device: capture.device.clone(),
+                                context: capture.context.clone(),
+                                textures,
+                                width: our_desc.Width,
+                                height: our_desc.Height,
+                                context_mutex: Arc::new(parking_lot::Mutex::new(())),
+                            });
+                        }
+                    }
+
+                    let (our_tex_clone, context_mutex_clone, write_slot) = {
+                        let Some(guard) = pool_ref_dxgi.try_lock() else {
+                            continue;
+                        };
+                        match guard.as_ref() {
+                            None => (None, None, 0u8),
+                            Some(pool) => {
+                                let current = latest_slot_dxgi.slot.load(Ordering::Acquire);
+                                let slot = if current >= LATEST_SLOT_NONE {
+                                    0u8
+                                } else {
+                                    (1 - current) as u8
+                                };
+                                (
+                                    Some(pool.textures[slot as usize].clone()),
+                                    Some(Arc::clone(&pool.context_mutex)),
+                                    slot,
+                                )
+                            }
+                        }
+                    };
+                    if let (Some(our_tex), Some(ctx_mutex)) = (our_tex_clone, context_mutex_clone) {
+                        if let Some(_ctx_guard) = ctx_mutex.try_lock() {
+                            let capture_start = std::time::Instant::now();
+                            unsafe {
+                                capture.context.CopyResource(&our_tex, &texture);
+                            }
+                            telemetry_dxgi.set_capture(capture_start.elapsed().as_micros() as u64);
+                            latest_slot_dxgi.store(write_slot);
+                            if total == 1 {
+                                eprintln!("[voice][screen] DXGI first frame copied into latest-slot");
+                            }
+                        }
+                    }
+                }
+
+                eprintln!("[voice][screen] DXGI capture thread stopped");
+            })
+            .ok();
+    } else {
+        let monitors = WgcMonitor::enumerate().unwrap_or_default();
     if monitors.is_empty() {
         eprintln!("[voice][screen] no monitors found");
         return (None, None);
@@ -1760,9 +2289,6 @@ fn start_screen_capture(
     };
     eprintln!("[voice][screen] WGC capturing monitor {} at {}×{} @ {}fps", idx, video_width, video_height, max_fps);
 
-    let wgc_frame_count = Arc::new(AtomicU64::new(0));
-    let wgc_log_state = Arc::new(Mutex::new((0u64, None::<std::time::Instant>)));
-    let telemetry_sender = Arc::new(PipelineTelemetry::new());
     let flags = WgcFlags {
         ring: Arc::clone(&ring),
         stop_flag: Arc::clone(&stop_flag),
@@ -1772,6 +2298,7 @@ fn start_screen_capture(
         pool_creation_started: Arc::clone(&pool_creation_started),
         pool_creation_failed: Arc::clone(&pool_creation_failed),
         wgc_frame_count: Arc::clone(&wgc_frame_count),
+        wgc_source_fps_milli: Arc::clone(&wgc_source_fps_milli),
         wgc_log_state: Arc::clone(&wgc_log_state),
         telemetry: Arc::clone(&telemetry_sender),
     };
@@ -1807,6 +2334,7 @@ fn start_screen_capture(
             eprintln!("[voice][screen] WGC capture thread stopped");
         })
         .ok();
+    }
 
     // ── Encoder thread ────────────────────────────────────────────────────────
     /// Sleep until deadline - 1 ms, then spin for the last 1 ms.
@@ -1815,8 +2343,9 @@ fn start_screen_capture(
     let source_enc = source.clone();
     let mut encoded_source_enc = encoded_source.clone();
     let encode_path_enc = encode_path;
-    // Auto fallback: if MFT fails, encoder thread creates a Native track and sends it here
-    // so the async context can unpublish the Encoded track and republish the Native one.
+            // Encoded-path fallback: if the encoded backend hard-fails, the encoder thread
+            // creates a Native track and sends it here
+            // so the async context can unpublish the Encoded track and republish the Native one.
     // Capture tokio Handle so the encoder thread can create livekit objects (NativeVideoSource,
     // LocalVideoTrack) which internally require a Tokio reactor.
     let tokio_handle = tokio::runtime::Handle::current();
@@ -1826,13 +2355,14 @@ fn start_screen_capture(
     let latest_slot_enc = Arc::clone(&latest_slot);
     let pool_ref_enc = Arc::clone(&pool_ref);
     let wgc_frame_count_enc = Arc::clone(&wgc_frame_count);
+    let wgc_source_fps_milli_enc = Arc::clone(&wgc_source_fps_milli);
     let gpu_encode_active_enc = Arc::clone(&gpu_encode_active);
     let stats_enc = Arc::clone(&session_stats);
     let telemetry_enc = Arc::clone(&telemetry_sender);
     // Phase 5.2: For MFT path we must use latest_slot (D3D11 textures). For CPU path, try GPU first.
     let capture_path_mft = encode_path == EncodePath::Mft || encode_path == EncodePath::Auto;
     if capture_path_mft {
-        eprintln!("[voice][screen] encode path: MFT GPU (push_frame → ExternalH264Encoder → RTP)");
+        eprintln!("[voice][screen] encode path: encoded GPU path (push_frame -> ExternalH264Encoder -> RTP)");
     } else {
         eprintln!("[voice][screen] encode path: CPU/OpenH264");
     }
@@ -1902,11 +2432,35 @@ fn start_screen_capture(
             let mut fps_frame_count: i64 = 0;
             // Phase 4.5: adaptive FPS — reduce when encode exceeds budget, restore when under.
             let max_fps_f64 = max_fps;
+            let preset_bitrate_bps_u32 = bitrate_bps.min(u32::MAX as u64) as u32;
             let mut current_fps = max_fps_f64;
+            let mut current_source_cap_fps = max_fps_f64;
+            let mut webrtc_target_bitrate_bps = preset_bitrate_bps_u32;
+            let mut webrtc_target_fps = max_fps_f64;
+            // Legacy env name, but the lock applies to the whole Windows GPU capture path
+            // here (WGC and DXGI). Only an explicit `ASTRIX_DXGI_LOCK_PRESET_FPS=0`
+            // enables adaptive sender FPS.
+            let lock_env = std::env::var("ASTRIX_DXGI_LOCK_PRESET_FPS").ok();
+            let lock_preset_fps = !matches!(lock_env.as_deref(), Some("0"));
+            eprintln!(
+                "[voice][screen] preset FPS lock: {} (ASTRIX_DXGI_LOCK_PRESET_FPS={}, backend={})",
+                if lock_preset_fps {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                lock_env.unwrap_or_else(|| "<default:on>".to_string()),
+                if use_dxgi { "dxgi" } else { "wgc" }
+            );
+            let prefer_mft_no_fallback = use_dxgi && capture_path_mft;
             let mut encode_avg_ms: f64 = 0.0;
             let mut downgrade_frames: i64 = 0;
             let mut upgrade_frames: i64 = 0;
-            const ADAPTIVE_FPS_LADDER: [f64; 4] = [30.0, 60.0, 90.0, 120.0];
+            const ADAPTIVE_FPS_LADDER: [f64; 5] = [30.0, 45.0, 60.0, 90.0, 120.0];
+            const SOURCE_CAP_HYSTERESIS_FPS: f64 = 10.0;
+            const SOURCE_CAP_CONFIRM_WINDOWS: u32 = 3;
+            let mut source_cap_down_votes: u32 = 0;
+            let mut source_cap_up_votes: u32 = 0;
             let next_lower_fps = |fps: f64| -> f64 {
                 ADAPTIVE_FPS_LADDER.iter().rev().find(|&&s| s < fps).copied().unwrap_or(*ADAPTIVE_FPS_LADDER.first().unwrap())
             };
@@ -1920,15 +2474,28 @@ fn start_screen_capture(
             } else {
                 current_full_interval
             };
-            let mut current_rtp_step = 90_000_u32 / current_fps as u32;
+            let mut current_rtp_step = VIDEO_RTP_CLOCK_HZ as u32 / current_fps as u32;
             // RTP timestamps: fixed 90000/fps step — monotonic from stream start.
-            // capture_us: wall-clock microseconds elapsed since session start, taken at the
-            // beginning of each frame iteration (before encode). This gives WebRTC an accurate
-            // inter-frame interval so the jitter buffer can correctly estimate network jitter.
             let mut rtp_timestamp: u32 = rand::random();
             let enc_session_start = std::time::Instant::now();
             let mut last_send_capture_us: i64 = 0;
             let telemetry_enabled = is_telemetry_enabled();
+            let push_trace_verbose = std::env::var("ASTRIX_DXGI_PUSH_TRACE")
+                .map(|v| v != "0")
+                .unwrap_or(false);
+            let push_trace_frame_limit = std::env::var("ASTRIX_DXGI_PUSH_TRACE_FRAMES")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(120);
+            let nv12_ready_trace = std::env::var("ASTRIX_DXGI_NV12_READY_TRACE")
+                .map(|v| v != "0")
+                .unwrap_or(false);
+            let mut push_trace_tick_idx: u64 = 0;
+            let mut push_trace_window_start = std::time::Instant::now();
+            let mut push_trace_stats = DxgiPushTraceStats::default();
+            let mft_pipelined_enabled = std::env::var("ASTRIX_MFT_PIPELINED")
+                .map(|v| v != "0")
+                .unwrap_or(true);
             // Monotonic MFT sample timestamp accumulator.
             // Using frame_count * interval regresses when FPS changes (e.g. 30→60 makes
             // ts_us jump backward), which can trigger MFT frame reordering. This accumulator
@@ -1978,15 +2545,20 @@ fn start_screen_capture(
             let mut gpu_path_failed = false;
             let mut gpu_path_logged = false;
 
-            // Phase 5.1: MFT path — D3d11BgraToNv12 + MftH264Encoder (lazy init when pool ready).
+            // Encoded H.264 path — D3d11BgraToNv12 + backend (NVENC D3D11 preferred on NVIDIA,
+            // then MFT fallback) lazily initialized when the pool is ready.
             let mut bgra_to_nv12: Option<D3d11BgraToNv12> = None;
-            let mut mft_encoder: Option<MftH264Encoder> = None;
+            let mut mft_encoder: Option<EncodedH264Encoder> = None;
             let mut mft_path_failed = false;
+            let mut mft_hard_failed = false;
+            let mut mft_retry_at: Option<std::time::Instant> = None;
+            let mut mft_transient_timeouts = 0u32;
             let mut mft_path_logged = false;
             let mut cpu_path_encoder_logged = false;
             let mut gpu_i420_encoder_logged = false;
-            // Auto fallback: when MFT fails, create a Native (I420) track and send it to
-            // the async context so it can unpublish the Encoded track and republish Native.
+            // Encoded-path fallback: when the encoded backend hard-fails, create a Native
+            // (I420) track and send it to the async context so it can unpublish the
+            // Encoded track and republish Native.
             let mut mft_fallback_sent = false;
             let mft_fallback_resolution = resolution.clone();
             // Reusable I420 plane buffers — allocated once, reused every frame to avoid
@@ -2020,70 +2592,260 @@ fn start_screen_capture(
             let mut prev_send_time: Option<std::time::Instant> = None;
             // Phase 4.7: GIR + periodic forced IDR for packet loss recovery (default 12s).
             // ASTRIX_PERIODIC_IDR_SECS=N (0 = disable, not recommended on WAN). Longer interval = fewer IDR spikes.
-            let periodic_idr_secs: u64 = std::env::var("ASTRIX_PERIODIC_IDR_SECS")
+            let periodic_idr_override_secs: Option<u64> = std::env::var("ASTRIX_PERIODIC_IDR_SECS")
                 .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(12);
-            if periodic_idr_secs == 0 {
+                .and_then(|s| s.parse().ok());
+            if periodic_idr_override_secs == Some(0) {
                 eprintln!("[voice][screen] ASTRIX_PERIODIC_IDR_SECS=0: periodic IDR disabled");
-            } else if periodic_idr_secs != 12 {
+            } else if let Some(periodic_idr_secs) = periodic_idr_override_secs {
                 eprintln!(
                     "[voice][screen] periodic IDR interval: {}s (from ASTRIX_PERIODIC_IDR_SECS)",
                     periodic_idr_secs
                 );
             }
             let mut last_forced_idr_at: Option<std::time::Instant> = None;
+            let effective_periodic_idr_secs = |enc: Option<&EncodedH264Encoder>| -> u64 {
+                periodic_idr_override_secs.unwrap_or(match enc.map(|e| e.backend_kind()) {
+                    // Keep NVENC recovery noticeably faster than the worst-case viewer
+                    // freeze window while still avoiding the old high-burst profile.
+                    Some(EncodedBackendKind::NvencD3d11) => 8,
+                    _ => 12,
+                })
+            };
             loop {
                 if stop_enc.load(Ordering::Relaxed) {
                     break;
                 }
 
                 let now = std::time::Instant::now();
+                if prefer_mft_no_fallback && mft_path_failed && !mft_hard_failed {
+                    if mft_retry_at.map(|t| now >= t).unwrap_or(true) {
+                        eprintln!("[voice][screen] DXGI+MFT: retrying encoder path after reset");
+                        mft_path_failed = false;
+                        mft_hard_failed = false;
+                        mft_retry_at = None;
+                        mft_encoder = None;
+                        bgra_to_nv12 = None;
+                        mft_transient_timeouts = 0;
+                        last_wgc_count = 0;
+                    } else {
+                        let wait_interval = if frame_count < warmup_frames {
+                            warmup_interval
+                        } else {
+                            current_effective_interval
+                        };
+                        next_frame_at += wait_interval;
+                        while next_frame_at <= std::time::Instant::now() {
+                            next_frame_at += wait_interval;
+                        }
+                        let remaining = next_frame_at - std::time::Instant::now();
+                        if remaining > Duration::from_millis(PRE_BUFFER_MS) {
+                            std::thread::sleep(remaining - Duration::from_millis(PRE_BUFFER_MS));
+                        }
+                        while std::time::Instant::now() < next_frame_at {
+                            std::hint::spin_loop();
+                        }
+                        continue;
+                    }
+                }
+
+                let source_fps = (wgc_source_fps_milli_enc.load(Ordering::Relaxed) as f64) / 1000.0;
+                if !lock_preset_fps && source_fps >= 10.0 {
+                    let source_cap_candidate = ADAPTIVE_FPS_LADDER
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|&fps| fps <= source_fps + 2.0 && fps <= max_fps_f64)
+                        .unwrap_or(30.0);
+                    let lower_enough =
+                        source_cap_candidate < current_source_cap_fps
+                        && source_fps <= current_source_cap_fps - SOURCE_CAP_HYSTERESIS_FPS;
+                    let higher_enough =
+                        source_cap_candidate > current_source_cap_fps
+                        && source_fps >= current_source_cap_fps + SOURCE_CAP_HYSTERESIS_FPS;
+
+                    if lower_enough {
+                        source_cap_down_votes = source_cap_down_votes.saturating_add(1);
+                        source_cap_up_votes = 0;
+                    } else if higher_enough {
+                        source_cap_up_votes = source_cap_up_votes.saturating_add(1);
+                        source_cap_down_votes = 0;
+                    } else {
+                        source_cap_down_votes = 0;
+                        source_cap_up_votes = 0;
+                    }
+
+                    let should_apply =
+                        (lower_enough && source_cap_down_votes >= SOURCE_CAP_CONFIRM_WINDOWS)
+                        || (higher_enough && source_cap_up_votes >= SOURCE_CAP_CONFIRM_WINDOWS);
+
+                    if should_apply {
+                        eprintln!(
+                            "[voice][screen] source-adaptive: fps ceiling {:.0} → {:.0} (capture source {:.1} fps)",
+                            current_source_cap_fps, source_cap_candidate, source_fps
+                        );
+                        current_source_cap_fps = source_cap_candidate;
+                        source_cap_down_votes = 0;
+                        source_cap_up_votes = 0;
+                        if current_fps > current_source_cap_fps {
+                            current_fps = current_source_cap_fps;
+                            current_frame_interval_ns = (1_000_000_000.0 / current_fps) as u64;
+                            current_full_interval = Duration::from_nanos(current_frame_interval_ns);
+                            current_effective_interval = if current_full_interval.as_nanos() as u64 > MAX_STATIC_INTERVAL_NS {
+                                Duration::from_nanos(MAX_STATIC_INTERVAL_NS)
+                            } else {
+                                current_full_interval
+                            };
+                            current_rtp_step = 90_000_u32 / current_fps as u32;
+                        } else if current_fps < current_source_cap_fps {
+                            let raised_fps = current_source_cap_fps;
+                            current_fps = raised_fps;
+                            current_frame_interval_ns = (1_000_000_000.0 / current_fps) as u64;
+                            current_full_interval = Duration::from_nanos(current_frame_interval_ns);
+                            current_effective_interval = if current_full_interval.as_nanos() as u64 > MAX_STATIC_INTERVAL_NS {
+                                Duration::from_nanos(MAX_STATIC_INTERVAL_NS)
+                            } else {
+                                current_full_interval
+                            };
+                            current_rtp_step = 90_000_u32 / current_fps as u32;
+                        }
+                    }
+                } else if lock_preset_fps {
+                    current_source_cap_fps = max_fps_f64;
+                    if current_fps != max_fps_f64 {
+                        current_fps = max_fps_f64;
+                        current_frame_interval_ns = (1_000_000_000.0 / current_fps) as u64;
+                        current_full_interval = Duration::from_nanos(current_frame_interval_ns);
+                        current_effective_interval = if current_full_interval.as_nanos() as u64 > MAX_STATIC_INTERVAL_NS {
+                            Duration::from_nanos(MAX_STATIC_INTERVAL_NS)
+                        } else {
+                            current_full_interval
+                        };
+                        current_rtp_step = 90_000_u32 / current_fps as u32;
+                    }
+                }
                 let interval = if frame_count < warmup_frames { warmup_interval } else { current_effective_interval };
                 let past_startup = frame_count >= STARTUP_ACCEPT_FRAMES;
                 // RTP timestamps must be monotonic from stream start (microseconds). Unix epoch
                 // causes LiveKit SFU "adjusting first packet time, too big" spam.
                 let frame_interval_us = 1_000_000_u64 / current_fps as u64;
                 let ts_us = running_ts_us;
-                // cap_now for push_frame = ts_us (= running_ts_us for this frame).
-                // running_ts_us increments by exactly frame_interval_us per frame, so the
-                // capture_time delta between consecutive frames is always frame_interval_us —
-                // identical to the RTP clock step. This eliminates ±2 ms encode-time jitter
-                // that shows up in cap_now when using wall-clock (enc_session_start.elapsed()),
-                // and works correctly for all 9 presets (30/60/90/120 fps) as well as adaptive
-                // FPS transitions (ts_us and rtp_step both scale by 1/fps so they stay aligned).
-                let cap_now_frame = ts_us;
-                // Wall-clock submission timestamp for the meta_queue (diagnostic only).
+                // Monotonic sample timestamp for the encoder pipeline.
                 let capture_us = enc_session_start.elapsed().as_micros() as i64;
+                push_trace_stats.maybe_log(
+                    &mut push_trace_window_start,
+                    max_fps,
+                    current_fps,
+                    if mft_pipelined_enabled && startup_keyframe_done {
+                        "pipelined"
+                    } else {
+                        "blocking"
+                    },
+                );
+                push_trace_tick_idx = push_trace_tick_idx.saturating_add(1);
+                push_trace_stats.ticks = push_trace_stats.ticks.saturating_add(1);
+                let trace_this_tick =
+                    push_trace_verbose && push_trace_tick_idx <= push_trace_frame_limit;
+                if trace_this_tick {
+                    eprintln!(
+                        "[voice][screen][push][tick {}] capture_us={} ts_us={} target={:.0} schedule={:.0} startup={} have_last={} mft_failed={}",
+                        push_trace_tick_idx,
+                        capture_us,
+                        ts_us,
+                        max_fps,
+                        current_fps,
+                        past_startup,
+                        have_last_frame,
+                        mft_path_failed,
+                    );
+                }
 
                 // Phase 5.1/5.2: MFT path must use GPU; CPU path tries GPU first (auto).
                 // OBS-style: encoder reads single "latest" slot on each timer tick (no queue).
                 let try_gpu = capture_path_mft || (matches!(encode_path_enc, EncodePath::Cpu) && !gpu_path_failed);
                 let gpu_slot = if try_gpu { latest_slot_enc.load() } else { None };
+                if gpu_slot.is_some() {
+                    push_trace_stats.slot_ready = push_trace_stats.slot_ready.saturating_add(1);
+                } else {
+                    push_trace_stats.slot_missing = push_trace_stats.slot_missing.saturating_add(1);
+                }
+                if trace_this_tick {
+                    eprintln!(
+                        "[voice][screen][push][tick {}] gpu_slot={:?} try_gpu={}",
+                        push_trace_tick_idx,
+                        gpu_slot,
+                        try_gpu,
+                    );
+                }
                 // Phase 5.2: MFT path requires GPU; when no slot yet wait and retry (no CPU fallback).
                 if capture_path_mft && gpu_slot.is_none() {
+                    if trace_this_tick {
+                        eprintln!(
+                            "[voice][screen][push][tick {}] no gpu slot; have_last_frame={} mft_failed={}",
+                            push_trace_tick_idx,
+                            have_last_frame,
+                            mft_path_failed,
+                        );
+                    }
                     // Static screen: re-encode last NV12 texture to maintain constant FPS.
                     if have_last_frame && !mft_path_failed {
                         if let (Some(ref enc_src), Some(ref b2n), Some(ref mut mft)) =
                             (&encoded_source_enc, &bgra_to_nv12, &mut mft_encoder)
                         {
+                            push_trace_stats.static_reencode_ticks =
+                                push_trace_stats.static_reencode_ticks.saturating_add(1);
                             let nv12_tex = b2n.output_texture();
+                            let reencode_start = std::time::Instant::now();
                                 match mft.encode(nv12_tex, ts_us, false) {
                                 Ok(frames) => {
+                                    let reencode_us = reencode_start.elapsed().as_micros() as u64;
+                                    push_trace_stats.static_reencode_ok =
+                                        push_trace_stats.static_reencode_ok.saturating_add(1);
+                                    push_trace_stats.encode_ok =
+                                        push_trace_stats.encode_ok.saturating_add(1);
+                                    push_trace_stats.encode_us_total =
+                                        push_trace_stats.encode_us_total.saturating_add(reencode_us);
+                                    if trace_this_tick {
+                                        eprintln!(
+                                            "[voice][screen][push][tick {}] static re-encode ok frames={} encode_us={}",
+                                            push_trace_tick_idx,
+                                            frames.len(),
+                                            reencode_us,
+                                        );
+                                    }
+                                    let send_start = std::time::Instant::now();
                                     for ef in frames.iter() {
-                                        enc_src.push_frame(&ef.data, rtp_timestamp, cap_now_frame, ef.key_frame);
+                                        enc_src.push_frame(&ef.data, rtp_timestamp, capture_us, ef.key_frame);
                                         if telemetry_enabled {
                                             let now_us = enc_session_start.elapsed().as_micros() as i64;
-                                            println!("SEND: rtp={} capture={} delta={} now={}", rtp_timestamp, cap_now_frame, cap_now_frame - last_send_capture_us, now_us);
-                                            last_send_capture_us = cap_now_frame;
+                                            println!("SEND: rtp={} capture={} delta={} now={}", rtp_timestamp, capture_us, capture_us - last_send_capture_us, now_us);
+                                            last_send_capture_us = capture_us;
                                         }
                                         rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
                                     }
+                                    push_trace_stats.send_calls =
+                                        push_trace_stats.send_calls.saturating_add(1);
+                                    push_trace_stats.sent_frames = push_trace_stats
+                                        .sent_frames
+                                        .saturating_add(frames.len() as u64);
+                                    push_trace_stats.send_us_total = push_trace_stats
+                                        .send_us_total
+                                        .saturating_add(send_start.elapsed().as_micros() as u64);
                                     frame_count += 1;
                                     fps_frame_count += 1;
                                     running_ts_us += frame_interval_us as i64;
                                 }
-                                Err(_) => {}
+                                Err(err) => {
+                                    push_trace_stats.encode_fail =
+                                        push_trace_stats.encode_fail.saturating_add(1);
+                                    if trace_this_tick {
+                                        eprintln!(
+                                            "[voice][screen][push][tick {}] static re-encode failed: {:?}",
+                                            push_trace_tick_idx,
+                                            err,
+                                        );
+                                    }
+                                }
                             }
                             let elapsed = fps_window_start.elapsed();
                             if elapsed >= Duration::from_secs(1) {
@@ -2118,10 +2880,22 @@ fn start_screen_capture(
                     // false drops.
                     let late_by_more_than_two = now > next_frame_at + interval + interval;
                     if past_startup && late_by_more_than_two {
+                        push_trace_stats.late_drop_ticks =
+                            push_trace_stats.late_drop_ticks.saturating_add(1);
                         let mut dropped = 0u64;
                         while next_frame_at <= now {
                             next_frame_at += interval;
                             dropped += 1;
+                        }
+                        push_trace_stats.late_drop_frames =
+                            push_trace_stats.late_drop_frames.saturating_add(dropped);
+                        if trace_this_tick {
+                            eprintln!(
+                                "[voice][screen][push][tick {}] late drop: dropped={} interval_ms={:.2}",
+                                push_trace_tick_idx,
+                                dropped,
+                                interval.as_secs_f64() * 1000.0,
+                            );
                         }
                         if dropped > 0 {
                             telemetry_enc.add_frames_dropped(dropped);
@@ -2139,6 +2913,52 @@ fn start_screen_capture(
                     // Phase 5.1: MFT path — BGRA→NV12→H.264→push_frame (zero-copy).
                     if let Some(ref enc_src) = encoded_source_enc {
                         if !mft_path_failed {
+                            let mut converted_nv12_tex = None;
+                            let requested_bitrate_bps = enc_src.target_bitrate_bps();
+                            let requested_fps = enc_src.target_framerate_fps();
+                            let mut bwe_changed = false;
+                            if requested_bitrate_bps > 0 {
+                                let capped_bitrate_bps =
+                                    requested_bitrate_bps.clamp(250_000, preset_bitrate_bps_u32);
+                                if capped_bitrate_bps.abs_diff(webrtc_target_bitrate_bps) >= 250_000 {
+                                    if let Some(ref mut mft) = mft_encoder {
+                                        match mft.set_bitrate(capped_bitrate_bps) {
+                                            Ok(()) => {
+                                                webrtc_target_bitrate_bps = capped_bitrate_bps;
+                                                bwe_changed = true;
+                                            }
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "[voice][screen] MFT bitrate update failed ({} bps): {:?}",
+                                                    capped_bitrate_bps,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    } else {
+                                        webrtc_target_bitrate_bps = capped_bitrate_bps;
+                                        bwe_changed = true;
+                                    }
+                                }
+                            }
+                            if requested_fps > 0.0 {
+                                let capped_fps = requested_fps.clamp(1.0, max_fps_f64);
+                                if (capped_fps - webrtc_target_fps).abs() >= 1.0 {
+                                    webrtc_target_fps = capped_fps;
+                                    bwe_changed = true;
+                                }
+                            }
+                            if bwe_changed {
+                                eprintln!(
+                                    "[voice][screen] WebRTC BWE target: bitrate={:.1} Mbps fps_hint={:.1}",
+                                    webrtc_target_bitrate_bps as f64 / 1_000_000.0,
+                                    webrtc_target_fps
+                                );
+                                if let Some(mut st) = stats_enc.try_lock() {
+                                    st.connection_speed_mbps =
+                                        Some(webrtc_target_bitrate_bps as f32 / 1_000_000.0);
+                                }
+                            }
                             // Phase 1: lazy init + BGRA→NV12 (pool lock scope).
                             // Skip conversion when WGC hasn't delivered new content —
                             // saves GPU work and reduces pool lock hold time so WGC
@@ -2146,17 +2966,49 @@ fn start_screen_capture(
                             let current_wgc = wgc_frame_count_enc.load(Ordering::Relaxed);
                             let is_new_content = current_wgc != last_wgc_count;
                             let need_init = bgra_to_nv12.is_none() || mft_encoder.is_none();
+                            if need_init {
+                                push_trace_stats.need_init_ticks =
+                                    push_trace_stats.need_init_ticks.saturating_add(1);
+                            }
+                            if is_new_content {
+                                push_trace_stats.new_content_ticks =
+                                    push_trace_stats.new_content_ticks.saturating_add(1);
+                            } else {
+                                push_trace_stats.reuse_content_ticks =
+                                    push_trace_stats.reuse_content_ticks.saturating_add(1);
+                            }
+                            if trace_this_tick {
+                                eprintln!(
+                                    "[voice][screen][push][tick {}] content: current_wgc={} last_wgc={} new={} need_init={}",
+                                    push_trace_tick_idx,
+                                    current_wgc,
+                                    last_wgc_count,
+                                    is_new_content,
+                                    need_init,
+                                );
+                            }
 
                             if need_init || is_new_content {
                                 let pool_guard = pool_ref_enc.lock();
                                 let pool = match pool_guard.as_ref() {
                                     Some(p) => p,
-                                    None => { next_frame_at += interval; continue },
+                                    None => {
+                                        push_trace_stats.pool_missing =
+                                            push_trace_stats.pool_missing.saturating_add(1);
+                                        if trace_this_tick {
+                                            eprintln!(
+                                                "[voice][screen][push][tick {}] pool missing",
+                                                push_trace_tick_idx
+                                            );
+                                        }
+                                        next_frame_at += interval;
+                                        continue
+                                    },
                                 };
 
-                                // Lazy init D3d11BgraToNv12 and MftH264Encoder.
+                                // Lazy init D3d11BgraToNv12 and the encoded H.264 backend.
                                 let fps_u32 = max_fps as u32;
-                                let bitrate_u32 = bitrate_bps as u32;
+                                let bitrate_u32 = webrtc_target_bitrate_bps;
                                 if bgra_to_nv12.is_none() {
                                     match D3d11BgraToNv12::new(
                                         &pool.device, &pool.context,
@@ -2168,25 +3020,62 @@ fn start_screen_capture(
                                         Err(e) => {
                                             eprintln!("[voice][screen] D3d11BgraToNv12 init failed: {:?}", e);
                                             mft_path_failed = true;
+                                            mft_hard_failed = true;
                                             next_frame_at += interval;
                                             continue;
                                         }
                                     }
                                 }
                                 if mft_encoder.is_none() {
-                                    match MftH264Encoder::new(&pool.device, video_width, video_height, fps_u32, bitrate_u32) {
+                                    let encoder_init = if encode_path_enc == EncodePath::Auto {
+                                        EncodedH264Encoder::new_auto(
+                                            &pool.device,
+                                            video_width,
+                                            video_height,
+                                            fps_u32,
+                                            bitrate_u32,
+                                            bgra_to_nv12.as_ref().unwrap().output_textures(),
+                                        )
+                                    } else {
+                                        EncodedH264Encoder::new_mft(
+                                            &pool.device,
+                                            video_width,
+                                            video_height,
+                                            fps_u32,
+                                            bitrate_u32,
+                                        )
+                                    };
+                                    match encoder_init {
                                         Ok(enc) => {
                                             mft_encoder = Some(enc);
                                             if !mft_path_logged {
                                                 let enc_ref = mft_encoder.as_ref().unwrap();
-                                                let path_str = if enc_ref.is_hardware() {
-                                                    format!("MFT GPU ({}, hardware)", enc_ref.encoder_name())
-                                                } else {
-                                                    format!("MFT software ({})", enc_ref.encoder_name())
+                                                let path_str = match enc_ref.backend_kind() {
+                                                    EncodedBackendKind::NvencD3d11 => {
+                                                        format!("NVENC D3D11 ({}, hardware)", enc_ref.encoder_name())
+                                                    }
+                                                    EncodedBackendKind::MftHardware => {
+                                                        format!("MFT GPU ({}, hardware)", enc_ref.encoder_name())
+                                                    }
+                                                    EncodedBackendKind::MftSoftware => {
+                                                        format!("MFT software ({})", enc_ref.encoder_name())
+                                                    }
                                                 };
                                                 eprintln!("[voice][screen] Screen capture: {}", path_str);
-                                                if enc_ref.is_async() && std::env::var("ASTRIX_MFT_PIPELINED").map(|v| v != "0").unwrap_or(true) {
-                                                    eprintln!("[voice][screen] MFT pipelined submit+collect_blocking enabled");
+                                                if periodic_idr_override_secs.is_none()
+                                                    && matches!(enc_ref.backend_kind(), EncodedBackendKind::NvencD3d11)
+                                                {
+                                                    eprintln!(
+                                                        "[voice][screen] NVENC tuning: preset bitrate cap {:.1} Mbps, periodic IDR default 8s",
+                                                        bitrate_u32 as f64 / 1_000_000.0
+                                                    );
+                                                }
+                                                if enc_ref.is_async() {
+                                                    if mft_pipelined_enabled {
+                                                        eprintln!("[voice][screen] encoded backend steady-state: pipelined submit+collect mode");
+                                                    } else {
+                                                        eprintln!("[voice][screen] encoded backend steady-state: blocking encode() mode (ASTRIX_MFT_PIPELINED=0)");
+                                                    }
                                                 }
                                                 telemetry_enc.set_encoder_type(&path_str);
                                                 mft_path_logged = true;
@@ -2194,8 +3083,9 @@ fn start_screen_capture(
                                             }
                                         }
                                         Err(e) => {
-                                            eprintln!("[voice][screen] MftH264Encoder init failed: {:?}", e);
+                                            eprintln!("[voice][screen] encoded H.264 backend init failed: {:?}", e);
                                             mft_path_failed = true;
+                                            mft_hard_failed = true;
                                             next_frame_at += interval;
                                             continue;
                                         }
@@ -2207,13 +3097,116 @@ fn start_screen_capture(
                                 let context_mutex = Arc::clone(&pool.context_mutex);
                                 let convert_start = std::time::Instant::now();
                                 match b2n.convert(&pool.context, &texture, &context_mutex) {
-                                    Ok(_) => {
-                                        telemetry_enc.set_convert(convert_start.elapsed().as_micros() as u64);
+                                    Ok(nv12_tex) => {
+                                        let convert_us = convert_start.elapsed().as_micros() as u64;
+                                        converted_nv12_tex = Some(nv12_tex);
+                                        push_trace_stats.convert_ok =
+                                            push_trace_stats.convert_ok.saturating_add(1);
+                                        push_trace_stats.convert_us_total =
+                                            push_trace_stats.convert_us_total.saturating_add(convert_us);
+                                        if trace_this_tick {
+                                            eprintln!(
+                                                "[voice][screen][push][tick {}] convert ok slot={} us={}",
+                                                push_trace_tick_idx,
+                                                gpu_slot,
+                                                convert_us,
+                                            );
+                                        }
+                                        let flush_start = std::time::Instant::now();
+                                        if let Err(e) = b2n.flush(&context_mutex) {
+                                            push_trace_stats.flush_fail =
+                                                push_trace_stats.flush_fail.saturating_add(1);
+                                            if trace_this_tick {
+                                                eprintln!(
+                                                    "[voice][screen][push][tick {}] flush failed: {:?}",
+                                                    push_trace_tick_idx,
+                                                    e,
+                                                );
+                                            }
+                                            eprintln!("[voice][screen] BGRA→NV12 flush failed: {:?}", e);
+                                            mft_path_failed = true;
+                                            mft_hard_failed = true;
+                                            continue;
+                                        }
+                                        let flush_us = flush_start.elapsed().as_micros() as u64;
+                                        push_trace_stats.flush_ok =
+                                            push_trace_stats.flush_ok.saturating_add(1);
+                                        push_trace_stats.flush_us_total =
+                                            push_trace_stats.flush_us_total.saturating_add(flush_us);
+                                        if trace_this_tick {
+                                            eprintln!(
+                                                "[voice][screen][push][tick {}] flush ok us={}",
+                                                push_trace_tick_idx,
+                                                flush_us,
+                                            );
+                                        }
+                                        if nv12_ready_trace {
+                                            match b2n.poll_output_ready() {
+                                                Ok(true) => {
+                                                    push_trace_stats.ready_immediate =
+                                                        push_trace_stats.ready_immediate.saturating_add(1);
+                                                    if trace_this_tick {
+                                                        eprintln!(
+                                                            "[voice][screen][push][tick {}] ready immediate=true wait_us=0",
+                                                            push_trace_tick_idx,
+                                                        );
+                                                    }
+                                                }
+                                                Ok(false) => match b2n.wait_output_ready(200) {
+                                                    Ok(wait_us) => {
+                                                        push_trace_stats.ready_waited =
+                                                            push_trace_stats.ready_waited.saturating_add(1);
+                                                        push_trace_stats.ready_wait_us_total =
+                                                            push_trace_stats.ready_wait_us_total.saturating_add(wait_us);
+                                                        if trace_this_tick {
+                                                            eprintln!(
+                                                                "[voice][screen][push][tick {}] ready immediate=false wait_us={}",
+                                                                push_trace_tick_idx,
+                                                                wait_us,
+                                                            );
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        push_trace_stats.ready_timeout =
+                                                            push_trace_stats.ready_timeout.saturating_add(1);
+                                                        if trace_this_tick {
+                                                            eprintln!(
+                                                                "[voice][screen][push][tick {}] ready wait failed: {:?}",
+                                                                push_trace_tick_idx,
+                                                                e,
+                                                            );
+                                                        }
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    push_trace_stats.ready_timeout =
+                                                        push_trace_stats.ready_timeout.saturating_add(1);
+                                                    if trace_this_tick {
+                                                        eprintln!(
+                                                            "[voice][screen][push][tick {}] ready poll failed: {:?}",
+                                                            push_trace_tick_idx,
+                                                            e,
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        telemetry_enc.set_convert(convert_us.saturating_add(flush_us));
                                         last_wgc_count = current_wgc;
                                     }
                                     Err(e) => {
+                                        push_trace_stats.convert_fail =
+                                            push_trace_stats.convert_fail.saturating_add(1);
+                                        if trace_this_tick {
+                                            eprintln!(
+                                                "[voice][screen][push][tick {}] convert failed: {:?}",
+                                                push_trace_tick_idx,
+                                                e,
+                                            );
+                                        }
                                         eprintln!("[voice][screen] BGRA→NV12 convert failed: {:?}", e);
                                         mft_path_failed = true;
+                                        mft_hard_failed = true;
                                         continue;
                                     }
                                 }
@@ -2221,14 +3214,31 @@ fn start_screen_capture(
                             }
 
                             // Phase 2: H.264 encode (no pool lock needed).
+                            // When WGC hasn't delivered new content yet, reuse the last
+                            // converter output texture instead of unwrapping a missing
+                            // per-tick convert result.
+                            let nv12_tex = match converted_nv12_tex
+                                .as_ref()
+                                .or_else(|| bgra_to_nv12.as_ref().map(|b2n| b2n.output_texture()))
+                            {
+                                Some(tex) => tex,
+                                None => {
+                                    eprintln!(
+                                        "[voice][screen] encoded path missing NV12 texture (no converted frame available)"
+                                    );
+                                    mft_path_failed = true;
+                                    mft_hard_failed = true;
+                                    continue;
+                                }
+                            };
                             // Phase 4.6: pipelined submit/collect for async MFT.
                             // Use submit + collect_blocking so frame is pushed in same iteration (no 1-frame delay).
                             let use_pipelined = mft_encoder.as_ref().map(|m| m.is_async()).unwrap_or(false)
-                                && std::env::var("ASTRIX_MFT_PIPELINED").map(|v| v != "0").unwrap_or(true);
+                                && startup_keyframe_done
+                                && mft_pipelined_enabled;
                             let (mft_result, encode_us, pipelined_collected) = if use_pipelined {
-                                let b2n = bgra_to_nv12.as_ref().unwrap();
                                 let mft = mft_encoder.as_mut().unwrap();
-                                let nv12_tex = b2n.output_texture();
+                                let periodic_idr_secs = effective_periodic_idr_secs(Some(mft));
                                 let now_idr = std::time::Instant::now();
                                 let need_periodic_idr = if periodic_idr_secs == 0 {
                                     false
@@ -2252,35 +3262,159 @@ fn start_screen_capture(
                                     );
                                 }
                                 let key_frame = frame_count < 3 || need_periodic_idr;
+                                // The first frame already went through blocking encode(). In pipelined
+                                // mode, only keep a tiny blocking window for the next startup IDRs.
+                                // Using collect_blocking() for the full STARTUP_ACCEPT_FRAMES window
+                                // caps sender throughput at roughly the MFT output latency.
+                                let startup_collect_blocking = frame_count < 3;
+                                let steady_timeout_ms = match mft.backend_kind() {
+                                    EncodedBackendKind::NvencD3d11 => {
+                                        ((current_effective_interval.as_millis() as u32)
+                                            .saturating_mul(6))
+                                        .clamp(20, 120)
+                                    }
+                                    _ => ((current_effective_interval.as_millis() as u32)
+                                        .saturating_mul(2))
+                                    .clamp(10, 80),
+                                };
+                                let event_timeout_ms = if startup_collect_blocking || key_frame {
+                                    120
+                                } else {
+                                    steady_timeout_ms
+                                };
                                 let encode_start = std::time::Instant::now();
                                 // Submit current frame, then block until it is encoded.
                                 // No pre-drain collect() loop: draining multiple frames at once
                                 // causes a burst send that inflates WebRTC jitter buffer delay.
-                                let mft_res = mft.submit(nv12_tex, ts_us as i64, key_frame, rtp_timestamp, capture_us);
+                                let submit_start = std::time::Instant::now();
+                                let mft_res = mft.submit(
+                                    nv12_tex,
+                                    ts_us as i64,
+                                    key_frame,
+                                    rtp_timestamp,
+                                    capture_us,
+                                    event_timeout_ms,
+                                );
+                                let submit_us = submit_start.elapsed().as_micros() as u64;
+                                push_trace_stats.submit_us_total =
+                                    push_trace_stats.submit_us_total.saturating_add(submit_us);
+                                match &mft_res {
+                                    Ok(()) => {
+                                        push_trace_stats.submit_ok =
+                                            push_trace_stats.submit_ok.saturating_add(1);
+                                        if trace_this_tick {
+                                            eprintln!(
+                                                "[voice][screen][push][tick {}] submit ok key={} timeout_ms={} us={}",
+                                                push_trace_tick_idx,
+                                                key_frame,
+                                                event_timeout_ms,
+                                                submit_us,
+                                            );
+                                        }
+                                    }
+                                    Err(err) => {
+                                        push_trace_stats.submit_fail =
+                                            push_trace_stats.submit_fail.saturating_add(1);
+                                        if trace_this_tick {
+                                            eprintln!(
+                                                "[voice][screen][push][tick {}] submit failed key={} timeout_ms={} us={} err={:?}",
+                                                push_trace_tick_idx,
+                                                key_frame,
+                                                event_timeout_ms,
+                                                submit_us,
+                                                err,
+                                            );
+                                        }
+                                    }
+                                }
                                 let mut collected_this: i64 = 0;
                                 if mft_res.is_ok() {
-                                    if let Ok(Some((frames, rtp_prev, _cap_prev, enc_us))) = mft.collect_blocking(500) {
-                                        telemetry_enc.set_encode(enc_us);
-                                        let send_start = std::time::Instant::now();
-                                        for ef in frames {
-                                            enc_src.push_frame(&ef.data, rtp_prev, cap_now_frame, ef.key_frame);
-                                            if telemetry_enabled {
-                                                let now_us = enc_session_start.elapsed().as_micros() as i64;
-                                                println!("SEND: rtp={} capture={} delta={} now={}", rtp_prev, cap_now_frame, cap_now_frame - last_send_capture_us, now_us);
-                                                last_send_capture_us = cap_now_frame;
+                                    let collect_start = std::time::Instant::now();
+                                    let collect_res = if startup_collect_blocking {
+                                        mft.collect_blocking(event_timeout_ms)
+                                    } else {
+                                        mft.collect()
+                                    };
+                                    let collect_us = collect_start.elapsed().as_micros() as u64;
+                                    match collect_res {
+                                        Ok(Some((frames, _rtp_prev, cap_prev, enc_us))) => {
+                                            push_trace_stats.collect_some =
+                                                push_trace_stats.collect_some.saturating_add(1);
+                                            push_trace_stats.collect_frames = push_trace_stats
+                                                .collect_frames
+                                                .saturating_add(frames.len() as u64);
+                                            push_trace_stats.collect_us_total = push_trace_stats
+                                                .collect_us_total
+                                                .saturating_add(collect_us);
+                                            telemetry_enc.set_encode(enc_us);
+                                            if trace_this_tick {
+                                                eprintln!(
+                                                    "[voice][screen][push][tick {}] collect some frames={} cap_prev={} enc_us={} wait_us={}",
+                                                    push_trace_tick_idx,
+                                                    frames.len(),
+                                                    cap_prev,
+                                                    enc_us,
+                                                    collect_us,
+                                                );
                                             }
-                                            collected_this += 1;
+                                            let send_start = std::time::Instant::now();
+                                            for ef in frames {
+                                                enc_src.push_frame(&ef.data, rtp_timestamp, cap_prev, ef.key_frame);
+                                                if telemetry_enabled {
+                                                    let now_us = enc_session_start.elapsed().as_micros() as i64;
+                                                    println!("SEND: rtp={} capture={} delta={} now={}", rtp_timestamp, cap_prev, cap_prev - last_send_capture_us, now_us);
+                                                    last_send_capture_us = cap_prev;
+                                                }
+                                                collected_this += 1;
+                                                rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
+                                            }
+                                            push_trace_stats.send_calls =
+                                                push_trace_stats.send_calls.saturating_add(1);
+                                            let send_us = send_start.elapsed().as_micros() as u64;
+                                            push_trace_stats.sent_frames = push_trace_stats
+                                                .sent_frames
+                                                .saturating_add(collected_this as u64);
+                                            push_trace_stats.send_us_total = push_trace_stats
+                                                .send_us_total
+                                                .saturating_add(send_us);
+                                            telemetry_enc.set_send(send_us);
                                         }
-                                        telemetry_enc.set_send(send_start.elapsed().as_micros() as u64);
-                                        rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
+                                        Ok(None) => {
+                                            push_trace_stats.collect_none =
+                                                push_trace_stats.collect_none.saturating_add(1);
+                                            push_trace_stats.collect_us_total = push_trace_stats
+                                                .collect_us_total
+                                                .saturating_add(collect_us);
+                                            if trace_this_tick {
+                                                eprintln!(
+                                                    "[voice][screen][push][tick {}] collect none wait_us={}",
+                                                    push_trace_tick_idx,
+                                                    collect_us,
+                                                );
+                                            }
+                                        }
+                                        Err(err) => {
+                                            push_trace_stats.collect_err =
+                                                push_trace_stats.collect_err.saturating_add(1);
+                                            push_trace_stats.collect_us_total = push_trace_stats
+                                                .collect_us_total
+                                                .saturating_add(collect_us);
+                                            if trace_this_tick {
+                                                eprintln!(
+                                                    "[voice][screen][push][tick {}] collect failed wait_us={} err={:?}",
+                                                    push_trace_tick_idx,
+                                                    collect_us,
+                                                    err,
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                                 let us = encode_start.elapsed().as_micros() as u64;
                                 (mft_res.map(|_| vec![]), us, collected_this)
                             } else {
-                                let b2n = bgra_to_nv12.as_ref().unwrap();
                                 let mft = mft_encoder.as_mut().unwrap();
-                                let nv12_tex = b2n.output_texture();
+                                let periodic_idr_secs = effective_periodic_idr_secs(Some(mft));
                                 let now_idr = std::time::Instant::now();
                                 let need_periodic_idr = if periodic_idr_secs == 0 {
                                     false
@@ -2305,32 +3439,104 @@ fn start_screen_capture(
                                 }
                                 let key_frame = frame_count < 3 || need_periodic_idr;
                                 let encode_start = std::time::Instant::now();
+                                if !startup_keyframe_done {
+                                    eprintln!(
+                                        "[voice][screen] encoded backend startup: calling encode() key_frame={} ts_us={}",
+                                        key_frame,
+                                        ts_us
+                                    );
+                                }
                                 let mft_res = mft.encode(nv12_tex, ts_us as i64, key_frame);
                                 let us = encode_start.elapsed().as_micros() as u64;
+                                if !startup_keyframe_done {
+                                    match &mft_res {
+                                        Ok(frames) => eprintln!(
+                                            "[voice][screen] encoded backend startup: encode() returned {} frame(s) in {} us",
+                                            frames.len(),
+                                            us
+                                        ),
+                                        Err(err) => eprintln!(
+                                            "[voice][screen] encoded backend startup: encode() failed after {} us: {:?}",
+                                            us,
+                                            err
+                                        ),
+                                    }
+                                }
                                 telemetry_enc.set_encode(us);
                                 (mft_res, us, 0i64)
                             };
 
                             match mft_result {
                                 Ok(frames) => {
+                                    push_trace_stats.encode_ok =
+                                        push_trace_stats.encode_ok.saturating_add(1);
+                                    push_trace_stats.encode_us_total =
+                                        push_trace_stats.encode_us_total.saturating_add(encode_us);
+                                    mft_transient_timeouts = 0;
+                                    mft_hard_failed = false;
+                                    mft_retry_at = None;
                                     have_last_frame = true;
                                     let n = frames.len() as i64 + pipelined_collected;
+                                    if n == 0 {
+                                        push_trace_stats.empty_output_ticks =
+                                            push_trace_stats.empty_output_ticks.saturating_add(1);
+                                    }
+                                    if trace_this_tick {
+                                        eprintln!(
+                                            "[voice][screen][push][tick {}] encode ok direct_frames={} pipelined_frames={} total_frames={} encode_us={}",
+                                            push_trace_tick_idx,
+                                            frames.len(),
+                                            pipelined_collected,
+                                            n,
+                                            encode_us,
+                                        );
+                                    }
+                                    if n == 0 && !startup_keyframe_done {
+                                        eprintln!("[voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame");
+                                    }
+                                    let direct_frame_count = frames.len() as u64;
                                     let send_start = std::time::Instant::now();
                                     for ef in frames.into_iter() {
-                                        enc_src.push_frame(&ef.data, rtp_timestamp, cap_now_frame, ef.key_frame);
+                                        if !startup_keyframe_done {
+                                            eprintln!(
+                                                "[voice][screen] encoded backend startup: pushing first encoded frame bytes={} key={}",
+                                                ef.data.len(),
+                                                ef.key_frame
+                                            );
+                                        }
+                                        enc_src.push_frame(&ef.data, rtp_timestamp, capture_us, ef.key_frame);
                                         if telemetry_enabled {
                                             let now_us = enc_session_start.elapsed().as_micros() as i64;
-                                            println!("SEND: rtp={} capture={} delta={} now={}", rtp_timestamp, cap_now_frame, cap_now_frame - last_send_capture_us, now_us);
-                                            last_send_capture_us = cap_now_frame;
+                                            println!("SEND: rtp={} capture={} delta={} now={}", rtp_timestamp, capture_us, capture_us - last_send_capture_us, now_us);
+                                            last_send_capture_us = capture_us;
                                         }
                                         rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
                                     }
-                                    telemetry_enc.set_send(send_start.elapsed().as_micros() as u64);
+                                    let send_us = send_start.elapsed().as_micros() as u64;
+                                    if !use_pipelined || direct_frame_count > 0 {
+                                        push_trace_stats.send_calls =
+                                            push_trace_stats.send_calls.saturating_add(1);
+                                        push_trace_stats.sent_frames = push_trace_stats
+                                            .sent_frames
+                                            .saturating_add(direct_frame_count);
+                                        push_trace_stats.send_us_total = push_trace_stats
+                                            .send_us_total
+                                            .saturating_add(send_us);
+                                    }
+                                    if trace_this_tick {
+                                        eprintln!(
+                                            "[voice][screen][push][tick {}] send direct_frames={} us={}",
+                                            push_trace_tick_idx,
+                                            direct_frame_count,
+                                            send_us,
+                                        );
+                                    }
+                                    telemetry_enc.set_send(send_us);
                                     // Phase 4.5: adaptive FPS — downgrade when encode > 80% budget for 1 sec
                                     let encode_ms = encode_us as f64 / 1000.0;
                                     encode_avg_ms = if encode_avg_ms == 0.0 { encode_ms } else { encode_avg_ms * 0.9 + encode_ms * 0.1 };
                                     let budget_ms = 1000.0 / current_fps;
-                                    if past_startup && current_fps > 30.0 {
+                                    if !lock_preset_fps && past_startup && current_fps > 30.0 {
                                         if encode_avg_ms > budget_ms * 0.8 {
                                             downgrade_frames += 1;
                                             upgrade_frames = 0;
@@ -2355,7 +3561,7 @@ fn start_screen_capture(
                                             if upgrade_frames >= (current_fps * 5.0) as i64 {
                                                 let old_fps = current_fps;
                                                 let maybe = next_higher_fps(current_fps);
-                                                if maybe <= max_fps_f64 && maybe != current_fps {
+                                                if maybe <= current_source_cap_fps && maybe != current_fps {
                                                     current_fps = maybe;
                                                     current_frame_interval_ns = (1_000_000_000.0 / current_fps) as u64;
                                                     current_full_interval = Duration::from_nanos(current_frame_interval_ns);
@@ -2377,22 +3583,54 @@ fn start_screen_capture(
                                             upgrade_frames = 0;
                                         }
                                     }
+                                    if lock_preset_fps && current_fps != max_fps_f64 {
+                                        current_source_cap_fps = max_fps_f64;
+                                        current_fps = max_fps_f64;
+                                        current_frame_interval_ns =
+                                            (1_000_000_000.0 / current_fps) as u64;
+                                        current_full_interval =
+                                            Duration::from_nanos(current_frame_interval_ns);
+                                        current_effective_interval = if current_full_interval
+                                            .as_nanos()
+                                            as u64
+                                            > MAX_STATIC_INTERVAL_NS
+                                        {
+                                            Duration::from_nanos(MAX_STATIC_INTERVAL_NS)
+                                        } else {
+                                            current_full_interval
+                                        };
+                                        current_rtp_step = 90_000_u32 / current_fps as u32;
+                                        downgrade_frames = 0;
+                                        upgrade_frames = 0;
+                                    }
                                     let frames_this_round = if frame_count < 3 && n == 0 { 1i64 } else { n };
                                     if frame_count == 0 && !startup_keyframe_done {
                                         startup_keyframe_done = true;
-                                        eprintln!("[voice][screen] MFT startup keyframe: first 3 frames as IDR");
+                                        eprintln!("[voice][screen] encoded backend startup keyframe: first 3 frames as IDR");
                                     }
                                     if let Some(mut st) = stats_enc.try_lock() {
                                         let enc = mft_encoder.as_ref().unwrap();
-                                        st.encoding_path = Some(if enc.is_hardware() {
-                                            EncodingPath::MftHardware { adapter: enc.encoder_name().to_string() }.to_display_string()
-                                        } else {
-                                            EncodingPath::MftSoftware.to_display_string()
+                                        st.encoding_path = Some(match enc.backend_kind() {
+                                            EncodedBackendKind::NvencD3d11 => {
+                                                EncodingPath::NvencD3d11 {
+                                                    adapter: enc.encoder_name().into_owned(),
+                                                }
+                                                .to_display_string()
+                                            }
+                                            EncodedBackendKind::MftHardware => {
+                                                EncodingPath::MftHardware {
+                                                    adapter: enc.encoder_name().into_owned(),
+                                                }
+                                                .to_display_string()
+                                            }
+                                            EncodedBackendKind::MftSoftware => {
+                                                EncodingPath::MftSoftware.to_display_string()
+                                            }
                                         });
                                         st.encoder_threads = None; // MFT doesn't use CPU encoder threads
                                     }
                                     frame_count += frames_this_round.max(1);
-                                    fps_frame_count += frames_this_round.max(1);
+                                    fps_frame_count += n.max(0);
                                     running_ts_us += frame_interval_us as i64 * frames_this_round.max(1);
                                     let elapsed = fps_window_start.elapsed();
                                     if elapsed >= Duration::from_secs(1) {
@@ -2401,6 +3639,13 @@ fn start_screen_capture(
                                             st.stream_fps = Some(actual_fps);
                                             st.frames_per_second = Some(actual_fps);
                                         }
+                                        eprintln!(
+                                            "[voice][screen] push_frame rate: {:.1} fps (target {:.0}, schedule {:.0}, mode={})",
+                                            actual_fps,
+                                            max_fps,
+                                            current_fps,
+                                            if use_pipelined { "pipelined" } else { "blocking" }
+                                        );
                                         telemetry_enc.print("sender");
                                         fps_window_start = std::time::Instant::now();
                                         fps_frame_count = 0;
@@ -2419,17 +3664,118 @@ fn start_screen_capture(
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("[voice][screen] MFT encode failed: {:?}", e);
-                                    mft_path_failed = true;
+                                    push_trace_stats.encode_fail =
+                                        push_trace_stats.encode_fail.saturating_add(1);
+                                    push_trace_stats.encode_us_total =
+                                        push_trace_stats.encode_us_total.saturating_add(encode_us);
+                                    if trace_this_tick {
+                                        eprintln!(
+                                            "[voice][screen][push][tick {}] encode failed after {} us: {:?}",
+                                            push_trace_tick_idx,
+                                            encode_us,
+                                            e,
+                                        );
+                                    }
+                                    let err_text = format!("{:?}", e);
+                                    let transient_async_mft = err_text.contains("timeout waiting for METransformNeedInput")
+                                        || err_text.contains("timeout waiting for METransformHaveOutput")
+                                        || err_text.contains("still not accepting after draining output");
+                                    let transient_nvenc_backpressure = matches!(
+                                        &e,
+                                        EncodedH264EncoderError::Nvenc(NvencD3d11Error::QueueFull { .. })
+                                    ) || err_text.contains("queue stayed full")
+                                        || err_text.contains("queue is full");
+                                    if transient_async_mft || transient_nvenc_backpressure {
+                                        mft_transient_timeouts = mft_transient_timeouts.saturating_add(1);
+                                        if mft_transient_timeouts <= 3 || mft_transient_timeouts % 30 == 0 {
+                                            if transient_nvenc_backpressure {
+                                                eprintln!(
+                                                    "[voice][screen] NVENC backpressure/stall (transient {}/120), dropping frame: {}",
+                                                    mft_transient_timeouts,
+                                                    err_text
+                                                );
+                                            } else {
+                                                eprintln!(
+                                                    "[voice][screen] MFT async state timeout/stall (transient {}/120), dropping frame: {}",
+                                                    mft_transient_timeouts,
+                                                    err_text
+                                                );
+                                            }
+                                        }
+                                        if mft_transient_timeouts >= 120 {
+                                            if transient_nvenc_backpressure {
+                                                eprintln!(
+                                                    "[voice][screen] NVENC backpressure persisted for {} frames, falling back",
+                                                    mft_transient_timeouts
+                                                );
+                                            } else if prefer_mft_no_fallback {
+                                                eprintln!(
+                                                    "[voice][screen] DXGI+MFT: persistent async MFT stall after {} frames, resetting encoder path",
+                                                    mft_transient_timeouts
+                                                );
+                                                mft_retry_at = Some(std::time::Instant::now() + Duration::from_millis(250));
+                                            } else {
+                                                eprintln!(
+                                                    "[voice][screen] MFT async stall persisted for {} frames, falling back",
+                                                    mft_transient_timeouts
+                                                );
+                                            }
+                                            mft_path_failed = true;
+                                        } else {
+                                            let mft_interval = if frame_count < warmup_frames {
+                                                warmup_interval
+                                            } else {
+                                                current_effective_interval
+                                            };
+                                            next_frame_at += mft_interval;
+                                            while next_frame_at <= std::time::Instant::now() {
+                                                next_frame_at += mft_interval;
+                                            }
+                                            let remaining = next_frame_at - std::time::Instant::now();
+                                            if remaining > Duration::from_millis(PRE_BUFFER_MS) {
+                                                std::thread::sleep(remaining - Duration::from_millis(PRE_BUFFER_MS));
+                                            }
+                                            while std::time::Instant::now() < next_frame_at {
+                                                std::hint::spin_loop();
+                                            }
+                                            continue;
+                                        }
+                                    } else {
+                                        eprintln!("[voice][screen] encoded backend encode failed: {:?}", e);
+                                        mft_path_failed = true;
+                                        mft_hard_failed = true;
+                                    }
                                 }
+                            }
+                            continue;
+                        } else if prefer_mft_no_fallback && !mft_hard_failed {
+                            let mft_interval = if frame_count < warmup_frames {
+                                warmup_interval
+                            } else {
+                                current_effective_interval
+                            };
+                            next_frame_at += mft_interval;
+                            while next_frame_at <= std::time::Instant::now() {
+                                next_frame_at += mft_interval;
+                            }
+                            let remaining = next_frame_at - std::time::Instant::now();
+                            if remaining > Duration::from_millis(PRE_BUFFER_MS) {
+                                std::thread::sleep(remaining - Duration::from_millis(PRE_BUFFER_MS));
+                            }
+                            while std::time::Instant::now() < next_frame_at {
+                                std::hint::spin_loop();
                             }
                             continue;
                         }
                     }
 
-                    // Auto fallback: MFT failed → send a Native (I420) track to async context
+                    // Encoded-path fallback: hard failure -> send a Native (I420) track
+                    // to async context
                     // so it can unpublish the Encoded track and republish a working Native one.
-                    if mft_path_failed && !mft_fallback_sent {
+                    if mft_path_failed
+                        && !mft_fallback_sent
+                        && (!prefer_mft_no_fallback || mft_hard_failed)
+                    {
                         // CRITICAL: drop the encoded source to unregister the global
                         // EncodedChannel BEFORE the async context publishes the fallback
                         // track. Without this, VideoEncoderFactory::Create still finds
@@ -2457,7 +3803,7 @@ fn start_screen_capture(
                             // We replace capture_tx_opt with the fallback channel.
                             // SAFETY: capture_tx_opt is None here (MFT path), so we can set it.
                             let _ = capture_tx_opt.replace(fb_tx);
-                            eprintln!("[voice][screen] MFT failed, switching to CPU/I420 fallback track");
+                            eprintln!("[voice][screen] encoded H.264 backend failed, switching to CPU/I420 fallback track");
                             let _ = tx.send(fallback_track);
                         }
                         mft_fallback_sent = true;

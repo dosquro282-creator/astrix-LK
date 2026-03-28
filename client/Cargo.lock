@@ -246,6 +246,7 @@ dependencies = [
  "chacha20poly1305",
  "cpal",
  "cxx",
+ "cxx-build",
  "eframe",
  "egui",
  "egui_extras",

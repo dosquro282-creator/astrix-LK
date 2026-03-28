@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_WRITE, D3D11_MAP_READ, D3D11_MAP_WRITE_DISCARD, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
     D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS,
     D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC, D3D11_USAGE_STAGING,
-    D3D11_UAV_DIMENSION_BUFFER, ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext,
+    D3D11_TEXTURE2D_DESC, D3D11_UAV_DIMENSION_BUFFER, ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext,
     ID3D11Query, ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D,
     ID3D11UnorderedAccessView, D3D11_BUFFER_DESC, D3D11_BUFFER_UAV, D3D11_BUFFER_UAV_FLAG_RAW,
     D3D11_MAPPED_SUBRESOURCE, D3D11_SAMPLER_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC,
@@ -23,7 +23,10 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_UNORDERED_ACCESS_VIEW_DESC_0,
 };
 use windows::Win32::Graphics::Direct3D11::{D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_TEXTURE_ADDRESS_CLAMP};
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_R32_TYPELESS,
+    DXGI_FORMAT_R8G8B8A8_UNORM,
+};
 
 /// Phase 3: no-downscale shader (src == dst dimensions, two dispatches: Y then UV).
 /// TODO-5: output buffers are RWByteAddressBuffer; each thread packs 4 pixels into one uint
@@ -746,6 +749,13 @@ fn create_srv_for_texture(
     device: &ID3D11Device,
     texture: &ID3D11Texture2D,
 ) -> Result<ID3D11ShaderResourceView, D3d11I420Error> {
+    let mut tex_desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { texture.GetDesc(&mut tex_desc) };
+    let srv_format = match tex_desc.Format {
+        f if f == DXGI_FORMAT_B8G8R8A8_UNORM.into() => DXGI_FORMAT_B8G8R8A8_UNORM,
+        f if f == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB.into() => DXGI_FORMAT_B8G8R8A8_UNORM,
+        _ => DXGI_FORMAT_R8G8B8A8_UNORM,
+    };
     let anonymous = unsafe {
         let mut u = D3D11_SHADER_RESOURCE_VIEW_DESC_0::default();
         u.Texture2D = D3D11_TEX2D_SRV {
@@ -755,7 +765,7 @@ fn create_srv_for_texture(
         u
     };
     let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
-        Format: DXGI_FORMAT_R8G8B8A8_UNORM.into(),
+        Format: srv_format.into(),
         ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
         Anonymous: anonymous,
     };
