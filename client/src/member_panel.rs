@@ -38,7 +38,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: MemberPanelParams<'_
         theme,
         members,
         online_count,
-        speaking,
+        speaking: _,
         avatar_textures,
         on_action,
     } = params;

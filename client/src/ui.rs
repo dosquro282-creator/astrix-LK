@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+﻿use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use std::num::NonZeroU32;
@@ -636,6 +636,18 @@ pub(crate) struct ScreenSourceEntry {
     pub(crate) target: StreamSourceTarget,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScreenSourceTab {
+    Applications,
+    EntireScreen,
+}
+
+impl Default for ScreenSourceTab {
+    fn default() -> Self {
+        Self::Applications
+    }
+}
+
 pub(crate) struct MainState {
     pub(crate) servers: Vec<Server>,
     pub(crate) channels: Vec<Channel>,
@@ -699,6 +711,8 @@ pub(crate) struct MainState {
     pub(crate) screen_sources: Vec<ScreenSourceEntry>,
     pub(crate) window_sources: Vec<ScreenSourceEntry>,
     pub(crate) selected_stream_source: Option<ScreenSourceEntry>,
+    pub(crate) start_stream_after_source_pick: bool,
+    pub(crate) screen_source_tab: ScreenSourceTab,
     pub(crate) screen_preset: crate::voice::ScreenPreset,
     pub(crate) show_voice_stats_window: bool,
     pub(crate) voice_stats: Option<Arc<Mutex<VoiceSessionStats>>>,
@@ -771,7 +785,9 @@ impl Clone for MainState {
             screen_sources: Vec::new(),
             window_sources: Vec::new(),
             selected_stream_source: self.selected_stream_source.clone(),
-            screen_preset: crate::voice::ScreenPreset::default(),
+            start_stream_after_source_pick: false,
+            screen_source_tab: self.screen_source_tab,
+            screen_preset: self.screen_preset,
             show_voice_stats_window: self.show_voice_stats_window,
             voice_stats: self.voice_stats.clone(), // Arc clone
             voice_receiver_telemetry: self.voice_receiver_telemetry.clone(),
@@ -841,6 +857,8 @@ impl Default for MainState {
             screen_sources: Vec::new(),
             window_sources: Vec::new(),
             selected_stream_source: None,
+            start_stream_after_source_pick: false,
+            screen_source_tab: ScreenSourceTab::default(),
             screen_preset: crate::voice::ScreenPreset::default(),
             show_voice_stats_window: false,
             voice_stats: None,
@@ -1359,6 +1377,8 @@ fn apply_voice_leave(
     }
     stop_voice_engine(engine_tx, engine_done);
     state.main.voice = VoiceState::default();
+    state.main.show_screen_source_picker = false;
+    state.main.start_stream_after_source_pick = false;
     state.main.voice_video_textures.clear();
     state.main.voice_render_fps.clear();
     state.main.voice_receiver_telemetry = None;
@@ -1517,6 +1537,114 @@ fn set_local_camera_enabled(
     ctx.request_repaint();
 }
 
+fn set_local_mic_muted(
+    ctx: &egui::Context,
+    state: &mut State,
+    api: &ApiClient,
+    engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: Option<i64>,
+    muted: bool,
+) {
+    state.main.voice.mic_muted = muted;
+    if let Some(tx) = engine_tx {
+        tx.send(VoiceCmd::SetMicMuted(muted)).ok();
+    }
+    sync_voice_presence(state, api);
+    update_local_mic_flag(state, user_id, muted);
+    ctx.request_repaint();
+}
+
+fn set_local_output_muted(
+    ctx: &egui::Context,
+    state: &mut State,
+    engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    muted: bool,
+) {
+    state.main.voice.output_muted = muted;
+    if let Some(tx) = engine_tx {
+        tx.send(VoiceCmd::SetOutputMuted(muted)).ok();
+    }
+    ctx.request_repaint();
+}
+
+fn set_local_deafened(
+    ctx: &egui::Context,
+    state: &mut State,
+    api: &ApiClient,
+    engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: Option<i64>,
+    deafened: bool,
+) {
+    set_local_output_muted(ctx, state, engine_tx, deafened);
+    set_local_mic_muted(ctx, state, api, engine_tx, user_id, deafened);
+}
+
+fn open_screen_share_picker(ctx: &egui::Context, state: &mut State, start_after_pick: bool) {
+    populate_screen_share_sources(state);
+    state.main.start_stream_after_source_pick = start_after_pick;
+    state.main.screen_source_tab = if state.main.window_sources.is_empty() {
+        ScreenSourceTab::EntireScreen
+    } else {
+        ScreenSourceTab::Applications
+    };
+    state.main.show_screen_source_picker = true;
+    ctx.request_repaint();
+}
+
+fn start_screen_share_from_source(
+    ctx: &egui::Context,
+    state: &mut State,
+    api: &ApiClient,
+    engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: Option<i64>,
+    source: StreamSourceTarget,
+) {
+    let preset = state.main.screen_preset;
+    state.main.voice.screen_on = true;
+    if let Some(tx) = engine_tx {
+        tx.send(VoiceCmd::StartScreen { source, preset }).ok();
+    }
+    sync_voice_presence(state, api);
+    update_local_stream_flag(state, user_id, true);
+    ctx.request_repaint();
+}
+
+fn start_screen_share_from_selected_source(
+    ctx: &egui::Context,
+    state: &mut State,
+    api: &ApiClient,
+    engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: Option<i64>,
+) -> bool {
+    let Some(source) = state
+        .main
+        .selected_stream_source
+        .as_ref()
+        .map(|entry| entry.target.clone())
+    else {
+        return false;
+    };
+
+    start_screen_share_from_source(ctx, state, api, engine_tx, user_id, source);
+    true
+}
+
+fn stop_local_screen_share(
+    ctx: &egui::Context,
+    state: &mut State,
+    api: &ApiClient,
+    engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: Option<i64>,
+) {
+    state.main.voice.screen_on = false;
+    if let Some(tx) = engine_tx {
+        tx.send(VoiceCmd::StopScreen).ok();
+    }
+    sync_voice_presence(state, api);
+    update_local_stream_flag(state, user_id, false);
+    ctx.request_repaint();
+}
+
 fn toggle_local_screen_share(
     ctx: &egui::Context,
     state: &mut State,
@@ -1525,36 +1653,15 @@ fn toggle_local_screen_share(
     user_id: Option<i64>,
 ) {
     if state.main.voice.screen_on {
-        state.main.voice.screen_on = false;
-        if let Some(tx) = engine_tx {
-            tx.send(VoiceCmd::StopScreen).ok();
-        }
-        sync_voice_presence(state, api);
-        update_local_stream_flag(state, user_id, false);
-        ctx.request_repaint();
+        stop_local_screen_share(ctx, state, api, engine_tx, user_id);
         return;
     }
 
-    if let Some(source) = state
-        .main
-        .selected_stream_source
-        .as_ref()
-        .map(|entry| entry.target.clone())
-    {
-        let preset = state.main.screen_preset;
-        state.main.voice.screen_on = true;
-        if let Some(tx) = engine_tx {
-            tx.send(VoiceCmd::StartScreen { source, preset }).ok();
-        }
-        sync_voice_presence(state, api);
-        update_local_stream_flag(state, user_id, true);
-        ctx.request_repaint();
+    if start_screen_share_from_selected_source(ctx, state, api, engine_tx, user_id) {
         return;
     }
 
-    populate_screen_share_sources(state);
-    state.main.show_screen_source_picker = true;
-    ctx.request_repaint();
+    open_screen_share_picker(ctx, state, true);
 }
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
@@ -2673,6 +2780,7 @@ pub(crate) fn main_screen(
     } else {
         state.main.my_display_name.clone()
     };
+    let left_user_panel_height = bottom_panel::panel_height(state.main.voice.channel_id.is_some());
 
     egui::SidePanel::left("panel_servers")
         .frame(egui::Frame::none().fill(theme.bg_tertiary))
@@ -2716,6 +2824,7 @@ pub(crate) fn main_screen(
                 ui,
                 GuildPanelParams {
                     theme,
+                    bottom_reserved_height: left_user_panel_height,
                     servers: servers.as_slice(),
                     selected_server,
                     on_action: &mut on_action,
@@ -2780,6 +2889,7 @@ pub(crate) fn main_screen(
                     ui,
                     ChannelPanelParams {
                         theme,
+                        bottom_reserved_height: left_user_panel_height,
                         server_name: &server_name,
                         server_id,
                         text_channels: &text_chs,
@@ -2839,20 +2949,10 @@ pub(crate) fn main_screen(
                     apply_voice_leave(ctx, state, api, engine_tx, engine_done, video_frames);
                 }
                 ChannelPanelAction::SetMicMuted(muted) => {
-                    state.main.voice.mic_muted = muted;
-                    if let Some(tx) = engine_tx.as_ref() {
-                        tx.send(VoiceCmd::SetMicMuted(muted)).ok();
-                    }
-                    sync_voice_presence(state, api);
-                    update_local_mic_flag(state, user_id, muted);
-                    ctx.request_repaint();
+                    set_local_mic_muted(ctx, state, api, engine_tx.as_ref(), user_id, muted);
                 }
                 ChannelPanelAction::SetOutputMuted(muted) => {
-                    state.main.voice.output_muted = muted;
-                    if let Some(tx) = engine_tx.as_ref() {
-                        tx.send(VoiceCmd::SetOutputMuted(muted)).ok();
-                    }
-                    ctx.request_repaint();
+                    set_local_output_muted(ctx, state, engine_tx.as_ref(), muted);
                 }
                 ChannelPanelAction::SetParticipantMuted { user_id, muted } => {
                     if muted {
@@ -2917,6 +3017,8 @@ pub(crate) fn main_screen(
             in_voice_channel: state.main.voice.channel_id.is_some(),
             mic_muted: state.main.voice.mic_muted,
             output_muted: state.main.voice.output_muted,
+            screen_on: state.main.voice.screen_on,
+            screen_preset: state.main.screen_preset,
         };
         let mut bottom_actions: Vec<BottomPanelAction> = Vec::new();
         let screen_rect = ctx.screen_rect();
@@ -2925,15 +3027,14 @@ pub(crate) fn main_screen(
             .order(egui::Order::Foreground)
             .fixed_pos(egui::pos2(
                 screen_rect.left(),
-                screen_rect.bottom() - bottom_panel::BOTTOM_PANEL_HEIGHT,
+                screen_rect.bottom() - left_user_panel_height,
             ))
             .show(ctx, |ui| {
                 ui.allocate_ui_with_layout(
-                    egui::vec2(left_user_panel_width, bottom_panel::BOTTOM_PANEL_HEIGHT),
+                    egui::vec2(left_user_panel_width, left_user_panel_height),
                     egui::Layout::left_to_right(egui::Align::Min),
                     |ui| {
                         bottom_panel::show(
-                            ctx,
                             ui,
                             BottomPanelParams {
                                 theme,
@@ -2952,25 +3053,35 @@ pub(crate) fn main_screen(
         for action in bottom_actions {
             match action {
                 BottomPanelAction::SetMicMuted(muted) => {
-                    state.main.voice.mic_muted = muted;
-                    if let Some(tx) = engine_tx.as_ref() {
-                        tx.send(VoiceCmd::SetMicMuted(muted)).ok();
-                    }
-                    sync_voice_presence(state, api);
-                    update_local_mic_flag(state, state.user_id, muted);
-                    ctx.request_repaint();
+                    set_local_mic_muted(ctx, state, api, engine_tx.as_ref(), state.user_id, muted);
                 }
-                BottomPanelAction::SetOutputMuted(muted) => {
-                    state.main.voice.output_muted = muted;
-                    if let Some(tx) = engine_tx.as_ref() {
-                        tx.send(VoiceCmd::SetOutputMuted(muted)).ok();
-                    }
-                    ctx.request_repaint();
+                BottomPanelAction::SetDeafened(deafened) => {
+                    set_local_deafened(
+                        ctx,
+                        state,
+                        api,
+                        engine_tx.as_ref(),
+                        state.user_id,
+                        deafened,
+                    );
                 }
                 BottomPanelAction::OpenSettings => {
                     state.main.show_settings_dialog = true;
                     state.main.settings_nickname_input = state.main.my_display_name.clone();
                     state.main.settings_msg = None;
+                }
+                BottomPanelAction::OpenStreamPicker => {
+                    open_screen_share_picker(ctx, state, true);
+                }
+                BottomPanelAction::StopStream => {
+                    stop_local_screen_share(ctx, state, api, engine_tx.as_ref(), state.user_id);
+                }
+                BottomPanelAction::SetScreenPreset(preset) => {
+                    state.main.screen_preset = preset;
+                    ctx.request_repaint();
+                }
+                BottomPanelAction::LeaveVoice => {
+                    apply_voice_leave(ctx, state, api, engine_tx, engine_done, video_frames);
                 }
             }
         }
@@ -3550,68 +3661,17 @@ pub(crate) fn main_screen(
                         }
                         if state.main.voice.screen_on {
                             if ui.button("📺 Остановить трансляцию").on_hover_text("Остановить демонстрацию").clicked() {
-                                state.main.voice.screen_on = false;
-                                if let Some(tx) = engine_tx.as_ref() {
-                                    tx.send(VoiceCmd::StopScreen).ok();
-                                }
-                                if let (Some(ch_id), Some(ref token)) = (state.main.voice.channel_id, &state.access_token) {
-                                    let token = token.clone();
-                                    let _ = block_on(api.voice_update_state(&token, ch_id, state.main.voice.mic_muted, state.main.voice.camera_on, state.main.voice.screen_on));
-                                }
-                                if let Some(uid) = state.user_id {
-                                    for p in &mut state.main.voice.participants {
-                                        if p.user_id == uid { p.streaming = false; break; }
-                                    }
-                                    if let Some(ch_id) = state.main.voice.channel_id {
-                                        if let Some(list) = state.main.channel_voice.get_mut(&ch_id) {
-                                            for p in list.iter_mut() {
-                                                if p.user_id == uid { p.streaming = false; break; }
-                                            }
-                                        }
-                                    }
-                                }
-                                ui.ctx().request_repaint();
+                                stop_local_screen_share(
+                                    ui.ctx(),
+                                    state,
+                                    api,
+                                    engine_tx.as_ref(),
+                                    state.user_id,
+                                );
                             }
                         } else {
                             if ui.button("🖥 Выбрать источник").on_hover_text("Выбрать экран или окно для трансляции").clicked() {
-                                let monitors = crate::voice_livekit::enumerate_unique_screens();
-                                state.main.screen_sources = monitors
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, m)| {
-                                        let tag = if m.is_primary() { " (осн.)" } else { "" };
-                                        ScreenSourceEntry {
-                                            label: format!("Монитор {}{} {}×{}", i + 1, tag, m.width(), m.height()),
-                                            target: StreamSourceTarget::Monitor { index: i },
-                                        }
-                                    })
-                                    .collect();
-                                state.main.window_sources = crate::voice_livekit::enumerate_stream_windows()
-                                    .into_iter()
-                                    .map(|window| {
-                                        let title = window.title.trim();
-                                        let suffix = if title.is_empty() {
-                                            String::new()
-                                        } else {
-                                            format!(" - {}", title)
-                                        };
-                                        ScreenSourceEntry {
-                                            label: format!(
-                                                "{}{} {}×{}",
-                                                window.app_name,
-                                                suffix,
-                                                window.width,
-                                                window.height
-                                            ),
-                                            target: StreamSourceTarget::Window {
-                                                window_id: window.window_id,
-                                                process_id: window.process_id,
-                                            },
-                                        }
-                                    })
-                                    .collect();
-                                state.main.show_screen_source_picker = true;
-                                ui.ctx().request_repaint();
+                                open_screen_share_picker(ui.ctx(), state, false);
                             }
                             let start_clicked = ui
                                 .add_enabled(
@@ -3625,30 +3685,13 @@ pub(crate) fn main_screen(
                                 })
                                 .clicked();
                             if start_clicked {
-                                if let Some(source) = state.main.selected_stream_source.as_ref().map(|entry| entry.target.clone()) {
-                                    let preset = state.main.screen_preset;
-                                    state.main.voice.screen_on = true;
-                                    if let Some(tx) = engine_tx.as_ref() {
-                                        tx.send(VoiceCmd::StartScreen { source, preset }).ok();
-                                    }
-                                    if let (Some(ch_id), Some(ref token)) = (state.main.voice.channel_id, &state.access_token) {
-                                        let token = token.clone();
-                                        let _ = block_on(api.voice_update_state(&token, ch_id, state.main.voice.mic_muted, state.main.voice.camera_on, state.main.voice.screen_on));
-                                    }
-                                    if let Some(uid) = state.user_id {
-                                        for p in &mut state.main.voice.participants {
-                                            if p.user_id == uid { p.streaming = true; break; }
-                                        }
-                                        if let Some(ch_id) = state.main.voice.channel_id {
-                                            if let Some(list) = state.main.channel_voice.get_mut(&ch_id) {
-                                                for p in list.iter_mut() {
-                                                    if p.user_id == uid { p.streaming = true; break; }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    ui.ctx().request_repaint();
-                                }
+                                start_screen_share_from_selected_source(
+                                    ui.ctx(),
+                                    state,
+                                    api,
+                                    engine_tx.as_ref(),
+                                    state.user_id,
+                                );
                             }
                         }
                         if let Some(source) = state.main.selected_stream_source.as_ref() {
@@ -3786,78 +3829,111 @@ pub(crate) fn main_screen(
     // Screen source picker dialog (before starting stream).
     if state.main.show_screen_source_picker {
         let mut close_picker = false;
+        let mut picked_source: Option<ScreenSourceEntry> = None;
+        let start_after_pick = state.main.start_stream_after_source_pick;
         let screen_sources = state.main.screen_sources.clone();
         let window_sources = state.main.window_sources.clone();
-        let current_preset = state.main.screen_preset;
         let selected_source = state.main.selected_stream_source.clone();
         egui::Window::new("Выбор источника трансляции")
             .collapsible(false)
             .resizable(true)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                ui.heading("Качество трансляции");
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    for &preset in crate::voice::ScreenPreset::ALL {
-                        let selected = preset == current_preset;
-                        if ui.selectable_label(selected, preset.label()).clicked() {
-                            state.main.screen_preset = preset;
-                        }
-                        ui.add_space(2.0);
+                ui.heading("Выбор источника трансляции");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(
+                            state.main.screen_source_tab == ScreenSourceTab::Applications,
+                            "Приложения",
+                        )
+                        .clicked()
+                    {
+                        state.main.screen_source_tab = ScreenSourceTab::Applications;
+                    }
+                    if ui
+                        .selectable_label(
+                            state.main.screen_source_tab == ScreenSourceTab::EntireScreen,
+                            "Весь экран",
+                        )
+                        .clicked()
+                    {
+                        state.main.screen_source_tab = ScreenSourceTab::EntireScreen;
                     }
                 });
                 ui.add_space(8.0);
                 ui.separator();
-                ui.label("Выбор источника не запускает стрим. Для запуска используйте кнопку \"Начать трансляцию\".");
-                ui.add_space(8.0);
-                ui.heading("Экран");
                 ui.add_space(4.0);
-                if screen_sources.is_empty() {
-                    ui.label("Экраны не обнаружены.");
-                } else {
-                    ui.horizontal_wrapped(|ui| {
-                        for source in &screen_sources {
-                            let is_selected = selected_source
-                                .as_ref()
-                                .map(|entry| entry.target == source.target)
-                                .unwrap_or(false);
-                            if ui.selectable_label(is_selected, &source.label).clicked() {
-                                state.main.selected_stream_source = Some(source.clone());
-                                close_picker = true;
-                            }
-                            ui.add_space(4.0);
+                match state.main.screen_source_tab {
+                    ScreenSourceTab::Applications => {
+                        if window_sources.is_empty() {
+                            ui.label("Подходящие окна не найдены.");
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .max_height(260.0)
+                                .show(ui, |ui| {
+                                    for source in &window_sources {
+                                        let is_selected = selected_source
+                                            .as_ref()
+                                            .map(|entry| entry.target == source.target)
+                                            .unwrap_or(false);
+                                        if ui.selectable_label(is_selected, &source.label).clicked() {
+                                            picked_source = Some(source.clone());
+                                            close_picker = true;
+                                        }
+                                        ui.add_space(4.0);
+                                    }
+                                });
                         }
-                    });
-                }
-                ui.separator();
-                ui.heading("Приложение");
-                ui.add_space(4.0);
-                if window_sources.is_empty() {
-                    ui.label("Подходящие окна не найдены.");
-                } else {
-                    egui::ScrollArea::vertical()
-                        .max_height(260.0)
-                        .show(ui, |ui| {
-                            for source in &window_sources {
-                                let is_selected = selected_source
-                                    .as_ref()
-                                    .map(|entry| entry.target == source.target)
-                                    .unwrap_or(false);
-                                if ui.selectable_label(is_selected, &source.label).clicked() {
-                                    state.main.selected_stream_source = Some(source.clone());
-                                    close_picker = true;
-                                }
-                                ui.add_space(4.0);
-                            }
-                        });
+                    }
+                    ScreenSourceTab::EntireScreen => {
+                        if screen_sources.is_empty() {
+                            ui.label("Экраны не обнаружены.");
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .max_height(260.0)
+                                .show(ui, |ui| {
+                                    for source in &screen_sources {
+                                        let is_selected = selected_source
+                                            .as_ref()
+                                            .map(|entry| entry.target == source.target)
+                                            .unwrap_or(false);
+                                        if ui.selectable_label(is_selected, &source.label).clicked() {
+                                            picked_source = Some(source.clone());
+                                            close_picker = true;
+                                        }
+                                        ui.add_space(4.0);
+                                    }
+                                });
+                        }
+                    }
                 }
                 ui.add_space(8.0);
+                if !start_after_pick {
+                    ui.label("Выбор источника не запускает стрим. Для запуска используйте кнопку \"Начать трансляцию\".");
+                    ui.add_space(8.0);
+                }
                 if ui.button("Отмена").clicked() {
                     close_picker = true;
                 }
             });
+        if let Some(source) = picked_source {
+            state.main.selected_stream_source = Some(source);
+            if start_after_pick {
+                start_screen_share_from_selected_source(
+                    ctx,
+                    state,
+                    api,
+                    engine_tx.as_ref(),
+                    state.user_id,
+                );
+            } else {
+                ctx.request_repaint();
+            }
+        }
         if close_picker {
             state.main.show_screen_source_picker = false;
+            state.main.start_stream_after_source_pick = false;
         }
     }
 

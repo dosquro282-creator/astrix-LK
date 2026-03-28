@@ -2,7 +2,6 @@
 
 use eframe::egui;
 
-use crate::bottom_panel;
 use crate::components::buttons;
 use crate::net::Server;
 use crate::theme::Theme;
@@ -21,6 +20,7 @@ pub enum GuildPanelAction {
 
 pub struct GuildPanelParams<'a> {
     pub theme: &'a Theme,
+    pub bottom_reserved_height: f32,
     pub servers: &'a [Server],
     pub selected_server: Option<i64>,
     pub on_action: &'a mut dyn FnMut(GuildPanelAction),
@@ -31,6 +31,7 @@ pub struct GuildPanelParams<'a> {
 pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: GuildPanelParams<'_>) {
     let GuildPanelParams {
         theme,
+        bottom_reserved_height,
         servers,
         selected_server,
         on_action,
@@ -42,7 +43,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: GuildPanelParams<'_>
         .rect_filled(ui.max_rect(), egui::Rounding::ZERO, theme.bg_tertiary);
 
     egui::TopBottomPanel::bottom("guild_panel_footer")
-        .exact_height(bottom_panel::BOTTOM_PANEL_HEIGHT)
+        .exact_height(bottom_reserved_height)
         .show_separator_line(false)
         .show_inside(ui, |_ui| {});
 

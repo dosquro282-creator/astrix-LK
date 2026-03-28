@@ -1,10 +1,9 @@
-//! Left sidebar with channel lists and the user voice bar.
+//! Left sidebar with channel lists and the shared left-side user bar.
 
 use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
 
-use crate::bottom_panel;
 use crate::net::VoiceParticipant;
 use crate::theme::Theme;
 
@@ -57,6 +56,7 @@ pub enum ChannelsLoadState {
 
 pub struct ChannelPanelParams<'a> {
     pub theme: &'a Theme,
+    pub bottom_reserved_height: f32,
     pub server_name: &'a str,
     pub server_id: i64,
     pub text_channels: &'a [(i64, String)],
@@ -72,6 +72,7 @@ pub struct ChannelPanelParams<'a> {
 pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'_>) {
     let ChannelPanelParams {
         theme,
+        bottom_reserved_height,
         server_name,
         server_id,
         text_channels,
@@ -88,30 +89,29 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
         .rect_filled(ui.max_rect(), egui::Rounding::ZERO, theme.bg_secondary);
 
     egui::TopBottomPanel::bottom("channel_panel_user")
-        .exact_height(bottom_panel::BOTTOM_PANEL_HEIGHT)
+        .exact_height(bottom_reserved_height)
         .show_separator_line(false)
         .show_inside(ui, |_ui| {});
 
     egui::TopBottomPanel::top("channel_panel_header")
         .exact_height(SERVER_HEADER_HEIGHT)
+        .frame(egui::Frame::none().fill(theme.bg_quaternary))
         .show_separator_line(false)
         .show_inside(ui, |ui| {
             let rect = ui.max_rect();
-            ui.painter()
-                .rect_filled(rect, egui::Rounding::ZERO, theme.bg_elevated);
             ui.painter().line_segment(
                 [rect.left_bottom(), rect.right_bottom()],
                 egui::Stroke::new(1.0, theme.border),
             );
 
-            let total_w = ui.available_width();
-            let button_group_w = HEADER_BUTTON_SIZE.x * 2.0 + 8.0;
-            let title_w = (total_w - button_group_w - 10.0).max(0.0);
-
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
+                let buttons_width = HEADER_BUTTON_SIZE.x * 2.0 + 4.0;
+                let right_margin = 10.0;
+                let title_width = (ui.available_width() - buttons_width - right_margin).max(0.0);
+
                 ui.allocate_ui_with_layout(
-                    egui::vec2(title_w, SERVER_HEADER_HEIGHT),
+                    egui::vec2(title_width, SERVER_HEADER_HEIGHT),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         ui.label(
@@ -123,14 +123,19 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                     },
                 );
 
-                ui.horizontal(|ui| {
-                    if header_button(ui, theme, "@", "Invite").clicked() {
-                        (*on_action)(ChannelPanelAction::Invite);
-                    }
-                    if header_button(ui, theme, "+", "Create channel").clicked() {
-                        (*on_action)(ChannelPanelAction::CreateChannel);
-                    }
-                });
+                ui.add_space(right_margin);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(buttons_width, SERVER_HEADER_HEIGHT),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        if header_button(ui, theme, "+", "Create channel").clicked() {
+                            (*on_action)(ChannelPanelAction::CreateChannel);
+                        }
+                        if header_button(ui, theme, "@", "Invite").clicked() {
+                            (*on_action)(ChannelPanelAction::Invite);
+                        }
+                    },
+                );
             });
         });
 
@@ -176,7 +181,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                     });
                 }
 
-                ui.add_space(12.0);
+                ui.add_space(10.0);
                 ui.add_space(10.0);
                 section_label(ui, theme, "VOICE CHANNELS");
                 ui.add_space(4.0);
@@ -225,6 +230,10 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                                 theme,
                                 participant,
                                 *voice.speaking.get(&participant.user_id).unwrap_or(&false),
+                                Some(participant.user_id) == user_id,
+                                Some(participant.user_id) == user_id
+                                    && voice.mic_muted
+                                    && voice.output_muted,
                             );
                             if voice.channel_id == Some(*id) && Some(participant.user_id) != user_id
                             {
@@ -302,7 +311,9 @@ fn header_button(ui: &mut egui::Ui, theme: &Theme, label: &str, tooltip: &str) -
                 .size(13.0)
                 .color(theme.text_secondary),
         )
-        .frame(false),
+        .fill(theme.bg_tertiary)
+        .stroke(egui::Stroke::NONE)
+        .rounding(egui::Rounding::same(6.0)),
     )
     .on_hover_text(tooltip)
 }
@@ -401,6 +412,8 @@ fn voice_participant_row(
     theme: &Theme,
     participant: &VoiceParticipant,
     is_speaking: bool,
+    is_self: bool,
+    is_full_muted: bool,
 ) -> egui::Response {
     let name = if participant.username.is_empty() {
         "Guest"
@@ -411,15 +424,25 @@ fn voice_participant_row(
     let row = ui
         .horizontal(|ui| {
             ui.add_space(20.0);
-            crate::components::avatar::avatar(ui, theme, name, 10.0, is_speaking, None);
+            crate::components::avatar::avatar(ui, theme, name, 12.0, is_speaking, None);
             ui.add_space(6.0);
             ui.label(
                 egui::RichText::new(name)
-                    .small()
+                    .size(13.0)
                     .color(theme.text_secondary),
             );
-            if participant.mic_muted {
-                ui.label(egui::RichText::new("Muted").small().color(theme.text_muted));
+            if is_full_muted {
+                ui.label(
+                    egui::RichText::new("full muted")
+                        .size(12.0)
+                        .color(theme.text_muted),
+                );
+            } else if participant.mic_muted || (is_self && participant.mic_muted) {
+                ui.label(
+                    egui::RichText::new("Muted")
+                        .size(12.0)
+                        .color(theme.text_muted),
+                );
             }
         })
         .response;
