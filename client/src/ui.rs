@@ -1,8 +1,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// Tracks rendered frames per stream for display FPS (frames actually drawn per second).
@@ -60,7 +64,10 @@ use crate::guild_panel::{self, GuildPanelParams};
 use crate::member_panel::{self, MemberPanelParams, MemberSnapshot};
 use crate::theme::Theme;
 use crate::telemetry::PipelineTelemetry;
-use crate::voice::{VoiceCmd, VideoFrame, VideoFrames, VoiceSessionStats, video_frame_key, spawn_voice_engine};
+use crate::voice::{
+    spawn_voice_engine, video_frame_key, video_preview_frame_key, StreamSourceTarget, VideoFrame, VideoFrames,
+    VoiceCmd, VoiceSessionStats,
+};
 
 // ─── Persistent settings (saved to disk) ────────────────────────────────────
 // Used by app.rs; path and struct duplicated there for now.
@@ -83,16 +90,20 @@ pub(crate) struct Settings {
     pub(crate) dark_mode: bool,
     #[serde(default)]
     pub(crate) voice_volume_by_user: HashMap<String, f32>,
+    #[serde(default)]
+    pub(crate) stream_volume_by_user: HashMap<String, f32>,
     /// Путь декодирования входящего видео: "cpu" (OpenH264) или "mft" (Media Foundation).
     #[serde(default)]
     pub(crate) decode_path: String,
-    /// Gamma для GPU-декодера (MFT path): pow(rgb, 1/gamma). 0 = выкл. 0.55 ≈ корректно. Диапазон 0..3.
+    /// Legacy gamma override for the GPU decode path. Normally keep 0; non-zero darkens the image.
     #[serde(default = "default_video_decoder_gamma")]
     pub(crate) video_decoder_gamma: f32,
+    #[serde(default)]
+    pub(crate) video_decoder_gamma_migrated_v2: bool,
 }
 
 fn default_video_decoder_gamma() -> f32 {
-    0.55
+    0.0
 }
 
 impl Default for Settings {
@@ -105,8 +116,10 @@ impl Default for Settings {
             last_server: HashMap::new(),
             dark_mode: false,
             voice_volume_by_user: HashMap::new(),
+            stream_volume_by_user: HashMap::new(),
             decode_path: String::new(),
-            video_decoder_gamma: 0.55,
+            video_decoder_gamma: 0.0,
+            video_decoder_gamma_migrated_v2: true,
         }
     }
 }
@@ -118,15 +131,32 @@ impl Settings {
         } else {
             Self::default()
         };
+        let mut should_save = false;
         if s.decode_path.is_empty() || (s.decode_path != "cpu" && s.decode_path != "mft") {
             s.decode_path = "mft".to_string();
+            should_save = true;
         }
         if s.api_base.trim().is_empty() {
             s.api_base = default_api_base();
+            should_save = true;
+        }
+        if !s.video_decoder_gamma_migrated_v2 {
+            if s.video_decoder_gamma > 0.0 && s.video_decoder_gamma <= 0.75 {
+                eprintln!(
+                    "[video] resetting legacy decoder gamma workaround {:.2} -> 0.00 after GPU video color-path fix",
+                    s.video_decoder_gamma
+                );
+                s.video_decoder_gamma = 0.0;
+            }
+            s.video_decoder_gamma_migrated_v2 = true;
+            should_save = true;
         }
         s.video_decoder_gamma = s.video_decoder_gamma.clamp(0.0, 3.0);
         #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
         crate::d3d11_rgba::set_video_decoder_gamma(s.video_decoder_gamma);
+        if should_save {
+            s.save();
+        }
         s
     }
     pub(crate) fn save(&self) {
@@ -415,11 +445,15 @@ pub(crate) struct VoiceState {
     pub(crate) output_muted: bool,
     pub(crate) local_volumes: HashMap<i64, f32>,
     pub(crate) locally_muted: HashSet<i64>,
+    pub(crate) stream_volumes: HashMap<i64, f32>,
+    pub(crate) stream_muted: HashSet<i64>,
+    pub(crate) stream_subscriptions: HashSet<i64>,
     pub(crate) speaking: Arc<Mutex<HashMap<i64, bool>>>,
     pub(crate) input_volume: f32,
     pub(crate) output_volume: f32,
     pub(crate) camera_on: bool,
     pub(crate) screen_on: bool,
+    pub(crate) screen_audio_muted: bool,
 }
 
 impl Default for VoiceState {
@@ -432,13 +466,23 @@ impl Default for VoiceState {
             output_muted: false,
             local_volumes: HashMap::new(),
             locally_muted: HashSet::new(),
+            stream_volumes: HashMap::new(),
+            stream_muted: HashSet::new(),
+            stream_subscriptions: HashSet::new(),
             speaking:      Arc::new(Mutex::new(HashMap::new())),
             input_volume:  2.0,
             output_volume: 2.0,
             camera_on:     false,
             screen_on:     false,
+            screen_audio_muted: false,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ScreenSourceEntry {
+    pub(crate) label: String,
+    pub(crate) target: StreamSourceTarget,
 }
 
 pub(crate) struct MainState {
@@ -500,7 +544,8 @@ pub(crate) struct MainState {
     /// Debounce: stream keys seen as non-streaming in previous frame. Remove texture only after 2 consecutive frames.
     pub(crate) stream_ended_prev_frame: HashSet<i64>,
     pub(crate) show_screen_source_picker: bool,
-    pub(crate) screen_source_names: Vec<String>,
+    pub(crate) screen_sources: Vec<ScreenSourceEntry>,
+    pub(crate) window_sources: Vec<ScreenSourceEntry>,
     pub(crate) screen_preset: crate::voice::ScreenPreset,
     pub(crate) show_voice_stats_window: bool,
     pub(crate) voice_stats: Option<Arc<Mutex<VoiceSessionStats>>>,
@@ -569,7 +614,8 @@ impl Clone for MainState {
             fullscreen_stream_user: None,
             stream_ended_prev_frame: HashSet::new(),
             show_screen_source_picker: false,
-            screen_source_names: Vec::new(),
+            screen_sources: Vec::new(),
+            window_sources: Vec::new(),
             screen_preset: crate::voice::ScreenPreset::default(),
             show_voice_stats_window: self.show_voice_stats_window,
             voice_stats: self.voice_stats.clone(), // Arc clone
@@ -636,7 +682,8 @@ impl Default for MainState {
             fullscreen_stream_user: None,
             stream_ended_prev_frame: HashSet::new(),
             show_screen_source_picker: false,
-            screen_source_names: Vec::new(),
+            screen_sources: Vec::new(),
+            window_sources: Vec::new(),
             screen_preset: crate::voice::ScreenPreset::default(),
             show_voice_stats_window: false,
             voice_stats: None,
@@ -864,16 +911,27 @@ fn apply_voice_join(
         let token = token.clone();
         match block_on(api.voice_join(&token, channel_id, server_id)) {
             Ok(resp) => {
+                state.main.voice_pending_leave = false;
                 state.main.voice.channel_id = Some(channel_id);
                 state.main.voice.server_id = Some(server_id);
                 state.main.voice.participants = resp.participants.clone();
                 state.main.channel_voice.insert(channel_id, resp.participants.clone());
+                state.main.voice.local_volumes.clear();
+                state.main.voice.locally_muted.clear();
+                state.main.voice.stream_volumes.clear();
+                state.main.voice.stream_muted.clear();
+                state.main.voice.stream_subscriptions.clear();
                 for p in &resp.participants {
                     let vol = state.settings.voice_volume_by_user
                         .get(&p.user_id.to_string())
                         .copied()
                         .unwrap_or(1.0);
+                    let stream_vol = state.settings.stream_volume_by_user
+                        .get(&p.user_id.to_string())
+                        .copied()
+                        .unwrap_or(1.0);
                     state.main.voice.local_volumes.insert(p.user_id, vol);
+                    state.main.voice.stream_volumes.insert(p.user_id, stream_vol);
                 }
                 state.main.voice.mic_muted = false;
                 stop_voice_engine(engine_tx, engine_done);
@@ -924,6 +982,13 @@ fn apply_voice_join(
                 }).ok();
                 tx.send(VoiceCmd::SetInputVolume(state.main.voice.input_volume)).ok();
                 tx.send(VoiceCmd::SetOutputVolume(state.main.voice.output_volume)).ok();
+                tx.send(VoiceCmd::SetScreenAudioMuted(state.main.voice.screen_audio_muted)).ok();
+                for participant in &resp.participants {
+                    let user_volume = state.main.voice.local_volumes.get(&participant.user_id).copied().unwrap_or(1.0);
+                    let stream_volume = state.main.voice.stream_volumes.get(&participant.user_id).copied().unwrap_or(1.0);
+                    tx.send(VoiceCmd::SetUserVolume(participant.user_id, user_volume)).ok();
+                    tx.send(VoiceCmd::SetStreamVolume(participant.user_id, stream_volume)).ok();
+                }
                 *engine_tx = Some(tx);
                 *engine_done = Some(done);
             }
@@ -941,10 +1006,10 @@ fn stop_voice_engine(
         tx.send(VoiceCmd::Stop).ok();
     }
     if let Some(done_rx) = engine_done.take() {
-        match done_rx.recv_timeout(Duration::from_millis(1500)) {
+        match done_rx.recv_timeout(Duration::from_millis(5000)) {
             Ok(()) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                eprintln!("[voice][livekit] previous engine did not stop within 1500 ms");
+                eprintln!("[voice][livekit] previous engine did not stop within 5000 ms");
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
         }
@@ -960,6 +1025,7 @@ fn apply_voice_leave(
     engine_done: &mut Option<std::sync::mpsc::Receiver<()>>,
     video_frames: &mut Option<VideoFrames>,
 ) {
+    state.main.voice_pending_leave = false;
     if let (Some(ch_id), Some(ref token)) = (state.main.voice.channel_id, &state.access_token) {
         let token = token.clone();
         let _ = block_on(api.voice_leave(&token, ch_id));
@@ -976,6 +1042,240 @@ fn apply_voice_leave(
     state.main.fullscreen_stream_user = None;
     state.main.stream_ended_prev_frame.clear();
     ctx.request_repaint();
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+struct WglVideoCallbackRenderer {
+    program: eframe::glow::Program,
+    vao: eframe::glow::VertexArray,
+    vbo: eframe::glow::Buffer,
+    u_sampler: Option<eframe::glow::UniformLocation>,
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+static WGL_VIDEO_CALLBACK_RENDERER: OnceLock<Mutex<Option<WglVideoCallbackRenderer>>> = OnceLock::new();
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn with_wgl_video_callback_renderer<R>(
+    gl: &eframe::glow::Context,
+    f: impl FnOnce(&eframe::glow::Context, &WglVideoCallbackRenderer) -> R,
+) -> Result<R, String> {
+    use eframe::glow::HasContext;
+
+    const VERT_SRC: &str = r#"#version 330 core
+layout(location = 0) in vec2 a_pos;
+layout(location = 1) in vec2 a_uv;
+out vec2 v_uv;
+void main() {
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+    v_uv = a_uv;
+}
+"#;
+
+    const FRAG_SRC: &str = r#"#version 330 core
+uniform sampler2D u_sampler;
+in vec2 v_uv;
+out vec4 f_color;
+void main() {
+    vec4 c = texture(u_sampler, v_uv);
+    f_color = vec4(c.rgb, 1.0);
+}
+"#;
+
+    let renderer_lock = WGL_VIDEO_CALLBACK_RENDERER.get_or_init(|| Mutex::new(None));
+    let mut guard = renderer_lock.lock();
+    if guard.is_none() {
+        let program = unsafe { gl.create_program() }
+            .map_err(|e| format!("video callback create_program: {e}"))?;
+        let vert = unsafe { gl.create_shader(eframe::glow::VERTEX_SHADER) }
+            .map_err(|e| format!("video callback create vertex shader: {e}"))?;
+        let frag = unsafe { gl.create_shader(eframe::glow::FRAGMENT_SHADER) }
+            .map_err(|e| format!("video callback create fragment shader: {e}"))?;
+        unsafe {
+            gl.shader_source(vert, VERT_SRC);
+            gl.compile_shader(vert);
+            if !gl.get_shader_compile_status(vert) {
+                let log = gl.get_shader_info_log(vert);
+                gl.delete_shader(vert);
+                gl.delete_shader(frag);
+                gl.delete_program(program);
+                return Err(format!("video callback vertex compile failed: {log}"));
+            }
+
+            gl.shader_source(frag, FRAG_SRC);
+            gl.compile_shader(frag);
+            if !gl.get_shader_compile_status(frag) {
+                let log = gl.get_shader_info_log(frag);
+                gl.delete_shader(vert);
+                gl.delete_shader(frag);
+                gl.delete_program(program);
+                return Err(format!("video callback fragment compile failed: {log}"));
+            }
+
+            gl.attach_shader(program, vert);
+            gl.attach_shader(program, frag);
+            gl.link_program(program);
+            gl.detach_shader(program, vert);
+            gl.detach_shader(program, frag);
+            gl.delete_shader(vert);
+            gl.delete_shader(frag);
+            if !gl.get_program_link_status(program) {
+                let log = gl.get_program_info_log(program);
+                gl.delete_program(program);
+                return Err(format!("video callback link failed: {log}"));
+            }
+        }
+
+        let vao = unsafe { gl.create_vertex_array() }
+            .map_err(|e| format!("video callback create_vao: {e}"))?;
+        let vbo = unsafe { gl.create_buffer() }
+            .map_err(|e| format!("video callback create_vbo: {e}"))?;
+        let vertices: [f32; 16] = [
+            -1.0, -1.0, 0.0, 1.0,
+             1.0, -1.0, 1.0, 1.0,
+            -1.0,  1.0, 0.0, 0.0,
+             1.0,  1.0, 1.0, 0.0,
+        ];
+        let mut vertex_bytes = Vec::with_capacity(vertices.len() * std::mem::size_of::<f32>());
+        for value in vertices {
+            vertex_bytes.extend_from_slice(&value.to_ne_bytes());
+        }
+        unsafe {
+            gl.bind_vertex_array(Some(vao));
+            gl.bind_buffer(eframe::glow::ARRAY_BUFFER, Some(vbo));
+            gl.buffer_data_u8_slice(
+                eframe::glow::ARRAY_BUFFER,
+                &vertex_bytes,
+                eframe::glow::STATIC_DRAW,
+            );
+            gl.enable_vertex_attrib_array(0);
+            gl.vertex_attrib_pointer_f32(0, 2, eframe::glow::FLOAT, false, 16, 0);
+            gl.enable_vertex_attrib_array(1);
+            gl.vertex_attrib_pointer_f32(1, 2, eframe::glow::FLOAT, false, 16, 8);
+            gl.bind_buffer(eframe::glow::ARRAY_BUFFER, None);
+            gl.bind_vertex_array(None);
+        }
+
+        if crate::telemetry::is_telemetry_enabled() {
+            eprintln!("[Phase 3.5] WGL video callback renderer initialized");
+        }
+        *guard = Some(WglVideoCallbackRenderer {
+            program,
+            vao,
+            vbo,
+            u_sampler: unsafe { gl.get_uniform_location(program, "u_sampler") },
+        });
+    }
+
+    Ok(f(gl, guard.as_ref().unwrap()))
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn paint_wgl_video_texture(ui: &mut egui::Ui, rect: egui::Rect, gl_tex_id: u32) {
+    let callback = egui::PaintCallback {
+        rect,
+        callback: Arc::new(egui_glow::CallbackFn::new(move |_info, painter| {
+            use eframe::glow::HasContext;
+
+            let gl = painter.gl();
+            let texture = eframe::glow::NativeTexture(
+                NonZeroU32::new(gl_tex_id).expect("WGL texture id must be non-zero"),
+            );
+            if let Err(e) = with_wgl_video_callback_renderer(gl, |gl, renderer| unsafe {
+                gl.disable(eframe::glow::BLEND);
+                gl.disable(eframe::glow::CULL_FACE);
+                gl.disable(eframe::glow::DEPTH_TEST);
+                gl.use_program(Some(renderer.program));
+                gl.active_texture(eframe::glow::TEXTURE0);
+                gl.bind_texture(eframe::glow::TEXTURE_2D, Some(texture));
+                gl.bind_vertex_array(Some(renderer.vao));
+                gl.bind_buffer(eframe::glow::ARRAY_BUFFER, Some(renderer.vbo));
+                if let Some(u_sampler) = renderer.u_sampler.as_ref() {
+                    gl.uniform_1_i32(Some(u_sampler), 0);
+                }
+                gl.draw_arrays(eframe::glow::TRIANGLE_STRIP, 0, 4);
+                gl.bind_buffer(eframe::glow::ARRAY_BUFFER, None);
+                gl.bind_vertex_array(None);
+                gl.bind_texture(eframe::glow::TEXTURE_2D, None);
+                gl.use_program(None);
+            }) {
+                eprintln!("[Phase 3.5] WGL video callback render failed: {e}");
+            }
+        })),
+    };
+    ui.painter().add(callback);
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn register_wgl_video_texture(
+    gl: &eframe::glow::Context,
+    eframe_frame: &mut eframe::Frame,
+    width: u32,
+    height: u32,
+) -> Result<(egui::TextureId, u32), String> {
+    use eframe::glow::HasContext;
+
+    let tex = unsafe { gl.create_texture() }
+        .map_err(|e| format!("gl.create_texture failed: {e}"))?;
+    let raw_id = tex.0.get();
+    unsafe {
+        gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
+        gl.tex_parameter_i32(
+            eframe::glow::TEXTURE_2D,
+            eframe::glow::TEXTURE_MIN_FILTER,
+            eframe::glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            eframe::glow::TEXTURE_2D,
+            eframe::glow::TEXTURE_MAG_FILTER,
+            eframe::glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            eframe::glow::TEXTURE_2D,
+            eframe::glow::TEXTURE_WRAP_S,
+            eframe::glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameter_i32(
+            eframe::glow::TEXTURE_2D,
+            eframe::glow::TEXTURE_WRAP_T,
+            eframe::glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameter_i32(
+            eframe::glow::TEXTURE_2D,
+            eframe::glow::TEXTURE_BASE_LEVEL,
+            0,
+        );
+        gl.tex_parameter_i32(
+            eframe::glow::TEXTURE_2D,
+            eframe::glow::TEXTURE_MAX_LEVEL,
+            0,
+        );
+        // Explicit RGBA8 storage avoids driver-chosen defaults in the WGL interop path.
+        gl.tex_image_2d(
+            eframe::glow::TEXTURE_2D,
+            0,
+            eframe::glow::RGBA8 as i32,
+            width as i32,
+            height as i32,
+            0,
+            eframe::glow::RGBA,
+            eframe::glow::UNSIGNED_BYTE,
+            None,
+        );
+        gl.bind_texture(eframe::glow::TEXTURE_2D, None);
+    }
+
+    if crate::telemetry::is_telemetry_enabled() {
+        eprintln!(
+            "[Phase 3.5] GL video texture allocated: {}x{} {} tex={}",
+            width,
+            height,
+            "RGBA8",
+            raw_id
+        );
+    }
+    let egui_tex_id = eframe_frame.register_native_glow_texture(tex);
+    Ok((egui_tex_id, raw_id))
 }
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
@@ -1058,9 +1358,22 @@ pub(crate) fn main_screen(
             }
         }
 
+        let preview_keys_to_remove: Vec<i64> = state
+            .main
+            .voice
+            .participants
+            .iter()
+            .filter(|p| !p.streaming)
+            .map(|p| video_preview_frame_key(p.user_id))
+            .filter(|key| {
+                state.main.voice_video_gpu_textures.contains_key(key)
+                    || state.main.voice_video_textures.contains_key(key)
+            })
+            .collect();
+
         let stream_keys_non_streaming: Vec<i64> = state.main.voice_video_gpu_textures.keys()
             .chain(state.main.voice_video_textures.keys())
-            .filter(|&&k| k < 0)
+            .filter(|&&k| k < 0 && k > i64::MIN / 2)
             .filter(|&&k| !streaming_user_ids.contains(&(-k - 1)))
             .copied()
             .collect::<std::collections::HashSet<_>>().into_iter().collect();
@@ -1082,6 +1395,12 @@ pub(crate) fn main_screen(
                 state.main.voice_video_textures.remove(key);
                 state.main.voice_render_fps.remove(key);
                 let uid = -key - 1;
+                state.main.voice_video_textures.remove(&video_preview_frame_key(uid));
+                if let Some((egui_tex_id, _, _, _)) =
+                    state.main.voice_video_gpu_textures.remove(&video_preview_frame_key(uid))
+                {
+                    state.main.voice_video_gpu_tex_pending_delete.push(egui_tex_id);
+                }
                 if state.main.fullscreen_stream_user == Some(uid) {
                     state.main.fullscreen_stream_user = None;
                 }
@@ -1089,6 +1408,14 @@ pub(crate) fn main_screen(
             #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
             if let Some(interop) = gl_interop.as_deref_mut() {
                 interop.remove_keys(&stream_keys_to_remove);
+            }
+        }
+        if !preview_keys_to_remove.is_empty() {
+            for key in &preview_keys_to_remove {
+                if let Some((egui_tex_id, _, _, _)) = state.main.voice_video_gpu_textures.remove(key) {
+                    state.main.voice_video_gpu_tex_pending_delete.push(egui_tex_id);
+                }
+                state.main.voice_video_textures.remove(key);
             }
         }
     }
@@ -1111,30 +1438,42 @@ pub(crate) fn main_screen(
             #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
             if let Some(handle) = frame.shared_handle {
                 if let (Some(gl), Some(interop)) = (gl_ctx.as_ref(), gl_interop.as_deref_mut()) {
-                    use eframe::glow::HasContext;
                     // Get or create a GL texture for this stream key.
                     // Tuple: (egui TextureId registered with painter, raw GL name for WGL)
-                    let tex_pair = if let Some(&(eid, gid, _, _)) = state.main.voice_video_gpu_textures.get(&key) {
-                        Some((eid, gid))
-                    } else {
-                        // Allocate a new GL texture name, set filter/wrap, register with eframe.
-                        match unsafe { gl.create_texture() } {
-                            Ok(tex) => {
-                                let raw_id = tex.0.get();
-                                unsafe {
-                                    gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
-                                    gl.tex_parameter_i32(eframe::glow::TEXTURE_2D, eframe::glow::TEXTURE_MIN_FILTER, eframe::glow::LINEAR as i32);
-                                    gl.tex_parameter_i32(eframe::glow::TEXTURE_2D, eframe::glow::TEXTURE_MAG_FILTER, eframe::glow::LINEAR as i32);
-                                    gl.tex_parameter_i32(eframe::glow::TEXTURE_2D, eframe::glow::TEXTURE_WRAP_S, eframe::glow::CLAMP_TO_EDGE as i32);
-                                    gl.tex_parameter_i32(eframe::glow::TEXTURE_2D, eframe::glow::TEXTURE_WRAP_T, eframe::glow::CLAMP_TO_EDGE as i32);
-                                    gl.bind_texture(eframe::glow::TEXTURE_2D, None);
+                    let existing_tex = state.main.voice_video_gpu_textures.get(&key).copied();
+                    let mut old_tex_to_delete = None;
+                    let mut new_tex_to_delete_on_fail = None;
+                    let tex_pair = if let Some((eid, gid, old_w, old_h)) = existing_tex {
+                        if old_w == frame.width && old_h == frame.height {
+                            Some((eid, gid))
+                        } else {
+                            eprintln!(
+                                "[Phase 3.5] GL video texture resize: key={key} {}x{} → {}x{}",
+                                old_w,
+                                old_h,
+                                frame.width,
+                                frame.height
+                            );
+                            match register_wgl_video_texture(gl, eframe_frame, frame.width, frame.height) {
+                                Ok((new_eid, new_gid)) => {
+                                    old_tex_to_delete = Some(eid);
+                                    new_tex_to_delete_on_fail = Some(new_eid);
+                                    Some((new_eid, new_gid))
                                 }
-                                // Register with eframe's glow painter so egui knows this texture.
-                                let egui_tex_id = eframe_frame.register_native_glow_texture(tex);
-                                Some((egui_tex_id, raw_id))
+                                Err(e) => {
+                                    eprintln!("[Phase 3.5] {e}");
+                                    None
+                                }
+                            }
+                        }
+                    } else {
+                        match register_wgl_video_texture(gl, eframe_frame, frame.width, frame.height) {
+                            Ok(pair) => {
+                                new_tex_to_delete_on_fail = Some(pair.0);
+                                Some(pair)
                             }
                             Err(e) => {
-                                eprintln!("[Phase 3.5] gl.create_texture failed: {e}");
+                                eprintln!("[Phase 3.5] {e}");
                                 None
                             }
                         }
@@ -1143,6 +1482,9 @@ pub(crate) fn main_screen(
                         // Register (or re-register on handle change) the D3D11 shared texture.
                         match interop.update_texture(key, handle, gl_tex_id, frame.width, frame.height) {
                             Ok(()) => {
+                                if let Some(tex_id) = old_tex_to_delete.take() {
+                                    state.main.voice_video_gpu_tex_pending_delete.push(tex_id);
+                                }
                                 state.main.voice_video_gpu_textures.insert(
                                     key,
                                     (egui_tex_id, gl_tex_id, frame.width, frame.height),
@@ -1155,6 +1497,9 @@ pub(crate) fn main_screen(
                                 continue; // skip CPU path below
                             }
                             Err(e) => {
+                                if let Some(tex_id) = new_tex_to_delete_on_fail.take() {
+                                    state.main.voice_video_gpu_tex_pending_delete.push(tex_id);
+                                }
                                 eprintln!("[Phase 3.5] WGL interop update_texture key={key}: {e}, falling back to CPU frame");
                             }
                         }
@@ -1252,6 +1597,7 @@ pub(crate) fn main_screen(
                 });
             });
         if do_switch {
+            state.main.voice_pending_leave = false;
             // Leave current, then join target
             if let Some(cur_ch) = state.main.voice.channel_id {
                 if let Some(ref token) = state.access_token {
@@ -1536,6 +1882,7 @@ pub(crate) fn main_screen(
                 }
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new("Гамма декодера (MFT, GPU): pow(rgb, 1/γ). 0 = выкл.").small());
+                ui.label(egui::RichText::new("Legacy note: after the color-path fix this should normally stay at 0. Non-zero values intentionally darken the image.").small());
                 let mut gamma = state.settings.video_decoder_gamma;
                 if ui.add(egui::Slider::new(&mut gamma, 0.0..=3.0).step_by(0.01).suffix("")).changed() {
                     state.settings.video_decoder_gamma = gamma;
@@ -1662,7 +2009,9 @@ pub(crate) fn main_screen(
             // If ASTRIX_VIDEO_DISABLE_FRAMEBUFFER_SRGB=1, also disable it (test for double sRGB).
             #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
             if !state.main.voice_video_gpu_textures.is_empty() {
-                let disable_fb_srgb = std::env::var("ASTRIX_VIDEO_DISABLE_FRAMEBUFFER_SRGB").as_deref() == Ok("1");
+                let disable_fb_srgb = std::env::var("ASTRIX_VIDEO_DISABLE_FRAMEBUFFER_SRGB")
+                    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                    .unwrap_or(true);
                 static LOGGED_SRGB: AtomicBool = AtomicBool::new(false);
                 let rect = ui.available_rect_before_wrap();
                 let callback = egui::PaintCallback {
@@ -1672,10 +2021,13 @@ pub(crate) fn main_screen(
                         unsafe {
                             use eframe::glow::HasContext;
                             let was_enabled = gl.is_enabled(eframe::glow::FRAMEBUFFER_SRGB);
-                            if !LOGGED_SRGB.swap(true, Ordering::Relaxed) {
+                            if crate::telemetry::is_telemetry_enabled()
+                                && !LOGGED_SRGB.swap(true, Ordering::Relaxed)
+                            {
                                 eprintln!(
-                                    "[Phase 3.5] GL_FRAMEBUFFER_SRGB was {} (if washed out, try ASTRIX_VIDEO_DISABLE_FRAMEBUFFER_SRGB=1)",
-                                    if was_enabled { "enabled" } else { "disabled" }
+                                    "[Phase 3.5] GL_FRAMEBUFFER_SRGB was {} (video path {} it by default; override with ASTRIX_VIDEO_DISABLE_FRAMEBUFFER_SRGB=0)",
+                                    if was_enabled { "enabled" } else { "disabled" },
+                                    if disable_fb_srgb { "disables" } else { "keeps" }
                                 );
                             }
                             if disable_fb_srgb {
@@ -2120,6 +2472,9 @@ pub(crate) fn main_screen(
                                         let is_speaking = *speaking_snap.get(&p.user_id).unwrap_or(&false);
                                         let is_locally_muted = in_this_voice
                                             && state.main.voice.locally_muted.contains(&p.user_id);
+                                        let is_stream_subscribed = in_this_voice
+                                            && state.main.voice.stream_subscriptions.contains(&p.user_id);
+                                        let show_stream_preview = p.streaming && in_this_voice && !is_stream_subscribed;
 
                                         // Background (rounded rect)
                                         let fill = ui.visuals().faint_bg_color;
@@ -2133,33 +2488,49 @@ pub(crate) fn main_screen(
                                             egui::pos2(avatar_rect.max.x, avatar_rect.min.y + (avatar_rect.height() * 0.72)),
                                         );
                                         let stream_key = video_frame_key(p.user_id, true);
+                                        let stream_preview_key = video_preview_frame_key(p.user_id);
                                         let camera_key = p.user_id;
-                                        // Always check stream_key first: video frames may arrive before
-                                        // the server sets p.streaming = true (race condition), so texture
-                                        // presence is the authoritative signal that a stream is active.
-                                        let tex_key =
-                                            state.main.voice_video_gpu_textures.get(&stream_key).map(|_| stream_key)
-                                            .or_else(|| state.main.voice_video_textures.get(&stream_key).map(|_| stream_key))
-                                            .or_else(|| state.main.voice_video_gpu_textures.get(&camera_key).map(|_| camera_key))
-                                            .or_else(|| state.main.voice_video_textures.get(&camera_key).map(|_| camera_key));
+                                        let has_stream_texture =
+                                            state.main.voice_video_gpu_textures.contains_key(&stream_key)
+                                                || state.main.voice_video_textures.contains_key(&stream_key);
+                                        let has_stream_preview_texture =
+                                            state.main.voice_video_gpu_textures.contains_key(&stream_preview_key)
+                                                || state.main.voice_video_textures.contains_key(&stream_preview_key);
+                                        let has_camera_texture =
+                                            state.main.voice_video_gpu_textures.contains_key(&camera_key)
+                                                || state.main.voice_video_textures.contains_key(&camera_key);
+                                        let show_stream_connecting =
+                                            p.streaming && in_this_voice && is_stream_subscribed && !has_stream_texture;
+                                        let show_stream_controls =
+                                            p.streaming && in_this_voice && is_stream_subscribed && has_stream_texture;
+                                        let tex_key = if p.streaming {
+                                            if has_stream_texture {
+                                                Some(stream_key)
+                                            } else if has_stream_preview_texture && !is_stream_subscribed {
+                                                Some(stream_preview_key)
+                                            } else {
+                                                None
+                                            }
+                                        } else if has_camera_texture {
+                                            Some(camera_key)
+                                        } else {
+                                            None
+                                        };
                                         if let Some(key) = tex_key {
                                             // Phase 3.5: prefer GPU zero-copy texture (TextureId::User),
                                             // fall back to CPU-uploaded TextureHandle.
-                                            let rendered = if let Some(&(egui_tex_id, _, w, h)) = state.main.voice_video_gpu_textures.get(&key) {
-                                                let sized = egui::load::SizedTexture::new(
-                                                    egui_tex_id,
-                                                    egui::vec2(w as f32, h as f32),
-                                                );
-                                                ui.put(avatar_rect, egui::Image::new(sized).fit_to_exact_size(avatar_rect.size()));
+                                            let rendered = if let Some(&(_, gl_tex_id, _, _)) = state.main.voice_video_gpu_textures.get(&key) {
+                                                paint_wgl_video_texture(ui, avatar_rect, gl_tex_id);
                                                 true
                                             } else {
                                                 false
                                             };
                                             if !rendered {
-                                            if let Some(tex) = state.main.voice_video_textures.get(&key) {
-                                                let size = avatar_rect.size();
-                                                ui.put(avatar_rect, egui::Image::new(tex).fit_to_exact_size(size));
-                                            }}
+                                                if let Some(tex) = state.main.voice_video_textures.get(&key) {
+                                                    let size = avatar_rect.size();
+                                                    ui.put(avatar_rect, egui::Image::new(tex).fit_to_exact_size(size));
+                                                }
+                                            }
                                                 if is_speaking && !p.streaming {
                                                     ui.painter().rect_stroke(
                                                         avatar_rect.expand(2.0),
@@ -2167,8 +2538,38 @@ pub(crate) fn main_screen(
                                                         egui::Stroke::new(2.0, egui::Color32::from_rgb(67, 181, 129)),
                                                     );
                                                 }
+                                                if show_stream_preview {
+                                                    ui.painter().rect_filled(
+                                                        avatar_rect,
+                                                        egui::Rounding::same(ROUNDING),
+                                                        egui::Color32::from_black_alpha(120),
+                                                    );
+                                                    let watch_rect = egui::Rect::from_center_size(
+                                                        avatar_rect.center(),
+                                                        egui::vec2(120.0, 34.0),
+                                                    );
+                                                    ui.allocate_ui_at_rect(watch_rect, |ui| {
+                                                        if ui.button("Смотреть").clicked() {
+                                                            set_stream_subscription(state, engine_tx, p.user_id, true);
+                                                        }
+                                                    });
+                                                }
+                                                if show_stream_connecting {
+                                                    ui.painter().rect_filled(
+                                                        avatar_rect,
+                                                        egui::Rounding::same(ROUNDING),
+                                                        egui::Color32::from_black_alpha(96),
+                                                    );
+                                                    ui.painter().text(
+                                                        avatar_rect.center(),
+                                                        egui::Align2::CENTER_CENTER,
+                                                        "Подключение...",
+                                                        egui::FontId::proportional(16.0),
+                                                        egui::Color32::WHITE,
+                                                    );
+                                                }
                                                 // Stream tile: overlay with fullscreen + mute in corner
-                                                if p.streaming && in_this_voice {
+                                                if show_stream_controls {
                                                     let corner = avatar_rect.max - egui::vec2(4.0, 4.0);
                                                     let btn_size = egui::vec2(28.0, 28.0);
                                                     let fullscreen_rect = egui::Rect::from_min_size(corner - egui::vec2(btn_size.x * 2.0 + 4.0, 0.0), btn_size);
@@ -2179,26 +2580,11 @@ pub(crate) fn main_screen(
                                                         }
                                                     });
                                                     ui.allocate_ui_at_rect(mute_rect, |ui| {
-                                                        let muted = state.main.voice.locally_muted.contains(&p.user_id);
-                                                        let label = if muted { "🔊" } else { "🔇" };
-                                                        if ui.button(label).on_hover_text(if muted { "Включить звук трансляции" } else { "Заглушить трансляцию" }).clicked() {
-                                                            if muted {
-                                                                state.main.voice.locally_muted.remove(&p.user_id);
-                                                                let restore = state.main.voice.local_volumes.get(&p.user_id).copied().unwrap_or(1.0);
-                                                                if let Some(tx) = engine_tx.as_ref() {
-                                                                    tx.send(VoiceCmd::SetUserVolume(p.user_id, restore)).ok();
-                                                                }
-                                                            } else {
-                                                                state.main.voice.locally_muted.insert(p.user_id);
-                                                                if let Some(tx) = engine_tx.as_ref() {
-                                                                    tx.send(VoiceCmd::SetUserVolume(p.user_id, 0.0)).ok();
-                                                                }
-                                                            }
-                                                        }
+                                                        show_stream_audio_button(ui, state, engine_tx, p.user_id);
                                                     });
                                                 }
                                                 // FPS overlay: отрисованные кадры/сек (не полученные/декодированные)
-                                                if p.streaming {
+                                                if show_stream_controls {
                                                     let fps = state.main.voice_render_fps.get_mut(&key).map(|t| t.update_and_get()).unwrap_or(0.0);
                                                     if fps > 0.0 {
                                                         let fps_text = format!("{:.0} fps", fps);
@@ -2242,6 +2628,36 @@ pub(crate) fn main_screen(
                                             );
                                             let pos = avatar_rect.center() - galley.size() / 2.0;
                                             ui.painter().galley(pos, galley, egui::Color32::WHITE);
+                                            if show_stream_preview {
+                                                ui.painter().rect_filled(
+                                                    avatar_rect,
+                                                    egui::Rounding::same(ROUNDING),
+                                                    egui::Color32::from_black_alpha(120),
+                                                );
+                                                let watch_rect = egui::Rect::from_center_size(
+                                                    avatar_rect.center(),
+                                                    egui::vec2(120.0, 34.0),
+                                                );
+                                                ui.allocate_ui_at_rect(watch_rect, |ui| {
+                                                    if ui.button("Смотреть").clicked() {
+                                                        set_stream_subscription(state, engine_tx, p.user_id, true);
+                                                    }
+                                                });
+                                            }
+                                            if show_stream_connecting {
+                                                ui.painter().rect_filled(
+                                                    avatar_rect,
+                                                    egui::Rounding::same(ROUNDING),
+                                                    egui::Color32::from_black_alpha(96),
+                                                );
+                                                ui.painter().text(
+                                                    avatar_rect.center(),
+                                                    egui::Align2::CENTER_CENTER,
+                                                    "Подключение...",
+                                                    egui::FontId::proportional(16.0),
+                                                    egui::Color32::WHITE,
+                                                );
+                                            }
                                         }
 
                                         // Name and icons below avatar area
@@ -2397,15 +2813,58 @@ pub(crate) fn main_screen(
                             } else {
                                 // Enumerate real displays (deduplicated) for the picker.
                                 let monitors = crate::voice_livekit::enumerate_unique_screens();
-                                state.main.screen_source_names = monitors
+                                state.main.screen_sources = monitors
                                     .iter()
                                     .enumerate()
                                     .map(|(i, m)| {
                                         let tag = if m.is_primary() { " (осн.)" } else { "" };
-                                        format!("Монитор {}{} {}×{}", i + 1, tag, m.width(), m.height())
+                                        ScreenSourceEntry {
+                                            label: format!("Монитор {}{} {}×{}", i + 1, tag, m.width(), m.height()),
+                                            target: StreamSourceTarget::Monitor { index: i },
+                                        }
+                                    })
+                                    .collect();
+                                state.main.window_sources = crate::voice_livekit::enumerate_stream_windows()
+                                    .into_iter()
+                                    .map(|window| {
+                                        let title = window.title.trim();
+                                        let suffix = if title.is_empty() {
+                                            String::new()
+                                        } else {
+                                            format!(" - {}", title)
+                                        };
+                                        ScreenSourceEntry {
+                                            label: format!(
+                                                "{}{} {}×{}",
+                                                window.app_name,
+                                                suffix,
+                                                window.width,
+                                                window.height
+                                            ),
+                                            target: StreamSourceTarget::Window {
+                                                window_id: window.window_id,
+                                                process_id: window.process_id,
+                                            },
+                                        }
                                     })
                                     .collect();
                                 state.main.show_screen_source_picker = true;
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        let stream_audio_label = if state.main.voice.screen_audio_muted {
+                            "🔇 Звук стрима"
+                        } else {
+                            "🔊 Звук стрима"
+                        };
+                        if ui
+                            .button(stream_audio_label)
+                            .on_hover_text("Включить или выключить звук, который передается вместе с трансляцией")
+                            .clicked()
+                        {
+                            state.main.voice.screen_audio_muted = !state.main.voice.screen_audio_muted;
+                            if let Some(tx) = engine_tx.as_ref() {
+                                tx.send(VoiceCmd::SetScreenAudioMuted(state.main.voice.screen_audio_muted)).ok();
                             }
                             ui.ctx().request_repaint();
                         }
@@ -2495,8 +2954,9 @@ pub(crate) fn main_screen(
     // Screen source picker dialog (before starting stream).
     if state.main.show_screen_source_picker {
         let mut close_picker = false;
-        let mut start_with_index: Option<usize> = None;
-        let screen_names = state.main.screen_source_names.clone();
+        let mut start_source: Option<StreamSourceTarget> = None;
+        let screen_sources = state.main.screen_sources.clone();
+        let window_sources = state.main.window_sources.clone();
         let current_preset = state.main.screen_preset;
         egui::Window::new("Выбор источника трансляции")
             .collapsible(false)
@@ -2518,13 +2978,13 @@ pub(crate) fn main_screen(
                 ui.separator();
                 ui.heading("Экран");
                 ui.add_space(4.0);
-                if screen_names.is_empty() {
+                if screen_sources.is_empty() {
                     ui.label("Экраны не обнаружены.");
                 } else {
                     ui.horizontal_wrapped(|ui| {
-                        for (idx, name) in screen_names.iter().enumerate() {
-                            if ui.button(name).clicked() {
-                                start_with_index = Some(idx);
+                        for source in &screen_sources {
+                            if ui.button(&source.label).clicked() {
+                                start_source = Some(source.target.clone());
                                 close_picker = true;
                             }
                             ui.add_space(4.0);
@@ -2533,7 +2993,22 @@ pub(crate) fn main_screen(
                 }
                 ui.separator();
                 ui.heading("Приложение");
-                ui.label("Выбор окна приложения будет добавлен в следующей версии.");
+                ui.add_space(4.0);
+                if window_sources.is_empty() {
+                    ui.label("Подходящие окна не найдены.");
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height(260.0)
+                        .show(ui, |ui| {
+                            for source in &window_sources {
+                                if ui.button(&source.label).clicked() {
+                                    start_source = Some(source.target.clone());
+                                    close_picker = true;
+                                }
+                                ui.add_space(4.0);
+                            }
+                        });
+                }
                 ui.add_space(8.0);
                 if ui.button("Отмена").clicked() {
                     close_picker = true;
@@ -2541,11 +3016,11 @@ pub(crate) fn main_screen(
             });
         if close_picker {
             state.main.show_screen_source_picker = false;
-            if let Some(idx) = start_with_index {
+            if let Some(source) = start_source {
                 let preset = state.main.screen_preset;
                 state.main.voice.screen_on = true;
                 if let Some(tx) = engine_tx.as_ref() {
-                    tx.send(VoiceCmd::StartScreen { screen_index: Some(idx), preset }).ok();
+                    tx.send(VoiceCmd::StartScreen { source, preset }).ok();
                 }
                 if let (Some(ch_id), Some(ref token)) = (state.main.voice.channel_id, &state.access_token) {
                     let token = token.clone();
@@ -2582,18 +3057,14 @@ pub(crate) fn main_screen(
                 ui.painter().rect_filled(screen, egui::Rounding::ZERO, egui::Color32::from_black_alpha(240));
                 let stream_key = video_frame_key(uid, true);
                 // Phase 3.5: prefer GPU zero-copy texture, fall back to CPU-uploaded.
-                let shown = if let Some(&(egui_tex_id, _, w, h)) = state.main.voice_video_gpu_textures.get(&stream_key) {
+                let shown = if let Some(&(_, gl_tex_id, w, h)) = state.main.voice_video_gpu_textures.get(&stream_key) {
                     let max_w = screen.width();
                     let max_h = screen.height();
                     // Scale to fill window; allow upscaling when window is larger than video.
                     let scale = (max_w / w as f32).min(max_h / h as f32);
                     let size = egui::vec2(w as f32 * scale, h as f32 * scale);
                     let pos = screen.center() - size / 2.0;
-                    let sized = egui::load::SizedTexture::new(
-                        egui_tex_id,
-                        egui::vec2(w as f32, h as f32),
-                    );
-                    ui.put(egui::Rect::from_min_size(pos, size), egui::Image::new(sized).fit_to_exact_size(size));
+                    paint_wgl_video_texture(ui, egui::Rect::from_min_size(pos, size), gl_tex_id);
                     true
                 } else if let Some(tex) = state.main.voice_video_textures.get(&stream_key) {
                     let tex_size = tex.size_vec2();
@@ -2630,11 +3101,17 @@ pub(crate) fn main_screen(
                         );
                     }
                 }
-                let close_rect = egui::Rect::from_min_size(screen.left_top() + egui::vec2(16.0, 16.0), egui::vec2(140.0, 36.0));
-                ui.allocate_ui_at_rect(close_rect, |ui| {
-                    if ui.button("⛶ Закрыть полноэкранный режим").clicked() {
-                        state.main.fullscreen_stream_user = None;
-                    }
+                let controls_rect = egui::Rect::from_min_size(
+                    screen.left_top() + egui::vec2(16.0, 16.0),
+                    egui::vec2(220.0, 36.0),
+                );
+                ui.allocate_ui_at_rect(controls_rect, |ui| {
+                    ui.horizontal(|ui| {
+                        show_stream_audio_button(ui, state, engine_tx, uid);
+                        if ui.button("⛶ Закрыть полноэкранный режим").clicked() {
+                            state.main.fullscreen_stream_user = None;
+                        }
+                    });
                 });
             });
     }
@@ -2643,6 +3120,87 @@ pub(crate) fn main_screen(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+fn effective_stream_volume(voice: &VoiceState, user_id: i64) -> f32 {
+    if voice.stream_muted.contains(&user_id) {
+        0.0
+    } else {
+        voice.stream_volumes.get(&user_id).copied().unwrap_or(1.0)
+    }
+}
+
+fn sync_stream_volume(
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    voice: &VoiceState,
+    user_id: i64,
+) {
+    if let Some(tx) = engine_tx.as_ref() {
+        tx.send(VoiceCmd::SetStreamVolume(user_id, effective_stream_volume(voice, user_id))).ok();
+    }
+}
+
+fn set_stream_subscription(
+    state: &mut State,
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: i64,
+    subscribed: bool,
+) {
+    if subscribed {
+        state.main.voice.stream_subscriptions.insert(user_id);
+    } else {
+        state.main.voice.stream_subscriptions.remove(&user_id);
+        state.main.voice.stream_muted.remove(&user_id);
+    }
+    if let Some(tx) = engine_tx.as_ref() {
+        tx.send(VoiceCmd::SetStreamSubscription { user_id, subscribed }).ok();
+    }
+    if subscribed {
+        sync_stream_volume(engine_tx, &state.main.voice, user_id);
+    }
+}
+
+fn show_stream_audio_button(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: i64,
+) {
+    let muted = state.main.voice.stream_muted.contains(&user_id);
+    let response = ui
+        .button(if muted { "🔇" } else { "🔊" })
+        .on_hover_text(if muted {
+            "Включить звук трансляции"
+        } else {
+            "Выключить звук трансляции"
+        });
+    if response.clicked() {
+        if muted {
+            state.main.voice.stream_muted.remove(&user_id);
+        } else {
+            state.main.voice.stream_muted.insert(user_id);
+        }
+        sync_stream_volume(engine_tx, &state.main.voice, user_id);
+    }
+    response.context_menu(|ui| {
+        ui.label("Громкость трансляции 0-400%, по умолчанию 100%");
+        let mut volume = state.main.voice.stream_volumes.get(&user_id).copied().unwrap_or(1.0);
+        if ui
+            .add(
+                egui::Slider::new(&mut volume, 0.0..=4.0)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                    .text(""),
+            )
+            .changed()
+        {
+            let volume = volume.clamp(0.0, 4.0);
+            state.main.voice.stream_volumes.insert(user_id, volume);
+            state.settings.stream_volume_by_user.insert(user_id.to_string(), volume);
+            state.settings.save();
+            state.main.voice.stream_muted.remove(&user_id);
+            sync_stream_volume(engine_tx, &state.main.voice, user_id);
+        }
+    });
+}
 
 fn mime_from_path(path: &PathBuf) -> String {
     match path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {

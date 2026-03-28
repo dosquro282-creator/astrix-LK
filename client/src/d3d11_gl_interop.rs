@@ -196,15 +196,29 @@ impl D3d11GlInterop {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        // If pointer unchanged (same resolution), just update dimensions and return.
+        // If both the D3D texture and GL texture are unchanged, just refresh dimensions.
         if let Some(entry) = self.entries.get_mut(&key) {
-            if entry.shared_handle == shared_handle {
+            if entry.shared_handle == shared_handle && entry.gl_tex_id == gl_tex_id {
                 entry.width = width;
                 entry.height = height;
                 return Ok(());
             }
-            // Texture was recreated (e.g. resolution change): unregister old object.
-            eprintln!("[Phase 3.5] update_texture key={key}: handle changed 0x{:x}→0x{shared_handle:x}, re-registering", entry.shared_handle);
+
+            // Re-register whenever either side changes:
+            // - shared_handle changes on D3D texture recreation/resolution change
+            // - gl_tex_id changes when the UI reallocates explicit GL storage
+            if entry.shared_handle != shared_handle {
+                eprintln!(
+                    "[Phase 3.5] update_texture key={key}: handle changed 0x{:x}→0x{shared_handle:x}, re-registering",
+                    entry.shared_handle
+                );
+            } else {
+                eprintln!(
+                    "[Phase 3.5] update_texture key={key}: GL texture changed {}→{}, re-registering",
+                    entry.gl_tex_id,
+                    gl_tex_id
+                );
+            }
             unsafe { (self.fn_unregister)(self.interop_device, entry.registered) };
             self.entries.remove(&key);
         }

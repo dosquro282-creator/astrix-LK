@@ -96,9 +96,9 @@ pub struct D3d11I420ToRgba {
 
 static DECODE_GPU_FAILED: AtomicU8 = AtomicU8::new(0);
 
-/// Runtime gamma from settings (0 = off). Stored as f32 bits in AtomicU32. Default 0.55.
+/// Runtime gamma from settings (0 = off). Stored as f32 bits in AtomicU32. Default 0.
 static VIDEO_DECODER_GAMMA: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(0x3F0CCCCD); // f32::to_bits(0.55)
+    std::sync::atomic::AtomicU32::new(0); // f32::to_bits(0.0)
 
 /// Set gamma from settings UI. Called when settings load or user changes slider.
 pub fn set_video_decoder_gamma(gamma: f32) {
@@ -313,6 +313,7 @@ pub struct D3d11Nv12ToRgba {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     cs: ID3D11ComputeShader,
+    full_range: bool,
     /// Constant buffer for GAMMA_RUNTIME (gamma from settings). None when compile-time gamma.
     cb_gamma: Option<windows::Win32::Graphics::Direct3D11::ID3D11Buffer>,
     /// Constant buffer for UV_BILINEAR (width, height). None when UV_BILINEAR disabled.
@@ -336,13 +337,13 @@ pub struct D3d11Nv12ToRgba {
 
 impl D3d11Nv12ToRgba {
     /// Create with default device (decode path when shared device not available).
-    pub fn new_with_default_device() -> Result<Self, D3d11RgbaError> {
+    pub fn new_with_default_device(default_full_range: bool) -> Result<Self, D3d11RgbaError> {
         let (device, _) = create_device()?;
-        Self::new(&device)
+        Self::new(&device, default_full_range)
     }
 
     /// Create converter with the given D3D11 device. Use shared device from gpu_device for zero-copy.
-    pub fn new(device: &ID3D11Device) -> Result<Self, D3d11RgbaError> {
+    pub fn new(device: &ID3D11Device, default_full_range: bool) -> Result<Self, D3d11RgbaError> {
         let context = unsafe {
             device
                 .GetImmediateContext()
@@ -378,23 +379,27 @@ impl D3d11Nv12ToRgba {
                 .and_then(|v| v.parse::<f32>().ok())
                 .filter(|&g| g > 0.0);
             let use_runtime_gamma = decoder_gamma.is_none();
-            eprintln!(
-                "[d3d11_rgba] NV12→RGBA: output_srgb={} full_range={} decoder_gamma={:?} runtime_gamma={} uv_bilinear={}",
-                output_srgb,
-                std::env::var("ASTRIX_VIDEO_NV12_FULL_RANGE").map(|v| v == "1").unwrap_or(false),
-                decoder_gamma,
-                use_runtime_gamma,
-                std::env::var("ASTRIX_VIDEO_UV_BILINEAR").map(|v| v == "1").unwrap_or(false)
-            );
             (output_srgb, decoder_gamma, use_runtime_gamma)
         };
 
         let full_range = std::env::var("ASTRIX_VIDEO_NV12_FULL_RANGE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+            .unwrap_or(default_full_range);
         let uv_bilinear = std::env::var("ASTRIX_VIDEO_UV_BILINEAR")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
+
+        if crate::telemetry::is_telemetry_enabled() {
+            eprintln!(
+                "[d3d11_rgba] NV12→RGBA: output_srgb={} full_range={} decoder_gamma={:?} runtime_gamma={} runtime_gamma_current={:.2} uv_bilinear={}",
+                output_srgb,
+                full_range,
+                decoder_gamma,
+                use_runtime_gamma,
+                get_video_decoder_gamma(),
+                uv_bilinear
+            );
+        }
 
         let cs = compile_cs_nv12_to_rgba(device, output_srgb, full_range, decoder_gamma, use_runtime_gamma, uv_bilinear)?;
         let cb_gamma = if use_runtime_gamma {
@@ -411,6 +416,7 @@ impl D3d11Nv12ToRgba {
             device: device.clone(),
             context,
             cs,
+            full_range,
             cb_gamma,
             cb_nv12,
             output_texture: None,
@@ -421,6 +427,10 @@ impl D3d11Nv12ToRgba {
             width: 0,
             height: 0,
         })
+    }
+
+    pub fn full_range(&self) -> bool {
+        self.full_range
     }
 
     /// Convert NV12 D3D11 texture → RGBA D3D11 texture (GPU only). Returns reference to output texture.
@@ -808,7 +818,9 @@ fn create_nv12_plane_srv(
     let plane_slice = if y_plane { 0 } else { 1 };
     if let Ok(device3) = device.cast::<ID3D11Device3>() {
         static LOGGED_PLANE_SLICE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !LOGGED_PLANE_SLICE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        if crate::telemetry::is_telemetry_enabled()
+            && !LOGGED_PLANE_SLICE.swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
             eprintln!("[d3d11_rgba] NV12 SRV: using PlaneSlice (Y=0, UV=1) via D3D11.3");
         }
         let desc1 = D3D11_SHADER_RESOURCE_VIEW_DESC1 {

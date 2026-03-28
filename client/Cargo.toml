@@ -27,6 +27,7 @@ cxx = { version = "1.0", optional = true }
 cpal = "0.15"
 xcap = "0.0.12"
 windows-capture = { version = "1.5", optional = true }
+windows-core = { version = "0.61", optional = true }
 windows = { version = "0.61", optional = true, features = [
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
@@ -37,7 +38,12 @@ windows = { version = "0.61", optional = true, features = [
     "Win32_Graphics_Direct3D_Fxc",  # D3DCompile for HLSL (Phase 3)
     # Phase 0.2: MFT H.264 encoder, IMFDXGIBuffer, D3D11VideoProcessor
     "Win32_Media_MediaFoundation",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_Foundation",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",             # VARIANT for ICodecAPI SetValue
     "Win32_System_Variant",         # VARIANT::from(u32) for ICodecAPI (B-frames=0, low latency)
@@ -46,7 +52,7 @@ windows = { version = "0.61", optional = true, features = [
 
 [features]
 default = ["wgc-capture"]
-wgc-capture = ["dep:windows-capture", "dep:windows", "dep:webrtc-sys", "dep:cxx"]
+wgc-capture = ["dep:windows-capture", "dep:windows", "dep:windows-core", "dep:webrtc-sys", "dep:cxx"]
 
 [build-dependencies]
 cxx-build = "1.0"

@@ -17,7 +17,7 @@ use crate::net::{
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::ui::{self, State, auth_screen, main_screen, block_on, find_attachment_mime, process_background_loads};
-use crate::voice::{VoiceCmd, VideoFrames};
+use crate::voice::{video_frame_key, video_preview_frame_key, VoiceCmd, VideoFrames};
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::d3d11_gl_interop::{D3d11GlInterop, GL_INTEROP_AVAILABLE};
 
@@ -326,7 +326,16 @@ impl AstrixApp {
                                 .get(&p.user_id.to_string())
                                 .copied()
                                 .unwrap_or(1.0);
+                            let stream_vol = st.settings.stream_volume_by_user
+                                .get(&p.user_id.to_string())
+                                .copied()
+                                .unwrap_or(1.0);
                             st.main.voice.local_volumes.insert(p.user_id, vol);
+                            st.main.voice.stream_volumes.insert(p.user_id, stream_vol);
+                            if let Some(tx) = self.voice_engine_tx.as_ref() {
+                                tx.send(VoiceCmd::SetUserVolume(p.user_id, vol)).ok();
+                                tx.send(VoiceCmd::SetStreamVolume(p.user_id, stream_vol)).ok();
+                            }
                             if let Some(ch_id) = p.channel_id {
                                 let list = st.main.channel_voice.entry(ch_id).or_default();
                                 if !list.iter().any(|x| x.user_id == p.user_id) {
@@ -353,6 +362,25 @@ impl AstrixApp {
                                 }
                             }
                             st.main.voice.participants.retain(|p| p.user_id != uid);
+                            st.main.voice.locally_muted.remove(&uid);
+                            st.main.voice.stream_muted.remove(&uid);
+                            st.main.voice.stream_subscriptions.remove(&uid);
+                            st.main.voice_video_textures.remove(&video_frame_key(uid, true));
+                            st.main.voice_video_textures.remove(&video_preview_frame_key(uid));
+                            if let Some((egui_tex_id, _, _, _)) =
+                                st.main.voice_video_gpu_textures.remove(&video_frame_key(uid, true))
+                            {
+                                st.main.voice_video_gpu_tex_pending_delete.push(egui_tex_id);
+                            }
+                            if let Some((egui_tex_id, _, _, _)) =
+                                st.main.voice_video_gpu_textures.remove(&video_preview_frame_key(uid))
+                            {
+                                st.main.voice_video_gpu_tex_pending_delete.push(egui_tex_id);
+                            }
+                            st.main.voice_render_fps.remove(&video_frame_key(uid, true));
+                            if st.main.fullscreen_stream_user == Some(uid) {
+                                st.main.fullscreen_stream_user = None;
+                            }
                             if Some(uid) == st.user_id {
                                 if st.main.voice.channel_id == channel_id.or(st.main.voice.channel_id) {
                                     st.main.voice.channel_id = None;
@@ -369,6 +397,7 @@ impl AstrixApp {
                         let user_id = payload.get("user_id").and_then(|v| v.as_i64());
                         let channel_id = payload.get("channel_id").and_then(|v| v.as_i64());
                         if let Some(uid) = user_id {
+                            let mut streaming_now = None;
                             let apply = |p: &mut VoiceParticipant| {
                                 if let Some(v) = payload.get("mic_muted").and_then(|v| v.as_bool()) {
                                     p.mic_muted = v;
@@ -382,6 +411,7 @@ impl AstrixApp {
                             };
                             for p in &mut st.main.voice.participants {
                                 if p.user_id == uid {
+                                    streaming_now = payload.get("streaming").and_then(|v| v.as_bool()).or(Some(p.streaming));
                                     apply(p);
                                     break;
                                 }
@@ -390,10 +420,20 @@ impl AstrixApp {
                                 if let Some(list) = st.main.channel_voice.get_mut(&ch_id) {
                                     for p in list.iter_mut() {
                                         if p.user_id == uid {
+                                            if streaming_now.is_none() {
+                                                streaming_now = payload.get("streaming").and_then(|v| v.as_bool()).or(Some(p.streaming));
+                                            }
                                             apply(p);
                                             break;
                                         }
                                     }
+                                }
+                            }
+                            if matches!(streaming_now, Some(false)) {
+                                st.main.voice.stream_muted.remove(&uid);
+                                st.main.voice.stream_subscriptions.remove(&uid);
+                                if st.main.fullscreen_stream_user == Some(uid) {
+                                    st.main.fullscreen_stream_user = None;
                                 }
                             }
                         }
@@ -618,7 +658,15 @@ impl eframe::App for AstrixApp {
                 match D3d11GlInterop::try_new(shared_dev) {
                     Ok(interop) => {
                         GL_INTEROP_AVAILABLE.store(true, std::sync::atomic::Ordering::Release);
-                        eprintln!("[Phase 3.5] WGL_NV_DX_interop2 ready — GPU zero-copy path active");
+                        let zero_copy_enabled = crate::voice_livekit::wgl_zero_copy_enabled();
+                        eprintln!(
+                            "[Phase 3.5] WGL_NV_DX_interop2 ready — GPU zero-copy path {}",
+                            if zero_copy_enabled {
+                                "enabled by default"
+                            } else {
+                                "disabled via ASTRIX_VIDEO_DISABLE_WGL_INTEROP=1"
+                            }
+                        );
                         self.gl_interop = Some(interop);
                     }
                     Err(e) => {

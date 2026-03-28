@@ -169,6 +169,7 @@ impl VideoEncoder for CpuH264Encoder {
         let frame = livekit::webrtc::video_frame::VideoFrame {
             rotation: livekit::webrtc::video_frame::VideoRotation::VideoRotation0,
             timestamp_us,
+            color_space: None,
             buffer: frame,
         };
         Ok(EncoderOutput::RawI420 { frame, timing })

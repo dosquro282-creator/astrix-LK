@@ -36,6 +36,26 @@ pub fn video_frame_key(user_id: i64, is_screen: bool) -> i64 {
     }
 }
 
+pub fn video_preview_frame_key(user_id: i64) -> i64 {
+    i64::MIN + user_id
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum StreamSourceTarget {
+    Monitor { index: usize },
+    Window { window_id: u32, process_id: u32 },
+}
+
+#[derive(Clone, Debug)]
+pub struct StreamWindowInfo {
+    pub window_id: u32,
+    pub process_id: u32,
+    pub app_name: String,
+    pub title: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 // ─── Screen share quality presets ─────────────────────────────────────────────
 
 /// Quality preset for screen sharing. Encodes resolution and framerate.
@@ -272,6 +292,10 @@ pub enum VoiceCmd {
     SetOutputMuted(bool),
     /// Override the playback volume for a remote user (0.0 – 3.0).
     SetUserVolume(i64, f32),
+    /// Override the playback volume for a remote stream audio track (0.0 - 4.0).
+    SetStreamVolume(i64, f32),
+    /// Subscribe/unsubscribe to a remote screen stream (+ its audio track).
+    SetStreamSubscription { user_id: i64, subscribed: bool },
     /// Set global input (microphone) volume multiplier (0.0 – 4.0).
     SetInputVolume(f32),
     /// Set global output (speaker) volume multiplier (0.0 – 4.0).
@@ -281,7 +305,9 @@ pub enum VoiceCmd {
     /// Disable camera video (Phase 2.4).
     StopCamera,
     /// Start screen sharing. `screen_index`: which monitor (None = 0). `preset`: quality preset.
-    StartScreen { screen_index: Option<usize>, preset: ScreenPreset },
+    StartScreen { source: StreamSourceTarget, preset: ScreenPreset },
+    /// Mute/unmute outgoing screen/application audio.
+    SetScreenAudioMuted(bool),
     /// Stop screen sharing.
     StopScreen,
 }

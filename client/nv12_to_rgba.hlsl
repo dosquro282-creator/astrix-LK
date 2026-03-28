@@ -1,8 +1,8 @@
 // Phase 3.2: NV12 → RGBA compute shader (decode path, zero CPU readback).
 // NV12 biplanar: Y plane R8 (W×H), UV plane RG8 (W/2×H/2, CbCr interleaved).
 //
-// FULL_RANGE: Y/UV already 0-1, neutral UV at 0.5. Use when source is GPU shader→NV12→MFT.
-// LIMITED_RANGE: Y 16-235, UV 16-240. Use for broadcast H.264.
+// FULL_RANGE: Y/UV already 0-1, neutral UV at 0.5. Use for Astrix screen-share NV12.
+// LIMITED_RANGE: Y 16-235, UV 16-240. Use for legacy/broadcast H.264.
 // GAMMA_DECODER_ENABLED + GAMMA_DECODER: pow(rgb, 1/gamma) compile-time.
 // GAMMA_RUNTIME: cbuffer CbGamma at b0, gamma>0 → pow(rgb, 1/gamma). From settings.
 // UV_BILINEAR: bilinear UV sampling. CbNV12 at b1 when GAMMA_RUNTIME, else b0.
@@ -60,10 +60,10 @@ void main(uint3 id : SV_DispatchThreadID)
     float cr = (uv.y - 128.0/255.0) * (255.0/224.0);
     #endif
 
-    // BT.601 matrix (matches encoder in d3d11_nv12 BGRA→NV12)
-    float r = saturate(y + 1.402 * cr);
-    float g = saturate(y - 0.344 * cb - 0.714 * cr);
-    float b = saturate(y + 1.772 * cb);
+    // BT.709 matrix (matches the primary BGRA→NV12 video-processor path used by screen share)
+    float r = saturate(y + 1.5748 * cr);
+    float g = saturate(y - 0.1873 * cb - 0.4681 * cr);
+    float b = saturate(y + 1.8556 * cb);
 
     #if GAMMA_DECODER_ENABLED
     float gamma_exp = 1.0 / GAMMA_DECODER;

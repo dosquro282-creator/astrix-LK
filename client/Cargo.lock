@@ -267,6 +267,7 @@ dependencies = [
  "webrtc-sys",
  "windows 0.61.3",
  "windows-capture",
+ "windows-core 0.61.2",
  "xcap",
 ]
 

@@ -4,19 +4,20 @@
 //! tracks, and updates speaking state from Room events (ActiveSpeakersChanged).
 //! Phase 2.4: camera and screen video tracks (publish + subscribe), voice-grid video.
 
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
+use image::codecs::jpeg::JpegEncoder;
+use image::{ColorType, DynamicImage};
 use livekit::options::{TrackPublishOptions, VideoCodec};
 use livekit::prelude::*;
 use livekit::track::{LocalAudioTrack, LocalTrack, LocalVideoTrack, RemoteTrack};
 use livekit::webrtc::audio_frame::AudioFrame;
 use livekit::webrtc::audio_source::native::NativeAudioSource;
-use xcap::Monitor;
+use xcap::{Monitor, Window};
 use livekit::webrtc::prelude::{AudioSourceOptions, RtcAudioSource};
 use livekit::webrtc::video_frame::{BoxVideoFrame, VideoFormatType, VideoFrame, VideoRotation};
 use livekit::webrtc::video_source::native::{NativeEncodedVideoSource, NativeVideoSource};
@@ -47,10 +48,23 @@ use crate::encoded_h264::{EncodedBackendKind, EncodedH264Encoder, EncodedH264Enc
 use crate::nvenc_d11::NvencD3d11Error;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::screen_encoder::{EncoderOutput, RawFrame, select_screen_encoder};
-use crate::voice::{decoder_threads_for_resolution, encoder_threads_for_resolution, video_frame_key, EncodingPath, ScreenPreset, VideoFrames, VoiceCmd, VoiceSessionStats};
+use crate::voice::{
+    decoder_threads_for_resolution, encoder_threads_for_resolution, video_frame_key,
+    video_preview_frame_key,
+    EncodingPath, ScreenPreset, StreamSourceTarget, StreamWindowInfo, VideoFrames, VoiceCmd,
+    VoiceSessionStats,
+};
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use crate::windows_loopback::{capture_loopback_to_ring, LoopbackTarget};
 
 const SAMPLE_RATE: u32 = 48_000;
 const SAMPLES_PER_10MS: usize = 480; // 10 ms at 48 kHz mono
+const STREAM_PREVIEW_TOPIC: &str = "astrix.stream-preview";
+const STREAM_PREVIEW_INTERVAL: Duration = Duration::from_secs(30);
+const STREAM_PREVIEW_MAX_DIM: u32 = 640;
+const STREAM_PREVIEW_JPEG_QUALITY: u8 = 55;
+const SCREEN_AUDIO_QUEUE_MS: u32 = 500;
+const SCREEN_AUDIO_SIGNAL_THRESHOLD: i16 = 32;
 
 /// Resample mono i16 to target_len (linear interpolation). Used when device rate != 48 kHz.
 fn resample_linear(samples: &[i16], target_len: usize) -> Vec<i16> {
@@ -73,8 +87,273 @@ fn resample_linear(samples: &[i16], target_len: usize) -> Vec<i16> {
         .collect()
 }
 
-/// Message to mixer: (user_id, 10ms mono i16 samples).
-type MixerFrameMsg = (i64, Vec<i16>);
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct MixerRoute {
+    user_id: i64,
+    stream: bool,
+}
+
+enum MixerFrameMsg {
+    Frame(MixerRoute, Vec<i16>),
+    Remove(MixerRoute),
+}
+
+fn track_source_label(source: TrackSource) -> &'static str {
+    if source == TrackSource::Screenshare {
+        "screenshare"
+    } else if source == TrackSource::ScreenshareAudio {
+        "screenshare-audio"
+    } else if source == TrackSource::Camera {
+        "camera"
+    } else {
+        "audio"
+    }
+}
+
+fn parse_remote_user_id(identity: &str) -> Option<i64> {
+    identity.parse::<i64>().ok()
+}
+
+fn apply_publication_subscription(publication: &RemoteTrackPublication, subscribed: bool) {
+    if publication.is_desired() != subscribed || (subscribed && !publication.is_subscribed()) {
+        publication.set_subscribed(subscribed);
+    }
+}
+
+fn handle_publication_preference(
+    participant: &RemoteParticipant,
+    publication: &RemoteTrackPublication,
+    desired_stream_subscriptions: &HashSet<i64>,
+    stream_video_publications: &mut HashMap<i64, RemoteTrackPublication>,
+    stream_audio_publications: &mut HashMap<i64, RemoteTrackPublication>,
+) {
+    let Some(user_id) = parse_remote_user_id(&participant.identity().to_string()) else {
+        return;
+    };
+    let source = publication.source();
+    if source == TrackSource::Screenshare {
+        stream_video_publications.insert(user_id, publication.clone());
+        apply_publication_subscription(publication, desired_stream_subscriptions.contains(&user_id));
+    } else if source == TrackSource::ScreenshareAudio {
+        stream_audio_publications.insert(user_id, publication.clone());
+        apply_publication_subscription(publication, desired_stream_subscriptions.contains(&user_id));
+    } else {
+        apply_publication_subscription(publication, true);
+    }
+}
+
+pub fn enumerate_stream_windows() -> Vec<StreamWindowInfo> {
+    let mut windows: Vec<_> = Window::all()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|window| !window.is_minimized())
+        .filter(|window| window.width() > 64 && window.height() > 64)
+        .filter(|window| {
+            let title = window.title().trim();
+            let app = window.app_name().trim();
+            !(title.is_empty() && app.is_empty())
+        })
+        .map(|window| {
+            #[cfg(target_os = "windows")]
+            let process_id = window.process_id();
+            #[cfg(not(target_os = "windows"))]
+            let process_id = 0;
+
+            StreamWindowInfo {
+                window_id: window.id(),
+                process_id,
+                app_name: window.app_name().to_string(),
+                title: window.title().to_string(),
+                width: window.width(),
+                height: window.height(),
+            }
+        })
+        .collect();
+    windows.sort_by(|a, b| {
+        a.app_name
+            .cmp(&b.app_name)
+            .then_with(|| a.title.cmp(&b.title))
+            .then_with(|| a.window_id.cmp(&b.window_id))
+    });
+    windows
+}
+
+fn find_stream_window(window_id: u32, process_id: u32) -> Option<Window> {
+    Window::all()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|window| {
+            if window.id() != window_id {
+                return false;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                process_id == 0 || window.process_id() == process_id
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = process_id;
+                true
+            }
+        })
+}
+
+fn capture_source_image(source: &StreamSourceTarget) -> Option<image::RgbaImage> {
+    match source {
+        StreamSourceTarget::Monitor { index } => {
+            let monitors = enumerate_unique_screens();
+            let monitor = monitors.into_iter().nth(*index)?;
+            monitor.capture_image().ok()
+        }
+        StreamSourceTarget::Window {
+            window_id,
+            process_id,
+        } => find_stream_window(*window_id, *process_id)?.capture_image().ok(),
+    }
+}
+
+fn encode_stream_preview(source: &StreamSourceTarget) -> Option<Vec<u8>> {
+    let image = capture_source_image(source)?;
+    let preview = DynamicImage::ImageRgba8(image)
+        .thumbnail(STREAM_PREVIEW_MAX_DIM, STREAM_PREVIEW_MAX_DIM)
+        .to_rgb8();
+    let mut encoded = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut encoded, STREAM_PREVIEW_JPEG_QUALITY);
+    encoder
+        .encode(
+            preview.as_raw(),
+            preview.width(),
+            preview.height(),
+            ColorType::Rgb8.into(),
+        )
+        .ok()?;
+    Some(encoded)
+}
+
+fn spawn_stream_preview_publisher(
+    participant: LocalParticipant,
+    source: StreamSourceTarget,
+    stop_flag: Arc<AtomicBool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(STREAM_PREVIEW_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if stop_flag.load(Ordering::Relaxed) {
+                break;
+            }
+            let preview = {
+                let source = source.clone();
+                tokio::task::spawn_blocking(move || encode_stream_preview(&source)).await
+            };
+            let Ok(Some(payload)) = preview else {
+                continue;
+            };
+            let packet = DataPacket {
+                payload,
+                topic: Some(STREAM_PREVIEW_TOPIC.to_string()),
+                reliable: false,
+                destination_identities: Vec::new(),
+            };
+            if participant.publish_data(packet).await.is_err() {
+                break;
+            }
+        }
+    })
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn start_stream_audio_capture(
+    source: &StreamSourceTarget,
+    stop_flag: Arc<AtomicBool>,
+    muted: Arc<AtomicBool>,
+) -> Option<(LocalAudioTrack, tokio::task::JoinHandle<()>)> {
+    let target = match source {
+        StreamSourceTarget::Monitor { .. } => LoopbackTarget::ExcludeCurrentProcessTree,
+        StreamSourceTarget::Window { process_id, .. } if *process_id != 0 => {
+            LoopbackTarget::IncludeProcessTree(*process_id)
+        }
+        StreamSourceTarget::Window { .. } => return None,
+    };
+
+    let source_options = AudioSourceOptions {
+        echo_cancellation: false,
+        noise_suppression: false,
+        auto_gain_control: false,
+    };
+    let audio_source = NativeAudioSource::new(
+        source_options,
+        SAMPLE_RATE,
+        1,
+        SCREEN_AUDIO_QUEUE_MS,
+    );
+    let track = LocalAudioTrack::create_audio_track(
+        "screen-audio",
+        RtcAudioSource::Native(audio_source.clone()),
+    );
+    let ring: Arc<Mutex<VecDeque<i16>>> =
+        Arc::new(Mutex::new(VecDeque::with_capacity(SAMPLES_PER_10MS * 50)));
+    let ring_for_capture = Arc::clone(&ring);
+    let stop_for_capture = Arc::clone(&stop_flag);
+    std::thread::Builder::new()
+        .name("livekit-screen-audio-capture".into())
+        .spawn(move || {
+            if let Err(err) = capture_loopback_to_ring(target, stop_for_capture, ring_for_capture)
+            {
+                eprintln!("[voice][screen][audio] capture error: {err}");
+            }
+        })
+        .ok()?;
+
+    let handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(10));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut logged_non_silent_capture = false;
+        while !stop_flag.load(Ordering::Relaxed) {
+            interval.tick().await;
+            if stop_flag.load(Ordering::Relaxed) {
+                break;
+            }
+            let mut samples = Vec::with_capacity(SAMPLES_PER_10MS);
+            {
+                let mut guard = ring.lock();
+                for _ in 0..SAMPLES_PER_10MS {
+                    samples.push(guard.pop_front().unwrap_or(0));
+                }
+            }
+            if muted.load(Ordering::Relaxed) {
+                samples.fill(0);
+            }
+            if !logged_non_silent_capture
+                && samples
+                    .iter()
+                    .any(|sample| sample.unsigned_abs() > SCREEN_AUDIO_SIGNAL_THRESHOLD as u16)
+            {
+                logged_non_silent_capture = true;
+                eprintln!("[voice][screen][audio] captured first non-silent loopback chunk");
+            }
+            let frame = AudioFrame {
+                data: samples.into(),
+                sample_rate: SAMPLE_RATE,
+                num_channels: 1,
+                samples_per_channel: SAMPLES_PER_10MS as u32,
+            };
+            let _ = audio_source.capture_frame(&frame).await;
+        }
+    });
+
+    Some((track, handle))
+}
+
+#[cfg(not(all(target_os = "windows", feature = "wgc-capture")))]
+fn start_stream_audio_capture(
+    _source: &StreamSourceTarget,
+    _stop_flag: Arc<AtomicBool>,
+    _muted: Arc<AtomicBool>,
+) -> Option<(LocalAudioTrack, tokio::task::JoinHandle<()>)> {
+    None
+}
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 #[derive(Default)]
@@ -236,6 +515,7 @@ async fn run_session(
 
     let mut room_opts = RoomOptions::default();
     room_opts.adaptive_stream = false;
+    room_opts.auto_subscribe = false;
     let (room, mut room_events) = Room::connect(&url, &token, room_opts)
         .await
         .map_err(|e| format!("Room::connect: {:?}", e))?;
@@ -354,6 +634,7 @@ async fn run_session(
 
     // ── Remote audio: per-user mixer + cpal speaker output ──────────────────────────────────
     let user_volumes: Arc<Mutex<HashMap<i64, f32>>> = Arc::new(Mutex::new(HashMap::new()));
+    let stream_volumes: Arc<Mutex<HashMap<i64, f32>>> = Arc::new(Mutex::new(HashMap::new()));
     let output_muted: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let output_volume: Arc<Mutex<f32>> = Arc::new(Mutex::new(2.0));
     let (mixer_tx, mut mixer_rx) = tokio::sync::mpsc::unbounded_channel::<MixerFrameMsg>();
@@ -364,7 +645,8 @@ async fn run_session(
         q.extend(std::iter::repeat(0i16).take(output_10ms_len * 3));
         Arc::new(Mutex::new(q))
     };
-    let volumes_for_mixer = Arc::clone(&user_volumes);
+    let voice_volumes_for_mixer = Arc::clone(&user_volumes);
+    let stream_volumes_for_mixer = Arc::clone(&stream_volumes);
     let muted_for_mixer = Arc::clone(&output_muted);
     let vol_for_mixer = Arc::clone(&output_volume);
     let out_buf = Arc::clone(&output_buffer);
@@ -373,7 +655,8 @@ async fn run_session(
         run_remote_audio_mixer(
             &mut mixer_rx,
             &mut mixer_interval,
-            volumes_for_mixer,
+            voice_volumes_for_mixer,
+            stream_volumes_for_mixer,
             muted_for_mixer,
             vol_for_mixer,
             out_buf,
@@ -397,6 +680,12 @@ async fn run_session(
     // camera_sid / screen_sid only accessed from this async task — plain Option, no Arc<Mutex>.
     let mut camera_sid: Option<TrackSid> = None;
     let mut screen_sid: Option<TrackSid> = None;
+    let mut screen_audio_sid: Option<TrackSid> = None;
+    let mut screen_audio_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut screen_audio_stop_flag: Option<Arc<AtomicBool>> = None;
+    let mut screen_audio_muted_flag: Option<Arc<AtomicBool>> = None;
+    let mut screen_preview_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut screen_audio_muted = false;
     // Stop flag for the screen capture OS thread; replaced on each StartScreen.
     let mut screen_stop_flag: Option<Arc<AtomicBool>> = None;
     // Encoded-path -> CPU fallback: when the encoded H.264 backend hard-fails,
@@ -411,6 +700,9 @@ async fn run_session(
     // same telemetry object, which causes recv_fps to grow unboundedly across restarts.
     let mut video_stream_tasks: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
     let mut audio_stream_tasks: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+    let mut stream_video_publications: HashMap<i64, RemoteTrackPublication> = HashMap::new();
+    let mut stream_audio_publications: HashMap<i64, RemoteTrackPublication> = HashMap::new();
+    let mut desired_stream_subscriptions: HashSet<i64> = HashSet::new();
     let telemetry_enabled = is_telemetry_enabled();
 
     let mut incoming_stats_interval = tokio::time::interval(Duration::from_secs(1));
@@ -450,10 +742,101 @@ async fn run_session(
                             }
                         }
                     }
+                    Some(RoomEvent::Connected { participants_with_tracks }) => {
+                        for (participant, publications) in participants_with_tracks {
+                            for publication in publications {
+                                handle_publication_preference(
+                                    &participant,
+                                    &publication,
+                                    &desired_stream_subscriptions,
+                                    &mut stream_video_publications,
+                                    &mut stream_audio_publications,
+                                );
+                            }
+                        }
+                    }
+                    Some(RoomEvent::TrackPublished { publication, participant }) => {
+                        handle_publication_preference(
+                            &participant,
+                            &publication,
+                            &desired_stream_subscriptions,
+                            &mut stream_video_publications,
+                            &mut stream_audio_publications,
+                        );
+                    }
+                    Some(RoomEvent::TrackUnpublished { publication, participant }) => {
+                        let Some(uid) = parse_remote_user_id(&participant.identity().to_string()) else {
+                            continue;
+                        };
+                        match publication.source() {
+                            TrackSource::Screenshare => {
+                                stream_video_publications.remove(&uid);
+                                video_frames.lock().remove(&video_frame_key(uid, true));
+                                video_frames.lock().remove(&video_preview_frame_key(uid));
+                            }
+                            TrackSource::ScreenshareAudio => {
+                                stream_audio_publications.remove(&uid);
+                                let _ = mixer_tx.send(MixerFrameMsg::Remove(MixerRoute {
+                                    user_id: uid,
+                                    stream: true,
+                                }));
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(RoomEvent::DataReceived {
+                        payload,
+                        topic,
+                        participant,
+                        ..
+                    }) => {
+                        if topic.as_deref() != Some(STREAM_PREVIEW_TOPIC) {
+                            continue;
+                        }
+                        let Some(participant) = participant else {
+                            continue;
+                        };
+                        let Some(uid) = parse_remote_user_id(&participant.identity().to_string()) else {
+                            continue;
+                        };
+                        let currently_subscribed = stream_video_publications
+                            .get(&uid)
+                            .map(|publication| publication.is_subscribed())
+                            .unwrap_or(false);
+                        if desired_stream_subscriptions.contains(&uid) || currently_subscribed {
+                            continue;
+                        }
+                        let Ok(image) = image::load_from_memory(payload.as_ref()) else {
+                            continue;
+                        };
+                        let rgba = image.to_rgba8();
+                        let (width, height) = rgba.dimensions();
+                        video_frames.lock().insert(
+                            video_preview_frame_key(uid),
+                            crate::voice::VideoFrame {
+                                width,
+                                height,
+                                rgba: rgba.into_raw(),
+                                shared_handle: None,
+                            },
+                        );
+                    }
                     Some(RoomEvent::TrackSubscribed { track, publication, participant }) => {
                         if let RemoteTrack::Audio(audio_track) = track.clone() {
                             let identity = participant.identity().to_string();
-                            let task_key = format!("{}:audio:{}", identity, publication.sid());
+                            let Some(uid) = parse_remote_user_id(&identity) else {
+                                continue;
+                            };
+                            let route = MixerRoute {
+                                user_id: uid,
+                                stream: publication.source() == TrackSource::ScreenshareAudio,
+                            };
+                            let task_key = format!(
+                                "{}:{}:{}",
+                                identity,
+                                track_source_label(publication.source()),
+                                publication.sid()
+                            );
                             if let Some(old) = audio_stream_tasks.remove(&task_key) {
                                 old.abort();
                             }
@@ -464,14 +847,24 @@ async fn run_session(
                                 1,
                             );
                             let handle = tokio::spawn(async move {
+                                let mut logged_non_silent_remote = false;
                                 while let Some(frame) = stream.next().await {
-                                    let uid: i64 = match identity.parse() {
-                                        Ok(u) => u,
-                                        _ => continue,
-                                    };
                                     let samples: Vec<i16> = frame.data.as_ref().to_vec();
+                                    if route.stream
+                                        && !logged_non_silent_remote
+                                        && samples.iter().any(|sample| {
+                                            sample.unsigned_abs()
+                                                > SCREEN_AUDIO_SIGNAL_THRESHOLD as u16
+                                        })
+                                    {
+                                        logged_non_silent_remote = true;
+                                        eprintln!(
+                                            "[voice][screen][audio] received first non-silent remote chunk for user {}",
+                                            route.user_id
+                                        );
+                                    }
                                     if samples.len() >= SAMPLES_PER_10MS {
-                                        let _ = tx.send((uid, samples));
+                                        let _ = tx.send(MixerFrameMsg::Frame(route, samples));
                                     }
                                 }
                             });
@@ -638,11 +1031,13 @@ async fn run_session(
                                             if elapsed >= Duration::from_secs(1) {
                                                 let convert_fps =
                                                     convert_window_frames as f32 / elapsed.as_secs_f32().max(0.001);
-                                                eprintln!(
-                                                    "[voice][screen][viewer] convert rate: {:.1} fps (coalesced_drop={})",
-                                                    convert_fps,
-                                                    convert_window_coalesced
-                                                );
+                                                if crate::telemetry::is_telemetry_enabled() {
+                                                    eprintln!(
+                                                        "[voice][screen][viewer] convert rate: {:.1} fps (coalesced_drop={})",
+                                                        convert_fps,
+                                                        convert_window_coalesced
+                                                    );
+                                                }
                                                 convert_window_frames = 0;
                                                 convert_window_coalesced = 0;
                                                 convert_window_start = std::time::Instant::now();
@@ -692,11 +1087,13 @@ async fn run_session(
                                         if fps > 1.0 {
                                             auto_expected_us = (1_000_000.0 / fps) as u64;
                                             // Do not push auto_expected_us into pacing slot — see pacing_slot_ema.
-                                            eprintln!(
-                                                "[voice][screen][viewer] recv rate: {:.1} fps (ts_step={} us)",
-                                                fps,
-                                                pacing_slot_ema
-                                            );
+                                            if crate::telemetry::is_telemetry_enabled() {
+                                                eprintln!(
+                                                    "[voice][screen][viewer] recv rate: {:.1} fps (ts_step={} us)",
+                                                    fps,
+                                                    pacing_slot_ema
+                                                );
+                                            }
                                         }
                                         fps_window_frames = 0;
                                         fps_window_start = std::time::Instant::now();
@@ -759,7 +1156,18 @@ async fn run_session(
                     Some(RoomEvent::TrackUnsubscribed { track, publication, participant }) => {
                         if track.kind() == TrackKind::Audio {
                             let identity = participant.identity().to_string();
-                            let task_key = format!("{}:audio:{}", identity, publication.sid());
+                            if let Some(uid) = parse_remote_user_id(&identity) {
+                                let _ = mixer_tx.send(MixerFrameMsg::Remove(MixerRoute {
+                                    user_id: uid,
+                                    stream: publication.source() == TrackSource::ScreenshareAudio,
+                                }));
+                            }
+                            let task_key = format!(
+                                "{}:{}:{}",
+                                identity,
+                                track_source_label(publication.source()),
+                                publication.sid()
+                            );
                             if let Some(old) = audio_stream_tasks.remove(&task_key) {
                                 old.abort();
                             }
@@ -772,13 +1180,10 @@ async fn run_session(
                             if let Some(old) = video_stream_tasks.remove(&task_key) {
                                 old.abort();
                             }
-                            let uid: i64 = if let Ok(u) = identity.parse() { u } else { continue };
-                            let key = if src == TrackSource::Screenshare {
-                                video_frame_key(uid, true)
-                            } else {
-                                video_frame_key(uid, false)
-                            };
-                            video_frames.lock().remove(&key);
+                            if src != TrackSource::Screenshare {
+                                let uid: i64 = if let Ok(u) = identity.parse() { u } else { continue };
+                                video_frames.lock().remove(&video_frame_key(uid, false));
+                            }
                         }
                     }
                     Some(RoomEvent::Disconnected { reason, .. }) => {
@@ -827,21 +1232,40 @@ async fn run_session(
                             let _ = lp.unpublish_track(&sid).await;
                         }
                     }
-                    Some(VoiceCmd::StartScreen { screen_index, preset }) => {
+                    Some(VoiceCmd::StartScreen { source, preset }) => {
                         // Stop any existing capture thread and unpublish old track before starting a new one.
                         // Without unpublishing, viewers stay subscribed to the stale track and see a frozen frame.
                         if let Some(flag) = screen_stop_flag.take() {
                             flag.store(true, Ordering::Relaxed);
                             tokio::time::sleep(Duration::from_millis(80)).await;
                         }
+                        if let Some(flag) = screen_audio_stop_flag.take() {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        if let Some(handle) = screen_preview_task.take() {
+                            handle.abort();
+                            let _ = handle.await;
+                        }
+                        if let Some(handle) = screen_audio_task.take() {
+                            let _ = handle.await;
+                        }
                         if let Some(sid) = screen_sid.take() {
                             let _ = lp.unpublish_track(&sid).await;
                         }
+                        if let Some(sid) = screen_audio_sid.take() {
+                            let _ = lp.unpublish_track(&sid).await;
+                        }
+                        screen_audio_muted_flag = None;
                         screen_fallback_rx = None;
                         let stop_flag = Arc::new(AtomicBool::new(false));
                         screen_stop_flag = Some(Arc::clone(&stop_flag));
                         let (width, height, fps, bitrate) = preset.params();
-                        let (track_opt, fallback_rx) = start_screen_capture(screen_index, preset, stop_flag, Arc::clone(&session_stats));
+                        let (track_opt, fallback_rx) = start_screen_capture(
+                            source.clone(),
+                            preset,
+                            Arc::clone(&stop_flag),
+                            Arc::clone(&session_stats),
+                        );
                         screen_fallback_rx = fallback_rx;
                         screen_publish_opts_saved = Some((bitrate, fps));
                         if let Some(track) = track_opt {
@@ -863,6 +1287,48 @@ async fn run_session(
                             opts.simulcast = false;
                             if let Ok(pub_) = lp.publish_track(LocalTrack::Video(track), opts).await {
                                 screen_sid = Some(pub_.sid());
+                                screen_preview_task = Some(spawn_stream_preview_publisher(
+                                    lp.clone(),
+                                    source.clone(),
+                                    Arc::clone(&stop_flag),
+                                ));
+                                let audio_stop_flag = Arc::new(AtomicBool::new(false));
+                                let audio_muted_flag =
+                                    Arc::new(AtomicBool::new(screen_audio_muted));
+                                if let Some((audio_track, audio_handle)) = start_stream_audio_capture(
+                                    &source,
+                                    Arc::clone(&audio_stop_flag),
+                                    Arc::clone(&audio_muted_flag),
+                                ) {
+                                    let mut audio_opts = TrackPublishOptions::default();
+                                    audio_opts.audio_encoding =
+                                        Some(livekit::options::audio::MUSIC_HIGH_QUALITY.encoding.clone());
+                                    audio_opts.dtx = false;
+                                    audio_opts.red = false;
+                                    audio_opts.source = TrackSource::ScreenshareAudio;
+                                    match lp
+                                        .publish_track(LocalTrack::Audio(audio_track), audio_opts)
+                                        .await
+                                    {
+                                        Ok(pub_) => {
+                                            screen_audio_sid = Some(pub_.sid());
+                                            screen_audio_task = Some(audio_handle);
+                                            screen_audio_stop_flag = Some(audio_stop_flag);
+                                            screen_audio_muted_flag = Some(audio_muted_flag);
+                                        }
+                                        Err(err) => {
+                                            eprintln!(
+                                                "[voice][screen][audio] publish_track failed: {:?}",
+                                                err
+                                            );
+                                            audio_stop_flag.store(true, Ordering::Relaxed);
+                                            let _ = audio_handle.await;
+                                        }
+                                    }
+                                }
+                            } else {
+                                stop_flag.store(true, Ordering::Relaxed);
+                                screen_stop_flag = None;
                             }
                         }
                     }
@@ -871,9 +1337,23 @@ async fn run_session(
                             flag.store(true, Ordering::Relaxed);
                             tokio::time::sleep(Duration::from_millis(80)).await;
                         }
+                        if let Some(flag) = screen_audio_stop_flag.take() {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        if let Some(handle) = screen_preview_task.take() {
+                            handle.abort();
+                            let _ = handle.await;
+                        }
+                        if let Some(handle) = screen_audio_task.take() {
+                            let _ = handle.await;
+                        }
                         if let Some(sid) = screen_sid.take() {
                             let _ = lp.unpublish_track(&sid).await;
                         }
+                        if let Some(sid) = screen_audio_sid.take() {
+                            let _ = lp.unpublish_track(&sid).await;
+                        }
+                        screen_audio_muted_flag = None;
                         // Keep last resolution/fps/bitrate visible; clear stream_fps so UI shows stream stopped.
                         {
                             let mut st = session_stats.lock();
@@ -885,6 +1365,56 @@ async fn run_session(
                     }
                     Some(VoiceCmd::SetUserVolume(uid, vol)) => {
                         user_volumes.lock().insert(uid, vol.clamp(0.0, 3.0));
+                    }
+                    Some(VoiceCmd::SetStreamVolume(uid, vol)) => {
+                        stream_volumes.lock().insert(uid, vol.clamp(0.0, 4.0));
+                    }
+                    Some(VoiceCmd::SetStreamSubscription { user_id, subscribed }) => {
+                        if subscribed {
+                            desired_stream_subscriptions.insert(user_id);
+                        } else {
+                            desired_stream_subscriptions.remove(&user_id);
+                        }
+                        let mut video_publication = stream_video_publications.get(&user_id).cloned();
+                        let mut audio_publication = stream_audio_publications.get(&user_id).cloned();
+                        if video_publication.is_none() || audio_publication.is_none() {
+                            if let Some(participant) = room
+                                .remote_participants()
+                                .into_values()
+                                .find(|participant| {
+                                    parse_remote_user_id(&participant.identity().to_string())
+                                        == Some(user_id)
+                                })
+                            {
+                                for publication in participant.track_publications().into_values() {
+                                    match publication.source() {
+                                        TrackSource::Screenshare => {
+                                            stream_video_publications
+                                                .insert(user_id, publication.clone());
+                                            video_publication = Some(publication);
+                                        }
+                                        TrackSource::ScreenshareAudio => {
+                                            stream_audio_publications
+                                                .insert(user_id, publication.clone());
+                                            audio_publication = Some(publication);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(publication) = video_publication.as_ref() {
+                            apply_publication_subscription(publication, subscribed);
+                        }
+                        if let Some(publication) = audio_publication.as_ref() {
+                            apply_publication_subscription(publication, subscribed);
+                        }
+                    }
+                    Some(VoiceCmd::SetScreenAudioMuted(muted)) => {
+                        screen_audio_muted = muted;
+                        if let Some(flag) = screen_audio_muted_flag.as_ref() {
+                            flag.store(muted, Ordering::Relaxed);
+                        }
                     }
                     Some(VoiceCmd::SetOutputMuted(m)) => {
                         output_muted.store(m, Ordering::Relaxed);
@@ -937,12 +1467,29 @@ async fn run_session(
 
     // ── Cleanup ──────────────────────────────────────────────────────────────────────────────
     mic_stop.store(true, Ordering::Relaxed);
+    if let Some(flag) = screen_audio_stop_flag.take() {
+        flag.store(true, Ordering::Relaxed);
+    }
     if let Some(flag) = screen_stop_flag.take() {
         flag.store(true, Ordering::Relaxed);
         // Let the detached screen/encoder thread observe the stop flag and
         // release its EncodedVideoTrackSource clone before the next join.
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
+    if let Some(handle) = screen_preview_task.take() {
+        handle.abort();
+        let _ = handle.await;
+    }
+    if let Some(handle) = screen_audio_task.take() {
+        let _ = handle.await;
+    }
+    if let Some(sid) = screen_audio_sid.take() {
+        let _ = lp.unpublish_track(&sid).await;
+    }
+    if let Some(sid) = screen_sid.take() {
+        let _ = lp.unpublish_track(&sid).await;
+    }
+    screen_audio_muted_flag = None;
     let mut room_stream_tasks = Vec::with_capacity(
         video_stream_tasks.len().saturating_add(audio_stream_tasks.len()),
     );
@@ -970,6 +1517,7 @@ async fn run_session(
         let _ = mic_thread.join();
     })
     .await;
+    let _ = room.close().await;
     drop(room);
     Ok(())
 }
@@ -978,7 +1526,8 @@ async fn run_session(
 async fn run_remote_audio_mixer(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<MixerFrameMsg>,
     interval: &mut tokio::time::Interval,
-    volumes: Arc<Mutex<HashMap<i64, f32>>>,
+    voice_volumes: Arc<Mutex<HashMap<i64, f32>>>,
+    stream_volumes: Arc<Mutex<HashMap<i64, f32>>>,
     output_muted: Arc<AtomicBool>,
     output_volume: Arc<Mutex<f32>>,
     output_buffer: Arc<Mutex<VecDeque<i16>>>,
@@ -986,29 +1535,37 @@ async fn run_remote_audio_mixer(
 ) {
     let output_10ms_len = (output_sample_rate / 100).max(1) as usize;
     let need_resample = output_10ms_len != SAMPLES_PER_10MS;
-    let mut latest: HashMap<i64, Vec<i16>> = HashMap::new();
+    let mut latest: HashMap<MixerRoute, Vec<i16>> = HashMap::new();
     loop {
         tokio::select! {
             msg = rx.recv() => {
                 match msg {
                     None => break,
-                    Some((uid, samples)) => {
+                    Some(MixerFrameMsg::Frame(route, samples)) => {
                         if samples.len() >= SAMPLES_PER_10MS {
-                            latest.insert(uid, samples);
+                            latest.insert(route, samples);
                         }
+                    }
+                    Some(MixerFrameMsg::Remove(route)) => {
+                        latest.remove(&route);
                     }
                 }
             }
             _ = interval.tick() => {
-                let vol_map = volumes.lock().clone();
+                let voice_map = voice_volumes.lock().clone();
+                let stream_map = stream_volumes.lock().clone();
                 let out_vol = *output_volume.lock();
                 let muted = output_muted.load(Ordering::Relaxed);
                 let mixed: Vec<i16> = if muted || latest.is_empty() {
                     vec![0i16; SAMPLES_PER_10MS]
                 } else {
                     let mut out = vec![0i32; SAMPLES_PER_10MS];
-                    for (uid, samples) in &latest {
-                        let gain = vol_map.get(uid).copied().unwrap_or(1.0) * out_vol;
+                    for (route, samples) in &latest {
+                        let gain = if route.stream {
+                            stream_map.get(&route.user_id).copied().unwrap_or(1.0)
+                        } else {
+                            voice_map.get(&route.user_id).copied().unwrap_or(1.0)
+                        } * out_vol;
                         for (i, &s) in samples.iter().take(SAMPLES_PER_10MS).enumerate() {
                             out[i] += (s as f32 * gain) as i32;
                         }
@@ -1099,12 +1656,10 @@ static DECODE_CONVERTER: parking_lot::Mutex<Option<(u32, u32, D3d11I420ToRgba)>>
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 static DECODE_CONVERTER_NV12: parking_lot::Mutex<Option<D3d11Nv12ToRgba>> = parking_lot::Mutex::new(None);
 
-/// BT.709 limited-range CPU fallback for D3D11TextureVideoFrameBuffer (MFT hardware decode).
+/// BT.709 limited-range CPU fallback for D3D11TextureVideoFrameBuffer (MFT hardware decode path).
 ///
-/// MFT DXVA2 hardware decoder outputs NV12 with limited range: Y ∈ [16,235], UV ∈ [16,240] neutral 128.
-/// The standard libyuv to_argb() path calls I420ToABGR which assumes FULL-RANGE data, producing a
-/// washed-out image (black appears as 6% gray). This function calls to_i420() (which preserves the
-/// raw limited-range byte values via NV12ToI420Scale) and then applies the correct BT.709 matrix.
+/// Hardware-decoded NV12 surfaces from MFT/DXVA arrive as limited-range YUV in practice, so the
+/// viewer-side fallback must expand them before applying the BT.709 matrix.
 ///
 /// Called when the GPU compute shader path fails or when decode_gpu_failed() is set.
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
@@ -1112,6 +1667,7 @@ fn d3d11_nv12_to_rgba_cpu(
     vfb_ptr: &cxx::UniquePtr<VideoFrameBuffer>,
     width: u32,
     height: u32,
+    full_range: bool,
 ) -> Option<Vec<u8>> {
     // to_i420() → D3D11TextureVideoFrameBuffer::ToI420(): GPU→CPU staging copy of NV12,
     // then NV12ToI420Scale (deinterleaves UV without range conversion).
@@ -1146,10 +1702,15 @@ fn d3d11_nv12_to_rgba_cpu(
             let y_raw = y_data[py * stride_y + px] as f32;
             let u_raw = u_data[(py / 2) * stride_u + px / 2] as f32;
             let v_raw = v_data[(py / 2) * stride_v + px / 2] as f32;
-            // BT.709 limited-range normalization
-            let y = (y_raw - 16.0) * (255.0 / 219.0);
-            let u = (u_raw - 128.0) * (255.0 / 224.0);
-            let v = (v_raw - 128.0) * (255.0 / 224.0);
+            let (y, u, v) = if full_range {
+                (y_raw, u_raw - 128.0, v_raw - 128.0)
+            } else {
+                (
+                    (y_raw - 16.0) * (255.0 / 219.0),
+                    (u_raw - 128.0) * (255.0 / 224.0),
+                    (v_raw - 128.0) * (255.0 / 224.0),
+                )
+            };
             // BT.709 matrix
             let r = (y + 1.5748 * v).clamp(0.0, 255.0) as u8;
             let g = (y - 0.1873 * u - 0.4681 * v).clamp(0.0, 255.0) as u8;
@@ -1162,6 +1723,29 @@ fn d3d11_nv12_to_rgba_cpu(
         }
     }
     Some(rgba)
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn select_nv12_full_range(frame: &BoxVideoFrame) -> bool {
+    if let Ok(val) = std::env::var("ASTRIX_VIDEO_NV12_FULL_RANGE") {
+        return val == "1" || val.eq_ignore_ascii_case("true");
+    }
+    frame
+        .color_space
+        .as_ref()
+        .map(|cs| cs.is_full_range())
+        .unwrap_or(false)
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+pub(crate) fn wgl_zero_copy_enabled() -> bool {
+    if let Ok(v) = std::env::var("ASTRIX_VIDEO_DISABLE_WGL_INTEROP") {
+        return !(v == "1" || v.eq_ignore_ascii_case("true"));
+    }
+    if let Ok(v) = std::env::var("ASTRIX_VIDEO_ENABLE_WGL_INTEROP") {
+        return v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    true
 }
 
 /// Convert a LiveKit video frame to RGBA for egui. Tries D3D11 I420→RGBA when buffer is I420 and GPU is available; else CPU to_argb.
@@ -1190,6 +1774,18 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
 
     #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
     {
+        let nv12_full_range = select_nv12_full_range(frame);
+        static LOGGED_FRAME_COLORSPACE: AtomicBool = AtomicBool::new(false);
+        if is_telemetry_enabled() && !LOGGED_FRAME_COLORSPACE.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "[d3d11_rgba] Frame color metadata: present={} matrix_id={:?} range_id={:?} selected_full_range={} wgl_zero_copy={}",
+                frame.color_space.is_some(),
+                frame.color_space.as_ref().map(|cs| cs.matrix_id),
+                frame.color_space.as_ref().map(|cs| cs.range_id),
+                nv12_full_range,
+                wgl_zero_copy_enabled(),
+            );
+        }
         if !force_cpu_rgba && !decode_gpu_failed() {
             // Phase 3.4: D3D11 texture path (MFT hardware decoder → NV12 D3D11 texture)
             if let Some(native) = buf.as_native() {
@@ -1206,11 +1802,27 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
                         };
                         // Phase 3.5: use GPU zero-copy path (WGL_NV_DX_interop2) when available,
                         // otherwise fall back to CPU readback (convert_to_rgba_bytes).
-                        let use_zero_copy = crate::d3d11_gl_interop::GL_INTEROP_AVAILABLE
-                            .load(std::sync::atomic::Ordering::Acquire);
+                        let use_zero_copy = wgl_zero_copy_enabled()
+                            && crate::d3d11_gl_interop::GL_INTEROP_AVAILABLE
+                                .load(std::sync::atomic::Ordering::Acquire);
 
                         let result = {
                             let mut conv_guard = DECODE_CONVERTER_NV12.lock();
+                            if conv_guard
+                                .as_ref()
+                                .map(|conv| conv.full_range() != nv12_full_range)
+                                .unwrap_or(false)
+                            {
+                                if is_telemetry_enabled() {
+                                    eprintln!(
+                                        "[voice][screen][viewer] NV12 color-space change: recreating converter full_range={} range_id={:?} matrix_id={:?}",
+                                        nv12_full_range,
+                                        frame.color_space.as_ref().map(|cs| cs.range_id),
+                                        frame.color_space.as_ref().map(|cs| cs.matrix_id),
+                                    );
+                                }
+                                *conv_guard = None;
+                            }
                             if conv_guard.is_none() {
                                 // Use the same D3D11 device as the MFT decoder so the NV12
                                 // texture (produced by that device) can be CopySubresourceRegion'd
@@ -1219,7 +1831,7 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
                                     crate::mft_device::get_shared_device()
                                         .ok_or_else(|| "shared device not initialized".to_string())
                                         .and_then(|dev| {
-                                            D3d11Nv12ToRgba::new(&dev)
+                                            D3d11Nv12ToRgba::new(&dev, nv12_full_range)
                                                 .map_err(|e| format!("{:?}", e))
                                         });
                                 match init_result {
@@ -1230,7 +1842,7 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
                                         // kNative D3D11 buffer: NEVER call video_frame_to_rgba_cpu —
                                         // its to_argb() calls ToI420() which may return nullptr on
                                         // staging failure, causing a null-deref crash.
-                                        return d3d11_nv12_to_rgba_cpu(vfb_ptr, width, height)
+                                        return d3d11_nv12_to_rgba_cpu(vfb_ptr, width, height, nv12_full_range)
                                             .map(|v| (width, height, v, false, None));
                                     }
                                 }
@@ -1261,7 +1873,7 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
                                 // kNative D3D11 buffer: NEVER call video_frame_to_rgba_cpu —
                                 // its to_argb() calls ToI420() which may return nullptr on
                                 // staging failure, causing a null-deref crash.
-                                return d3d11_nv12_to_rgba_cpu(vfb_ptr, width, height)
+                                return d3d11_nv12_to_rgba_cpu(vfb_ptr, width, height, nv12_full_range)
                                     .map(|v| (width, height, v, false, None));
                             }
                         }
@@ -1314,7 +1926,7 @@ fn video_frame_to_rgba(frame: &BoxVideoFrame) -> Option<(u32, u32, Vec<u8>, bool
         if let Some(native) = buf.as_native() {
             let vfb_ptr = native.video_frame_buffer_unique_ptr();
             if video_frame_buffer_is_d3d11(vfb_ptr) {
-                return d3d11_nv12_to_rgba_cpu(vfb_ptr, width, height)
+                return d3d11_nv12_to_rgba_cpu(vfb_ptr, width, height, select_nv12_full_range(frame))
                     .map(|rgba| (width, height, rgba, false, None));
             }
         }
@@ -1352,6 +1964,7 @@ fn run_camera_capture(source: NativeVideoSource, running: Arc<AtomicBool>) -> Re
         let frame = VideoFrame {
             rotation: VideoRotation::VideoRotation0,
             timestamp_us: frame_count * 16_667,
+            color_space: None,
             buffer: i420,
         };
         source.capture_frame(&frame);
@@ -1461,6 +2074,7 @@ impl XcapI420Buffers {
         Some(livekit::webrtc::video_frame::VideoFrame {
             rotation: VideoRotation::VideoRotation0,
             timestamp_us: ts,
+            color_space: None,
             buffer: out,
         })
     }
@@ -1552,7 +2166,7 @@ fn convert_rgba_to_i420(
 ///   full framerate, eliminating startup stutter.
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 fn start_screen_capture_xcap(
-    screen_index: Option<usize>,
+    source_target: StreamSourceTarget,
     preset: ScreenPreset,
     stop_flag: Arc<AtomicBool>,
     session_stats: Arc<Mutex<VoiceSessionStats>>,
@@ -1577,6 +2191,86 @@ fn start_screen_capture_xcap(
     let resolution = VideoResolution { width: video_width, height: video_height };
     let source = NativeVideoSource::new(resolution, true);
     let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
+
+    if let StreamSourceTarget::Window {
+        window_id,
+        process_id,
+    } = source_target.clone()
+    {
+        let stop_for_thread = Arc::clone(&stop_flag);
+        std::thread::Builder::new()
+            .name("livekit-window-xcap".into())
+            .spawn(move || {
+                let Some(window) = find_stream_window(window_id, process_id) else {
+                    eprintln!(
+                        "[voice][screen] xcap window not found: hwnd={} pid={}",
+                        window_id, process_id
+                    );
+                    return;
+                };
+                eprintln!(
+                    "[voice][screen] xcap capturing window '{}' [{}] ({}x{})",
+                    window.title(),
+                    window.app_name(),
+                    window.width(),
+                    window.height()
+                );
+
+                let mut frame_count: i64 = 0;
+                let mut i420_buffers = XcapI420Buffers::new(video_width, video_height);
+                let mut fps_window_frames: u32 = 0;
+                let mut fps_window_start = std::time::Instant::now();
+                while !stop_for_thread.load(Ordering::Relaxed) {
+                    let t0 = std::time::Instant::now();
+                    match window.capture_image() {
+                        Ok(img) => {
+                            let src_w = img.width();
+                            let src_h = img.height();
+                            let raw = img.as_raw();
+                            if let Some(vf) = i420_buffers.rgba_to_i420_scaled_reuse(
+                                raw,
+                                src_w,
+                                src_h,
+                                video_width,
+                                video_height,
+                                frame_count,
+                            ) {
+                                source.capture_frame(&vf);
+                                frame_count += 1;
+                                fps_window_frames += 1;
+                            }
+                        }
+                        Err(e) => eprintln!("[voice][screen] window capture error: {}", e),
+                    }
+                    let elapsed = fps_window_start.elapsed();
+                    if elapsed >= Duration::from_secs(1) {
+                        let actual_fps =
+                            fps_window_frames as f32 / elapsed.as_secs_f32().max(0.001);
+                        eprintln!(
+                            "[voice][screen] xcap capture_frame rate: {:.1} fps (target {})",
+                            actual_fps,
+                            max_fps
+                        );
+                        fps_window_frames = 0;
+                        fps_window_start = std::time::Instant::now();
+                    }
+                    let elapsed_ms = t0.elapsed().as_millis() as u64;
+                    let to_sleep = frame_interval_ms.saturating_sub(elapsed_ms);
+                    if to_sleep > 0 {
+                        std::thread::sleep(Duration::from_millis(to_sleep));
+                    }
+                }
+                eprintln!("[voice][screen] xcap capture thread stopped");
+            })
+            .ok();
+
+        return (Some(track), None);
+    }
+
+    let screen_index = match source_target {
+        StreamSourceTarget::Monitor { index } => Some(index),
+        StreamSourceTarget::Window { .. } => None,
+    };
 
     let stop_for_thread = Arc::clone(&stop_flag);
     std::thread::Builder::new()
@@ -1648,7 +2342,7 @@ fn start_screen_capture_xcap(
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 fn start_screen_capture(
-    screen_index: Option<usize>,
+    source_target: StreamSourceTarget,
     preset: ScreenPreset,
     stop_flag: Arc<AtomicBool>,
     session_stats: Arc<Mutex<VoiceSessionStats>>,
@@ -1657,13 +2351,23 @@ fn start_screen_capture(
         .unwrap_or_else(|_| "wgc".to_string());
     if capture_backend.eq_ignore_ascii_case("xcap") {
         eprintln!("[voice][screen] capture backend override: xcap");
-        return start_screen_capture_xcap(screen_index, preset, stop_flag, session_stats);
+        return start_screen_capture_xcap(source_target, preset, stop_flag, session_stats);
     }
-    let use_dxgi = capture_backend.eq_ignore_ascii_case("dxgi");
+    let use_dxgi = capture_backend.eq_ignore_ascii_case("dxgi")
+        && matches!(&source_target, StreamSourceTarget::Monitor { .. });
+    if capture_backend.eq_ignore_ascii_case("dxgi")
+        && !matches!(&source_target, StreamSourceTarget::Monitor { .. })
+    {
+        eprintln!("[voice][screen] DXGI is unavailable for window capture, falling back to WGC");
+    }
     if use_dxgi {
         eprintln!("[voice][screen] capture backend override: dxgi");
         eprintln!("[voice][screen] DXGI build marker: hardfail-fallback-v2");
     }
+    let screen_index = match &source_target {
+        StreamSourceTarget::Monitor { index } => Some(*index),
+        StreamSourceTarget::Window { .. } => None,
+    };
     use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering};
     use windows::Win32::Graphics::Direct3D11::{
         D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
@@ -1674,6 +2378,7 @@ fn start_screen_capture(
         frame::Frame,
         graphics_capture_api::InternalCaptureControl,
         monitor::Monitor as WgcMonitor,
+        window::Window as WgcWindow,
         settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings,
                    DirtyRegionSettings, MinimumUpdateIntervalSettings,
                    SecondaryWindowSettings, Settings},
@@ -1933,10 +2638,12 @@ fn start_screen_capture(
                         };
                         self.wgc_source_fps_milli
                             .store((compositor_fps * 1000.0) as u64, Ordering::Relaxed);
-                        eprintln!(
-                            "[voice][screen] WGC rate: callback {:.1} fps, compositor {:.1} fps",
-                            callback_fps, compositor_fps
-                        );
+                        if is_telemetry_enabled() {
+                            eprintln!(
+                                "[voice][screen] WGC rate: callback {:.1} fps, compositor {:.1} fps",
+                                callback_fps, compositor_fps
+                            );
+                        }
                         *guard = (total, Some(now), frame_timestamp_100ns);
                     }
                     _ => {}
@@ -2159,10 +2866,12 @@ fn start_screen_capture(
                                 };
                                 wgc_source_fps_milli_dxgi
                                     .store((compositor_fps * 1000.0) as u64, Ordering::Relaxed);
-                                eprintln!(
-                                    "[voice][screen] DXGI rate: callback {:.1} fps, compositor {:.1} fps",
-                                    callback_fps, compositor_fps
-                                );
+                                if is_telemetry_enabled() {
+                                    eprintln!(
+                                        "[voice][screen] DXGI rate: callback {:.1} fps, compositor {:.1} fps",
+                                        callback_fps, compositor_fps
+                                    );
+                                }
                                 *guard = (total, Some(now), frame_timestamp_100ns);
                             }
                             _ => {}
@@ -2275,6 +2984,65 @@ fn start_screen_capture(
                 }
 
                 eprintln!("[voice][screen] DXGI capture thread stopped");
+            })
+            .ok();
+    } else if let StreamSourceTarget::Window {
+        window_id,
+        process_id,
+    } = source_target
+    {
+        if find_stream_window(window_id, process_id).is_none() {
+            eprintln!(
+                "[voice][screen] WGC window not found: hwnd={} pid={}",
+                window_id, process_id
+            );
+            return (None, None);
+        }
+        eprintln!(
+            "[voice][screen] WGC capturing window hwnd={} at {}x{} @ {}fps",
+            window_id,
+            video_width,
+            video_height,
+            max_fps
+        );
+
+        let flags = WgcFlags {
+            ring: Arc::clone(&ring),
+            stop_flag: Arc::clone(&stop_flag),
+            latest_slot: Arc::clone(&latest_slot),
+            pool_ref: Arc::clone(&pool_ref),
+            gpu_encode_active: Arc::clone(&gpu_encode_active),
+            pool_creation_started: Arc::clone(&pool_creation_started),
+            pool_creation_failed: Arc::clone(&pool_creation_failed),
+            wgc_frame_count: Arc::clone(&wgc_frame_count),
+            wgc_source_fps_milli: Arc::clone(&wgc_source_fps_milli),
+            wgc_log_state: Arc::clone(&wgc_log_state),
+            telemetry: Arc::clone(&telemetry_sender),
+        };
+        let min_update_interval = if max_fps >= 55.0 {
+            eprintln!("[voice][screen] WGC MinUpdateInterval: 1000 Вµs (target {} fps)", max_fps);
+            MinimumUpdateIntervalSettings::Custom(Duration::from_micros(1000))
+        } else {
+            MinimumUpdateIntervalSettings::Default
+        };
+        let settings = Settings::new(
+            WgcWindow::from_raw_hwnd(window_id as usize as *mut std::ffi::c_void),
+            CursorCaptureSettings::Default,
+            DrawBorderSettings::Default,
+            SecondaryWindowSettings::Default,
+            min_update_interval,
+            DirtyRegionSettings::Default,
+            ColorFormat::Rgba8,
+            flags,
+        );
+
+        std::thread::Builder::new()
+            .name("livekit-window-wgc".into())
+            .spawn(move || {
+                if let Err(e) = ScreenHandler::start(settings) {
+                    eprintln!("[voice][screen] WGC window error: {e}");
+                }
+                eprintln!("[voice][screen] WGC capture thread stopped");
             })
             .ok();
     } else {
@@ -2406,12 +3174,11 @@ fn start_screen_capture(
             };
 
             // ── Warmup phase ───────────────────────────────────────────────────
-            // CPU path: 30 frames × 66.7 ms = ~2 s at 15 fps — enough for BWE to converge
-            // at high bitrates (1080p60 = 35 Mbit/s) before switching to full FPS.
-            // MFT path: 10 frames × 33.3 ms = ~333 ms at 30 fps — hardware encoder starts
-            // fast, long warmup only adds unnecessary latency.
+            // CPU path keeps the old fixed warmup.
+            // Encoded path now uses a transport-aware startup cap below, so a fixed warmup
+            // window only adds timestamp/schedule mismatch without helping startup quality.
             const WARMUP_FRAMES_CPU: i64 = 30;
-            const WARMUP_FRAMES_MFT: i64 = 10;
+            const WARMUP_FRAMES_MFT: i64 = 0;
             const WARMUP_FPS_CPU: f64 = 15.0;
             const WARMUP_FPS_MFT: f64 = 30.0;
             let (warmup_frames, warmup_fps) = if capture_path_mft {
@@ -2433,7 +3200,8 @@ fn start_screen_capture(
             // Phase 4.5: adaptive FPS — reduce when encode exceeds budget, restore when under.
             let max_fps_f64 = max_fps;
             let preset_bitrate_bps_u32 = bitrate_bps.min(u32::MAX as u64) as u32;
-            let mut current_fps = max_fps_f64;
+            let initial_sender_fps = max_fps_f64;
+            let mut current_fps = initial_sender_fps;
             let mut current_source_cap_fps = max_fps_f64;
             let mut webrtc_target_bitrate_bps = preset_bitrate_bps_u32;
             let mut webrtc_target_fps = max_fps_f64;
@@ -2480,6 +3248,31 @@ fn start_screen_capture(
             let enc_session_start = std::time::Instant::now();
             let mut last_send_capture_us: i64 = 0;
             let telemetry_enabled = is_telemetry_enabled();
+            const STARTUP_BWE_GUARD_SECS: u64 = 4;
+            let startup_transport_fps_cap =
+                |target_bitrate_bps: u32, elapsed: Duration| -> f64 {
+                    if !capture_path_mft
+                        || elapsed >= Duration::from_secs(STARTUP_BWE_GUARD_SECS)
+                        || preset_bitrate_bps_u32 == 0
+                    {
+                        return max_fps_f64;
+                    }
+                    let ratio = target_bitrate_bps.max(250_000) as f64
+                        / preset_bitrate_bps_u32 as f64;
+                    let capped = if ratio < 0.10 {
+                        30.0
+                    } else if ratio < 0.25 {
+                        45.0
+                    } else if ratio < 0.45 {
+                        60.0
+                    } else if ratio < 0.70 {
+                        75.0
+                    } else {
+                        max_fps_f64
+                    };
+                    capped.min(max_fps_f64)
+                };
+            let mut last_startup_transport_cap_fps = current_fps;
             let push_trace_verbose = std::env::var("ASTRIX_DXGI_PUSH_TRACE")
                 .map(|v| v != "0")
                 .unwrap_or(false);
@@ -2590,7 +3383,7 @@ fn start_screen_capture(
             let mut extra_intervals = 0i64;
             let mut prev_frame_time: Option<std::time::Instant> = None;
             let mut prev_send_time: Option<std::time::Instant> = None;
-            // Phase 4.7: GIR + periodic forced IDR for packet loss recovery (default 12s).
+            // Phase 4.7: GIR + periodic forced IDR for packet loss recovery.
             // ASTRIX_PERIODIC_IDR_SECS=N (0 = disable, not recommended on WAN). Longer interval = fewer IDR spikes.
             let periodic_idr_override_secs: Option<u64> = std::env::var("ASTRIX_PERIODIC_IDR_SECS")
                 .ok()
@@ -2606,9 +3399,9 @@ fn start_screen_capture(
             let mut last_forced_idr_at: Option<std::time::Instant> = None;
             let effective_periodic_idr_secs = |enc: Option<&EncodedH264Encoder>| -> u64 {
                 periodic_idr_override_secs.unwrap_or(match enc.map(|e| e.backend_kind()) {
-                    // Keep NVENC recovery noticeably faster than the worst-case viewer
-                    // freeze window while still avoiding the old high-burst profile.
-                    Some(EncodedBackendKind::NvencD3d11) => 8,
+                    // Keep NVENC less bursty than before, but stay conservative
+                    // enough to preserve reliable startup/recovery across drivers.
+                    Some(EncodedBackendKind::NvencD3d11) => 20,
                     _ => 12,
                 })
             };
@@ -2680,10 +3473,12 @@ fn start_screen_capture(
                         || (higher_enough && source_cap_up_votes >= SOURCE_CAP_CONFIRM_WINDOWS);
 
                     if should_apply {
-                        eprintln!(
-                            "[voice][screen] source-adaptive: fps ceiling {:.0} → {:.0} (capture source {:.1} fps)",
-                            current_source_cap_fps, source_cap_candidate, source_fps
-                        );
+                        if telemetry_enabled {
+                            eprintln!(
+                                "[voice][screen] source-adaptive: fps ceiling {:.0} → {:.0} (capture source {:.1} fps)",
+                                current_source_cap_fps, source_cap_candidate, source_fps
+                            );
+                        }
                         current_source_cap_fps = source_cap_candidate;
                         source_cap_down_votes = 0;
                         source_cap_up_votes = 0;
@@ -2712,8 +3507,26 @@ fn start_screen_capture(
                     }
                 } else if lock_preset_fps {
                     current_source_cap_fps = max_fps_f64;
-                    if current_fps != max_fps_f64 {
-                        current_fps = max_fps_f64;
+                }
+                let startup_cap_fps = startup_transport_fps_cap(
+                    webrtc_target_bitrate_bps,
+                    enc_session_start.elapsed(),
+                );
+                if telemetry_enabled
+                    && (startup_cap_fps - last_startup_transport_cap_fps).abs() >= 0.5
+                {
+                    eprintln!(
+                        "[voice][screen] startup transport cap: fps {:.0} → {:.0} (bwe={:.1} Mbps / preset={:.1} Mbps)",
+                        last_startup_transport_cap_fps,
+                        startup_cap_fps,
+                        webrtc_target_bitrate_bps as f64 / 1_000_000.0,
+                        preset_bitrate_bps_u32 as f64 / 1_000_000.0
+                    );
+                    last_startup_transport_cap_fps = startup_cap_fps;
+                }
+                if lock_preset_fps {
+                    if (current_fps - startup_cap_fps).abs() >= 0.5 {
+                        current_fps = startup_cap_fps;
                         current_frame_interval_ns = (1_000_000_000.0 / current_fps) as u64;
                         current_full_interval = Duration::from_nanos(current_frame_interval_ns);
                         current_effective_interval = if current_full_interval.as_nanos() as u64 > MAX_STATIC_INTERVAL_NS {
@@ -2722,7 +3535,21 @@ fn start_screen_capture(
                             current_full_interval
                         };
                         current_rtp_step = 90_000_u32 / current_fps as u32;
+                        downgrade_frames = 0;
+                        upgrade_frames = 0;
                     }
+                } else if current_fps > startup_cap_fps {
+                    current_fps = startup_cap_fps;
+                    current_frame_interval_ns = (1_000_000_000.0 / current_fps) as u64;
+                    current_full_interval = Duration::from_nanos(current_frame_interval_ns);
+                    current_effective_interval = if current_full_interval.as_nanos() as u64 > MAX_STATIC_INTERVAL_NS {
+                        Duration::from_nanos(MAX_STATIC_INTERVAL_NS)
+                    } else {
+                        current_full_interval
+                    };
+                    current_rtp_step = 90_000_u32 / current_fps as u32;
+                    downgrade_frames = 0;
+                    upgrade_frames = 0;
                 }
                 let interval = if frame_count < warmup_frames { warmup_interval } else { current_effective_interval };
                 let past_startup = frame_count >= STARTUP_ACCEPT_FRAMES;
@@ -2949,11 +3776,13 @@ fn start_screen_capture(
                                 }
                             }
                             if bwe_changed {
-                                eprintln!(
-                                    "[voice][screen] WebRTC BWE target: bitrate={:.1} Mbps fps_hint={:.1}",
-                                    webrtc_target_bitrate_bps as f64 / 1_000_000.0,
-                                    webrtc_target_fps
-                                );
+                                if telemetry_enabled {
+                                    eprintln!(
+                                        "[voice][screen] WebRTC BWE target: bitrate={:.1} Mbps fps_hint={:.1}",
+                                        webrtc_target_bitrate_bps as f64 / 1_000_000.0,
+                                        webrtc_target_fps
+                                    );
+                                }
                                 if let Some(mut st) = stats_enc.try_lock() {
                                     st.connection_speed_mbps =
                                         Some(webrtc_target_bitrate_bps as f32 / 1_000_000.0);
@@ -3066,7 +3895,7 @@ fn start_screen_capture(
                                                     && matches!(enc_ref.backend_kind(), EncodedBackendKind::NvencD3d11)
                                                 {
                                                     eprintln!(
-                                                        "[voice][screen] NVENC tuning: preset bitrate cap {:.1} Mbps, periodic IDR default 8s",
+                                                        "[voice][screen] NVENC tuning: preset bitrate cap {:.1} Mbps, periodic IDR default 20s",
                                                         bitrate_u32 as f64 / 1_000_000.0
                                                     );
                                                 }
@@ -3583,26 +4412,6 @@ fn start_screen_capture(
                                             upgrade_frames = 0;
                                         }
                                     }
-                                    if lock_preset_fps && current_fps != max_fps_f64 {
-                                        current_source_cap_fps = max_fps_f64;
-                                        current_fps = max_fps_f64;
-                                        current_frame_interval_ns =
-                                            (1_000_000_000.0 / current_fps) as u64;
-                                        current_full_interval =
-                                            Duration::from_nanos(current_frame_interval_ns);
-                                        current_effective_interval = if current_full_interval
-                                            .as_nanos()
-                                            as u64
-                                            > MAX_STATIC_INTERVAL_NS
-                                        {
-                                            Duration::from_nanos(MAX_STATIC_INTERVAL_NS)
-                                        } else {
-                                            current_full_interval
-                                        };
-                                        current_rtp_step = 90_000_u32 / current_fps as u32;
-                                        downgrade_frames = 0;
-                                        upgrade_frames = 0;
-                                    }
                                     let frames_this_round = if frame_count < 3 && n == 0 { 1i64 } else { n };
                                     if frame_count == 0 && !startup_keyframe_done {
                                         startup_keyframe_done = true;
@@ -3639,13 +4448,15 @@ fn start_screen_capture(
                                             st.stream_fps = Some(actual_fps);
                                             st.frames_per_second = Some(actual_fps);
                                         }
-                                        eprintln!(
-                                            "[voice][screen] push_frame rate: {:.1} fps (target {:.0}, schedule {:.0}, mode={})",
-                                            actual_fps,
-                                            max_fps,
-                                            current_fps,
-                                            if use_pipelined { "pipelined" } else { "blocking" }
-                                        );
+                                        if telemetry_enabled {
+                                            eprintln!(
+                                                "[voice][screen] push_frame rate: {:.1} fps (target {:.0}, schedule {:.0}, mode={})",
+                                                actual_fps,
+                                                max_fps,
+                                                current_fps,
+                                                if use_pipelined { "pipelined" } else { "blocking" }
+                                            );
+                                        }
                                         telemetry_enc.print("sender");
                                         fps_window_start = std::time::Instant::now();
                                         fps_frame_count = 0;
@@ -3911,6 +4722,7 @@ fn start_screen_capture(
                     let vf = VideoFrame {
                         rotation: VideoRotation::VideoRotation0,
                         timestamp_us: ts_us as i64,
+                        color_space: None,
                         buffer: i420,
                     };
                     // On the very first frame: send it 3× so the IDR reaches viewers
@@ -3929,6 +4741,7 @@ fn start_screen_capture(
                             let vfr = VideoFrame {
                                 rotation: VideoRotation::VideoRotation0,
                                 timestamp_us: repeat.saturating_mul(frame_interval_us) as i64,
+                                color_space: None,
                                 buffer: i420r,
                             };
                             if let Some(ref tx) = capture_tx_opt { let _ = tx.try_send(vfr); }
@@ -4031,6 +4844,7 @@ fn start_screen_capture(
                             let vf = VideoFrame {
                                 rotation: VideoRotation::VideoRotation0,
                                 timestamp_us: ts_us as i64,
+                                color_space: None,
                                 buffer: i420,
                             };
                             if let Some(ref tx) = capture_tx_opt { let _ = tx.try_send(vf); }
@@ -4129,6 +4943,7 @@ fn start_screen_capture(
                             let vfr = VideoFrame {
                                 rotation: VideoRotation::VideoRotation0,
                                 timestamp_us: repeat.saturating_mul(frame_interval_us) as i64,
+                                color_space: None,
                                 buffer: i420r,
                             };
                             if let Some(ref tx) = capture_tx_opt { let _ = tx.try_send(vfr); }
@@ -4148,6 +4963,7 @@ fn start_screen_capture(
                         let vf_send = VideoFrame {
                             rotation: vf.rotation,
                             timestamp_us: vf.timestamp_us,
+                            color_space: None,
                             buffer: i420_send,
                         };
                         if let Some(ref tx) = capture_tx_opt { let _ = tx.try_send(vf_send); }
@@ -4255,7 +5071,7 @@ fn start_screen_capture(
 #[cfg(not(all(target_os = "windows", feature = "wgc-capture")))]
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn start_screen_capture(
-    screen_index: Option<usize>,
+    source_target: StreamSourceTarget,
     preset: ScreenPreset,
     stop_flag: Arc<AtomicBool>,
     session_stats: Arc<Mutex<VoiceSessionStats>>,
@@ -4274,6 +5090,66 @@ fn start_screen_capture(
     let resolution = VideoResolution { width: video_width, height: video_height };
     let source = NativeVideoSource::new(resolution, true);
     let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
+
+    if let StreamSourceTarget::Window {
+        window_id,
+        process_id,
+    } = source_target.clone()
+    {
+        let stop_for_thread = Arc::clone(&stop_flag);
+        std::thread::Builder::new()
+            .name("livekit-window".into())
+            .spawn(move || {
+                let Some(window) = find_stream_window(window_id, process_id) else {
+                    eprintln!(
+                        "[voice][screen] xcap window not found: hwnd={} pid={}",
+                        window_id, process_id
+                    );
+                    return;
+                };
+                eprintln!(
+                    "[voice][screen] xcap capturing window '{}' [{}] ({}x{})",
+                    window.title(),
+                    window.app_name(),
+                    window.width(),
+                    window.height()
+                );
+
+                let mut frame_count: i64 = 0;
+                let mut i420_buffers = XcapI420Buffers::new(video_width, video_height);
+                while !stop_for_thread.load(Ordering::Relaxed) {
+                    let t0 = std::time::Instant::now();
+                    match window.capture_image() {
+                        Ok(img) => {
+                            let src_w = img.width();
+                            let src_h = img.height();
+                            let raw = img.as_raw();
+                            if let Some(vf) = i420_buffers.rgba_to_i420_scaled_reuse(
+                                raw, src_w, src_h, video_width, video_height, frame_count,
+                            ) {
+                                source.capture_frame(&vf);
+                                frame_count += 1;
+                            }
+                        }
+                        Err(e) => eprintln!("[voice][screen] window capture error: {}", e),
+                    }
+                    let elapsed_ms = t0.elapsed().as_millis() as u64;
+                    let to_sleep = frame_interval_ms.saturating_sub(elapsed_ms);
+                    if to_sleep > 0 {
+                        std::thread::sleep(Duration::from_millis(to_sleep));
+                    }
+                }
+                eprintln!("[voice][screen] capture thread stopped");
+            })
+            .ok();
+
+        return (Some(track), None);
+    }
+
+    let screen_index = match source_target {
+        StreamSourceTarget::Monitor { index } => Some(index),
+        StreamSourceTarget::Window { .. } => None,
+    };
 
     let stop_for_thread = Arc::clone(&stop_flag);
     std::thread::Builder::new()
@@ -4321,7 +5197,7 @@ fn start_screen_capture(
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn start_screen_capture(
-    _screen_index: Option<usize>,
+    _source_target: StreamSourceTarget,
     _preset: ScreenPreset,
     _stop_flag: Arc<AtomicBool>,
     _session_stats: Arc<Mutex<VoiceSessionStats>>,
@@ -4379,6 +5255,7 @@ fn bgra_to_i420_scaled(
     Some(VideoFrame {
         rotation: VideoRotation::VideoRotation0,
         timestamp_us: ts,
+        color_space: None,
         buffer: scaled,
     })
 }

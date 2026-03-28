@@ -38,4 +38,6 @@ pub mod nvenc_d11;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod encoded_h264;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+pub mod windows_loopback;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 mod nvenc_d11_bridge;

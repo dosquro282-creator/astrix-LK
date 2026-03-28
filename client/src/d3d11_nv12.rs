@@ -545,11 +545,11 @@ impl D3d11BgraToNv12 {
                 true,
                 Some(&dst_rect),
             );
-            // BT.709 full-range color space for HD content.
+            // BT.709 limited-range color space for HD content.
             // _bitfield layout: bit0=Usage(0), bit1=RGB_Range(0=full), bit2=YCbCr_Matrix(1=BT.709),
-            //                   bit3=YCbCr_xvYCC(0), bits4-5=Nominal_Range(01=0-255 full range)
-            // Nominal_Range=01 (bits4-5) forces full-range (0-255) NV12 output so the decode
-            // shader can use the simple full-range BT.709 formula (no 16-235 limited-range expand).
+            //                   bit3=YCbCr_xvYCC(0), bits4-5=Nominal_Range(01=16-235 limited range)
+            // Nominal_Range=01 (bits4-5) requests studio-swing NV12 output. The receiver-side
+            // shader expands this range back to full RGB before display.
             let color_space = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: 0b0001_0100 };
             self.video_context.VideoProcessorSetStreamColorSpace(
                 &self.processor,
