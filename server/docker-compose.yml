@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: astrix
+      POSTGRES_PASSWORD: 56792546
+      POSTGRES_DB: astrix
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://astrix:56792546@db:5432/astrix?sslmode=disable
+      REDIS_ADDR: redis:6379
+      JWT_SECRET: "b60033df-052a-4f85-ab16-f50dc4fd236b"
+      HTTP_ADDR: "0.0.0.0:8080"
+
+      # ВРЕМЕННО, пока без nginx/ssl:
+      LIVEKIT_URL: "ws://104.128.136.203:7880"
+
+      # ПОТОМ, когда будет домен + ssl:
+      # LIVEKIT_URL: "wss://astrix-commanda.ru"
+
+      LIVEKIT_API_KEY: astrix_prod_key
+      LIVEKIT_API_SECRET: "871767bd-0060-4315-b5c2-87d4a246e182"
+    depends_on:
+      - db
+      - redis
+      - livekit
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  livekit:
+    image: livekit/livekit-server:latest
+    command: [--config, /etc/livekit.yaml]
+    environment:
+      - GOGC=200
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50100:50000-50100/udp"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+volumes:
+  db_data: {}

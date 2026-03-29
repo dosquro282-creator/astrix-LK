@@ -1,0 +1,11 @@
+client/target/
+**/target/
+
+# Phase 1: custom libwebrtc prebuilt (~90 MB)
+client/webrtc-prebuilt/
+
+# Phase 2: libwebrtc build artifacts (depot_tools, src/, out-*, win-*)
+client/vendor/libwebrtc/depot_tools/
+client/vendor/libwebrtc/src/
+client/vendor/libwebrtc/out-*/
+client/vendor/libwebrtc/win-*/

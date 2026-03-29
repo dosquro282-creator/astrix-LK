@@ -1,0 +1,28 @@
+port: 7880
+
+logging:
+  level: info
+
+redis:
+  address: redis:6379
+
+rtc:
+  port_range_start: 50000
+  port_range_end: 50100
+  tcp_port: 7881
+  use_external_ip: true
+  packet_buffer_size_video: 150
+
+room:
+  max_participants: 100
+  empty_timeout: 300
+  departure_timeout: 20
+  enable_remote_unmute: false
+
+keys:
+  astrix_prod_key: 871767bd-0060-4315-b5c2-87d4a246e182
+
+webhook:
+  api_key: astrix_prod_key
+  urls:
+    - http://server:8080/voice/webhook
