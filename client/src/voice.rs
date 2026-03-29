@@ -307,6 +307,8 @@ pub enum VoiceCmd {
     SetOutputMuted(bool),
     /// Override the playback volume for a remote user (0.0 – 3.0).
     SetUserVolume(i64, f32),
+    /// Enable/disable local receiver-side denoise for a specific remote voice user.
+    SetRemoteVoiceDenoise { user_id: i64, enabled: bool },
     /// Override the playback volume for a remote stream audio track (0.0 - 4.0).
     SetStreamVolume(i64, f32),
     /// Subscribe/unsubscribe to a remote screen stream (+ its audio track).

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::denoise::{microphone_denoise_enabled, AudioDenoiser};
 use futures_util::StreamExt;
 use image::codecs::jpeg::JpegEncoder;
 use image::{ColorType, DynamicImage};
@@ -657,6 +658,7 @@ async fn run_session(
     // Input volume: scales mic samples before sending (SetInputVolume updates this).
     let input_volume: Arc<Mutex<f32>> = Arc::new(Mutex::new(1.0));
     let input_vol_for_mic = Arc::clone(&input_volume);
+    let use_mic_denoise = microphone_denoise_enabled();
 
     // Incoming video stats (viewer): frame count and resolution for estimated bitrate.
     let incoming_frame_count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
@@ -679,6 +681,11 @@ async fn run_session(
     let source_for_timer = livekit_source.clone();
     let mic_timer_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(10));
+        let mut mic_denoiser = if use_mic_denoise {
+            Some(AudioDenoiser::new_sender_microphone())
+        } else {
+            None
+        };
         loop {
             interval.tick().await;
             let chunk: Option<Vec<i16>> = {
@@ -695,6 +702,9 @@ async fn run_session(
                 } else {
                     raw
                 };
+                if let Some(denoiser) = mic_denoiser.as_mut() {
+                    denoiser.process_i16(&mut samples);
+                }
                 let vol = *input_vol_for_mic.lock();
                 if (vol - 1.0).abs() > 0.01 {
                     for s in &mut samples {
@@ -715,6 +725,8 @@ async fn run_session(
     // ── Remote audio: per-user mixer + cpal speaker output ──────────────────────────────────
     let user_volumes: Arc<Mutex<HashMap<i64, f32>>> = Arc::new(Mutex::new(HashMap::new()));
     let stream_volumes: Arc<Mutex<HashMap<i64, f32>>> = Arc::new(Mutex::new(HashMap::new()));
+    let remote_voice_denoise_flags: Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     let output_muted: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let output_volume: Arc<Mutex<f32>> = Arc::new(Mutex::new(1.0));
     let (mixer_tx, mut mixer_rx) = tokio::sync::mpsc::unbounded_channel::<MixerFrameMsg>();
@@ -928,6 +940,11 @@ async fn run_session(
                                 old.abort();
                             }
                             let tx = mixer_tx.clone();
+                            let denoise_enabled = remote_voice_denoise_flags
+                                .lock()
+                                .entry(uid)
+                                .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+                                .clone();
                             let mut stream = livekit::webrtc::audio_stream::native::NativeAudioStream::new(
                                 audio_track.rtc_track(),
                                 SAMPLE_RATE as i32,
@@ -935,8 +952,15 @@ async fn run_session(
                             );
                             let handle = tokio::spawn(async move {
                                 let mut logged_non_silent_remote = false;
+                                let mut denoiser: Option<AudioDenoiser> = None;
                                 while let Some(frame) = stream.next().await {
-                                    let samples: Vec<i16> = frame.data.as_ref().to_vec();
+                                    let mut samples: Vec<i16> = frame.data.as_ref().to_vec();
+                                    if !route.stream && denoise_enabled.load(Ordering::Relaxed) {
+                                        let denoiser = denoiser.get_or_insert_with(|| {
+                                            AudioDenoiser::new_receiver_voice(route.user_id)
+                                        });
+                                        denoiser.process_i16(&mut samples);
+                                    }
                                     if route.stream
                                         && !logged_non_silent_remote
                                         && samples.iter().any(|sample| {
@@ -1457,6 +1481,14 @@ async fn run_session(
                     }
                     Some(VoiceCmd::SetUserVolume(uid, vol)) => {
                         user_volumes.lock().insert(uid, vol.clamp(0.0, 3.0));
+                    }
+                    Some(VoiceCmd::SetRemoteVoiceDenoise { user_id, enabled }) => {
+                        let flag = remote_voice_denoise_flags
+                            .lock()
+                            .entry(user_id)
+                            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+                            .clone();
+                        flag.store(enabled, Ordering::Relaxed);
                     }
                     Some(VoiceCmd::SetStreamVolume(uid, vol)) => {
                         stream_volumes.lock().insert(uid, vol.clamp(0.0, 4.0));

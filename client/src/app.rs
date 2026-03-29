@@ -386,12 +386,26 @@ impl AstrixApp {
                                 .get(&p.user_id.to_string())
                                 .copied()
                                 .unwrap_or(1.0);
+                            let denoise_enabled = st
+                                .settings
+                                .receiver_denoise_by_user
+                                .contains(&p.user_id.to_string());
                             st.main.voice.local_volumes.insert(p.user_id, vol);
                             st.main.voice.stream_volumes.insert(p.user_id, stream_vol);
+                            if denoise_enabled {
+                                st.main.voice.receiver_denoise_users.insert(p.user_id);
+                            } else {
+                                st.main.voice.receiver_denoise_users.remove(&p.user_id);
+                            }
                             if let Some(tx) = self.voice_engine_tx.as_ref() {
                                 tx.send(VoiceCmd::SetUserVolume(p.user_id, vol)).ok();
                                 tx.send(VoiceCmd::SetStreamVolume(p.user_id, stream_vol))
                                     .ok();
+                                tx.send(VoiceCmd::SetRemoteVoiceDenoise {
+                                    user_id: p.user_id,
+                                    enabled: denoise_enabled,
+                                })
+                                .ok();
                             }
                             if let Some(ch_id) = p.channel_id {
                                 let list = st.main.channel_voice.entry(ch_id).or_default();

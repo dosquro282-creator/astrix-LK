@@ -104,6 +104,10 @@ pub(crate) struct Settings {
     pub(crate) voice_volume_by_user: HashMap<String, f32>,
     #[serde(default)]
     pub(crate) stream_volume_by_user: HashMap<String, f32>,
+    #[serde(default)]
+    pub(crate) receiver_denoise_by_user: HashSet<String>,
+    #[serde(default = "default_denoise_model_id")]
+    pub(crate) denoise_model_id: String,
     /// Путь декодирования входящего видео: "cpu" (OpenH264) или "mft" (Media Foundation).
     #[serde(default)]
     pub(crate) decode_path: String,
@@ -118,6 +122,10 @@ fn default_video_decoder_gamma() -> f32 {
     0.0
 }
 
+fn default_denoise_model_id() -> String {
+    crate::denoise::default_model_id().to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -130,6 +138,8 @@ impl Default for Settings {
             dark_mode: false,
             voice_volume_by_user: HashMap::new(),
             stream_volume_by_user: HashMap::new(),
+            receiver_denoise_by_user: HashSet::new(),
+            denoise_model_id: default_denoise_model_id(),
             decode_path: String::new(),
             video_decoder_gamma: 0.0,
             video_decoder_gamma_migrated_v2: true,
@@ -153,6 +163,10 @@ impl Settings {
             s.api_base = default_api_base();
             should_save = true;
         }
+        if !crate::denoise::is_known_model(&s.denoise_model_id) {
+            s.denoise_model_id = default_denoise_model_id();
+            should_save = true;
+        }
         if s.migrate_saved_accounts() {
             should_save = true;
         }
@@ -170,6 +184,7 @@ impl Settings {
         s.video_decoder_gamma = s.video_decoder_gamma.clamp(0.0, 3.0);
         #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
         crate::d3d11_rgba::set_video_decoder_gamma(s.video_decoder_gamma);
+        crate::denoise::set_selected_model(&s.denoise_model_id);
         if should_save {
             s.save();
         }
@@ -599,6 +614,7 @@ pub(crate) struct VoiceState {
     pub(crate) stream_volumes: HashMap<i64, f32>,
     pub(crate) stream_muted: HashSet<i64>,
     pub(crate) stream_subscriptions: HashSet<i64>,
+    pub(crate) receiver_denoise_users: HashSet<i64>,
     pub(crate) speaking: Arc<Mutex<HashMap<i64, bool>>>,
     pub(crate) input_volume: f32,
     pub(crate) output_volume: f32,
@@ -620,6 +636,7 @@ impl Default for VoiceState {
             stream_volumes: HashMap::new(),
             stream_muted: HashSet::new(),
             stream_subscriptions: HashSet::new(),
+            receiver_denoise_users: HashSet::new(),
             speaking: Arc::new(Mutex::new(HashMap::new())),
             input_volume: 1.0,
             output_volume: 1.0,
@@ -1332,6 +1349,28 @@ fn apply_voice_join(
                         participant.user_id,
                         stream_volume,
                     ))
+                    .ok();
+                    let denoise_enabled = state
+                        .settings
+                        .receiver_denoise_by_user
+                        .contains(&participant.user_id.to_string());
+                    if denoise_enabled {
+                        state
+                            .main
+                            .voice
+                            .receiver_denoise_users
+                            .insert(participant.user_id);
+                    } else {
+                        state
+                            .main
+                            .voice
+                            .receiver_denoise_users
+                            .remove(&participant.user_id);
+                    }
+                    tx.send(VoiceCmd::SetRemoteVoiceDenoise {
+                        user_id: participant.user_id,
+                        enabled: denoise_enabled,
+                    })
                     .ok();
                 }
                 *engine_tx = Some(tx);
@@ -2295,7 +2334,7 @@ pub(crate) fn main_screen(
                         state
                             .main
                             .channel_voice
-                            .insert(target_ch, resp.participants);
+                            .insert(target_ch, resp.participants.clone());
                         // Start new engine for the switched channel (LiveKit)
                         let rt = tokio::runtime::Handle::current();
                         let (tx, vf, done) = spawn_voice_engine(rt);
@@ -2325,6 +2364,30 @@ pub(crate) fn main_screen(
                             .ok();
                         tx.send(VoiceCmd::SetOutputVolume(state.main.voice.output_volume))
                             .ok();
+                        for participant in &resp.participants {
+                            let denoise_enabled = state
+                                .settings
+                                .receiver_denoise_by_user
+                                .contains(&participant.user_id.to_string());
+                            if denoise_enabled {
+                                state
+                                    .main
+                                    .voice
+                                    .receiver_denoise_users
+                                    .insert(participant.user_id);
+                            } else {
+                                state
+                                    .main
+                                    .voice
+                                    .receiver_denoise_users
+                                    .remove(&participant.user_id);
+                            }
+                            tx.send(VoiceCmd::SetRemoteVoiceDenoise {
+                                user_id: participant.user_id,
+                                enabled: denoise_enabled,
+                            })
+                            .ok();
+                        }
                         *engine_tx = Some(tx);
                         *engine_done = Some(done);
                     }
@@ -2579,6 +2642,50 @@ pub(crate) fn main_screen(
                 if ui.add(slider_out).changed() {
                     new_output_vol = Some(ov);
                 }
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Модель шумоподавления DeepFilterNet:").small());
+                ui.label(
+                    egui::RichText::new(
+                        "Доступны только модели, проверенные с текущим Windows libDF runtime."
+                    )
+                        .small()
+                        .weak(),
+                );
+                let mut denoise_model_id = state.settings.denoise_model_id.clone();
+                let selected_model_text = if crate::denoise::is_model_downloaded(&denoise_model_id) {
+                    crate::denoise::model_label(&denoise_model_id).to_string()
+                } else {
+                    format!(
+                        "{} (не скачана)",
+                        crate::denoise::model_label(&denoise_model_id)
+                    )
+                };
+                egui::ComboBox::from_id_source("denoise_model_id")
+                    .selected_text(selected_model_text)
+                    .show_ui(ui, |ui| {
+                        for model in crate::denoise::known_models() {
+                            let label = if crate::denoise::is_model_downloaded(model.id) {
+                                model.label.to_string()
+                            } else {
+                                format!("{} (не скачана)", model.label)
+                            };
+                            let _ = ui.selectable_value(
+                                &mut denoise_model_id,
+                                model.id.to_string(),
+                                label,
+                            );
+                        }
+                    });
+                if denoise_model_id != state.settings.denoise_model_id {
+                    state.settings.denoise_model_id = denoise_model_id.clone();
+                    crate::denoise::set_selected_model(&denoise_model_id);
+                    state.settings.save();
+                }
+                ui.label(
+                    egui::RichText::new(format!("Файл: {}", state.settings.denoise_model_id))
+                        .small()
+                        .weak(),
+                );
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(6.0);
@@ -2862,6 +2969,7 @@ pub(crate) fn main_screen(
             speaking: state.main.voice.speaking.lock().clone(),
             local_volumes: state.main.voice.local_volumes.clone(),
             locally_muted: state.main.voice.locally_muted.clone(),
+            receiver_denoise_users: state.main.voice.receiver_denoise_users.clone(),
         };
         let server_name = state
             .main
@@ -2972,6 +3080,10 @@ pub(crate) fn main_screen(
                         .insert(user_id.to_string(), volume);
                     state.settings.save();
                     sync_user_volume(engine_tx, &state.main.voice, user_id);
+                    ctx.request_repaint();
+                }
+                ChannelPanelAction::SetParticipantDenoise { user_id, enabled } => {
+                    set_receiver_denoise_enabled(state, engine_tx, user_id, enabled);
                     ctx.request_repaint();
                 }
                 ChannelPanelAction::SetCameraEnabled(enabled) => {
@@ -3587,6 +3699,25 @@ pub(crate) fn main_screen(
                                                     sync_user_volume(engine_tx, &state.main.voice, p.user_id);
                                                     ui.close_menu();
                                                 }
+                                                let denoise_enabled = state
+                                                    .main
+                                                    .voice
+                                                    .receiver_denoise_users
+                                                    .contains(&p.user_id);
+                                                let denoise_label = if denoise_enabled {
+                                                    "Выключить шумоподавление (локально)"
+                                                } else {
+                                                    "Включить шумоподавление (локально)"
+                                                };
+                                                if ui.button(denoise_label).clicked() {
+                                                    set_receiver_denoise_enabled(
+                                                        state,
+                                                        engine_tx,
+                                                        p.user_id,
+                                                        !denoise_enabled,
+                                                    );
+                                                    ui.close_menu();
+                                                }
                                                 ui.label("Громкость 0–300%, по умолчанию 100%");
                                                 let uid = p.user_id;
                                                 let mut vol = *state.main.voice.local_volumes.get(&uid).unwrap_or(&1.0);
@@ -4079,6 +4210,43 @@ fn sync_stream_volume(
         ))
         .ok();
     }
+}
+
+fn sync_receiver_denoise(
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    voice: &VoiceState,
+    user_id: i64,
+) {
+    if let Some(tx) = engine_tx.as_ref() {
+        tx.send(VoiceCmd::SetRemoteVoiceDenoise {
+            user_id,
+            enabled: voice.receiver_denoise_users.contains(&user_id),
+        })
+        .ok();
+    }
+}
+
+fn set_receiver_denoise_enabled(
+    state: &mut State,
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: i64,
+    enabled: bool,
+) {
+    if enabled {
+        state.main.voice.receiver_denoise_users.insert(user_id);
+        state
+            .settings
+            .receiver_denoise_by_user
+            .insert(user_id.to_string());
+    } else {
+        state.main.voice.receiver_denoise_users.remove(&user_id);
+        state
+            .settings
+            .receiver_denoise_by_user
+            .remove(&user_id.to_string());
+    }
+    state.settings.save();
+    sync_receiver_denoise(engine_tx, &state.main.voice, user_id);
 }
 
 fn set_stream_subscription(

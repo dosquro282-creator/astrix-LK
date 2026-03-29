@@ -1,0 +1,10 @@
+DeepFilterNet runtime provenance
+
+Repository: https://github.com/Rikorose/DeepFilterNet
+Commit: d375b2d8309e0935d165700c91da9de862a99c31
+
+Built locally on Windows with:
+cargo build -p deep_filter --release --features capi
+
+Bundled artifact:
+- libdf.dll (copied from upstream build output df.dll)

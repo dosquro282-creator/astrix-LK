@@ -23,6 +23,7 @@ pub enum ChannelPanelAction {
     SetCameraEnabled(bool),
     ToggleScreenShare,
     SetParticipantMuted { user_id: i64, muted: bool },
+    SetParticipantDenoise { user_id: i64, enabled: bool },
     SetParticipantVolume { user_id: i64, volume: f32 },
     CreateChannel,
     Invite,
@@ -44,6 +45,7 @@ pub struct ChannelPanelVoiceSnapshot {
     pub speaking: HashMap<i64, bool>,
     pub local_volumes: HashMap<i64, f32>,
     pub locally_muted: HashSet<i64>,
+    pub receiver_denoise_users: HashSet<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -239,6 +241,8 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                             {
                                 let locally_muted =
                                     voice.locally_muted.contains(&participant.user_id);
+                                let receiver_denoise =
+                                    voice.receiver_denoise_users.contains(&participant.user_id);
                                 row.context_menu(|ui| {
                                     let mute_label = if locally_muted {
                                         "Unmute locally"
@@ -249,6 +253,19 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                                         (*on_action)(ChannelPanelAction::SetParticipantMuted {
                                             user_id: participant.user_id,
                                             muted: !locally_muted,
+                                        });
+                                        ui.close_menu();
+                                    }
+
+                                    let denoise_label = if receiver_denoise {
+                                        "Disable local denoise"
+                                    } else {
+                                        "Enable local denoise"
+                                    };
+                                    if ui.button(denoise_label).clicked() {
+                                        (*on_action)(ChannelPanelAction::SetParticipantDenoise {
+                                            user_id: participant.user_id,
+                                            enabled: !receiver_denoise,
                                         });
                                         ui.close_menu();
                                     }
