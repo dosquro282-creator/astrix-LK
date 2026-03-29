@@ -44,6 +44,15 @@ impl RenderFpsTracker {
     }
 }
 
+const VOICE_LATENCY_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+const VOICE_LATENCY_HISTORY_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Clone)]
+pub(crate) struct VoiceLatencySample {
+    recorded_at: Instant,
+    latency_ms: f32,
+}
+
 use eframe::egui;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use egui_glow;
@@ -834,6 +843,8 @@ pub(crate) struct MainState {
     pub(crate) screen_preset: crate::voice::ScreenPreset,
     pub(crate) show_voice_stats_window: bool,
     pub(crate) voice_stats: Option<Arc<Mutex<VoiceSessionStats>>>,
+    pub(crate) voice_latency_history: VecDeque<VoiceLatencySample>,
+    pub(crate) last_voice_latency_sample_at: Option<Instant>,
     /// Receiver + GUI telemetry. Updated by stream task (render) and UI (gui_draw).
     pub(crate) voice_receiver_telemetry: Option<Arc<PipelineTelemetry>>,
     /// Last time we printed receiver telemetry (from UI, so gui_draw is fresh).
@@ -908,6 +919,8 @@ impl Clone for MainState {
             screen_preset: self.screen_preset,
             show_voice_stats_window: self.show_voice_stats_window,
             voice_stats: self.voice_stats.clone(), // Arc clone
+            voice_latency_history: self.voice_latency_history.clone(),
+            last_voice_latency_sample_at: self.last_voice_latency_sample_at,
             voice_receiver_telemetry: self.voice_receiver_telemetry.clone(),
             voice_telemetry_print_at: None, // reset on clone
             voice_render_fps: HashMap::new(),
@@ -980,6 +993,8 @@ impl Default for MainState {
             screen_preset: crate::voice::ScreenPreset::default(),
             show_voice_stats_window: false,
             voice_stats: None,
+            voice_latency_history: VecDeque::new(),
+            last_voice_latency_sample_at: None,
             voice_receiver_telemetry: None,
             voice_telemetry_print_at: None,
             voice_render_fps: HashMap::new(),
@@ -1353,6 +1368,7 @@ fn apply_voice_join(
                     crate::mft_device::init_for_mft_decode();
                 }
                 std::env::set_var("ASTRIX_DECODE_PATH", decode_path);
+                reset_voice_connection_metrics(state);
                 let rt = tokio::runtime::Handle::current();
                 let (tx, vf, done) = spawn_voice_engine(rt);
                 *video_frames = Some(vf);
@@ -1459,6 +1475,55 @@ fn stop_voice_engine(
     }
 }
 
+fn reset_voice_connection_metrics(state: &mut State) {
+    state.main.voice_latency_history.clear();
+    state.main.last_voice_latency_sample_at = None;
+    if let Some(stats) = state.main.voice_stats.as_ref() {
+        *stats.lock() = VoiceSessionStats::default();
+    }
+}
+
+fn sample_voice_latency_history(state: &mut State) {
+    let now = Instant::now();
+    if state.main.voice.channel_id.is_none() {
+        state.main.voice_latency_history.clear();
+        state.main.last_voice_latency_sample_at = None;
+        return;
+    }
+
+    while state
+        .main
+        .voice_latency_history
+        .front()
+        .map(|sample| now.duration_since(sample.recorded_at) > VOICE_LATENCY_HISTORY_WINDOW)
+        .unwrap_or(false)
+    {
+        state.main.voice_latency_history.pop_front();
+    }
+
+    let latency_ms = state
+        .main
+        .voice_stats
+        .as_ref()
+        .and_then(|stats| stats.lock().latency_rtt_ms)
+        .filter(|latency_ms| latency_ms.is_finite() && *latency_ms >= 0.0);
+
+    let should_sample = state
+        .main
+        .last_voice_latency_sample_at
+        .map(|last| now.duration_since(last) >= VOICE_LATENCY_SAMPLE_INTERVAL)
+        .unwrap_or(true);
+    if should_sample {
+        if let Some(latency_ms) = latency_ms {
+            state.main.voice_latency_history.push_back(VoiceLatencySample {
+                recorded_at: now,
+                latency_ms,
+            });
+            state.main.last_voice_latency_sample_at = Some(now);
+        }
+    }
+}
+
 /// Отключение от голосового канала и остановка движка.
 fn apply_voice_leave(
     ctx: &egui::Context,
@@ -1474,6 +1539,7 @@ fn apply_voice_leave(
         let _ = block_on(api.voice_leave(&token, ch_id));
     }
     stop_voice_engine(engine_tx, engine_done);
+    reset_voice_connection_metrics(state);
     state.main.voice = VoiceState::default();
     state.main.voice.input_sensitivity = state.settings.input_sensitivity;
     state.main.show_screen_source_picker = false;
@@ -2377,6 +2443,7 @@ pub(crate) fn main_screen(
             }
             // Stop current engine
             stop_voice_engine(engine_tx, engine_done);
+            reset_voice_connection_metrics(state);
             state.main.voice = VoiceState::default();
             state.main.voice.input_sensitivity = state.settings.input_sensitivity;
             state.main.voice_video_textures.clear();
@@ -3144,6 +3211,7 @@ pub(crate) fn main_screen(
     } else {
         state.main.my_display_name.clone()
     };
+    sample_voice_latency_history(state);
     let left_user_panel_height = bottom_panel::panel_height(state.main.voice.channel_id.is_some());
     if state.main.voice.channel_id.is_some() {
         ctx.request_repaint_after(Duration::from_millis(50));
@@ -3389,6 +3457,11 @@ pub(crate) fn main_screen(
             .user_id
             .and_then(|id| state.main.voice.speaking.lock().get(&id).copied())
             .unwrap_or(false);
+        let current_latency_ms = state
+            .main
+            .voice_stats
+            .as_ref()
+            .and_then(|stats| stats.lock().latency_rtt_ms);
         let voice_bar_snapshot = BottomPanelVoiceSnapshot {
             in_voice_channel: state.main.voice.channel_id.is_some(),
             mic_muted: state.main.voice.mic_muted,
@@ -3396,6 +3469,13 @@ pub(crate) fn main_screen(
             screen_on: state.main.voice.screen_on,
             screen_preset: state.main.screen_preset,
             speaking: self_speaking,
+            latency_ms: current_latency_ms,
+            latency_history_ms: state
+                .main
+                .voice_latency_history
+                .iter()
+                .map(|sample| sample.latency_ms)
+                .collect(),
         };
         let mut bottom_actions: Vec<BottomPanelAction> = Vec::new();
         let screen_rect = ctx.screen_rect();

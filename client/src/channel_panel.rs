@@ -106,38 +106,43 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                 egui::Stroke::new(1.0, theme.border),
             );
 
-            ui.horizontal(|ui| {
-                ui.add_space(10.0);
-                let buttons_width = HEADER_BUTTON_SIZE.x * 2.0 + 4.0;
-                let right_margin = 10.0;
-                let title_width = (ui.available_width() - buttons_width - right_margin).max(0.0);
+            let left_padding = 10.0;
+            let right_padding = 10.0;
+            let button_gap = 4.0;
+            let buttons_width = HEADER_BUTTON_SIZE.x * 2.0 + button_gap;
+            let buttons_rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    rect.right() - right_padding - buttons_width,
+                    rect.center().y - HEADER_BUTTON_SIZE.y * 0.5,
+                ),
+                egui::vec2(buttons_width, HEADER_BUTTON_SIZE.y),
+            );
+            let title_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + left_padding, rect.top()),
+                egui::pos2((buttons_rect.left() - 12.0).max(rect.left() + left_padding), rect.bottom()),
+            );
 
-                ui.allocate_ui_with_layout(
-                    egui::vec2(title_width, SERVER_HEADER_HEIGHT),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.label(
-                            egui::RichText::new(server_name)
-                                .size(16.0)
-                                .strong()
-                                .color(theme.text_primary),
-                        );
-                    },
-                );
+            ui.allocate_ui_at_rect(title_rect, |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(server_name)
+                            .size(16.0)
+                            .strong()
+                            .color(theme.text_primary),
+                    );
+                });
+            });
 
-                ui.add_space(right_margin);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(buttons_width, SERVER_HEADER_HEIGHT),
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        if header_button(ui, theme, "+", "Create channel").clicked() {
-                            (*on_action)(ChannelPanelAction::CreateChannel);
-                        }
-                        if header_button(ui, theme, "@", "Invite").clicked() {
-                            (*on_action)(ChannelPanelAction::Invite);
-                        }
-                    },
-                );
+            ui.allocate_ui_at_rect(buttons_rect, |ui| {
+                ui.spacing_mut().item_spacing.x = button_gap;
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if header_button(ui, theme, "+", "Create channel").clicked() {
+                        (*on_action)(ChannelPanelAction::CreateChannel);
+                    }
+                    if header_button(ui, theme, "@", "Invite").clicked() {
+                        (*on_action)(ChannelPanelAction::Invite);
+                    }
+                });
             });
         });
 

@@ -94,6 +94,65 @@ const MIC_GATE_RELEASE: f32 = 0.24;
 const MIC_GATE_HOLD_FRAMES: usize = 18;
 const MIC_GATE_MIN_GAIN: f32 = 0.001;
 
+fn extract_rtt_ms_from_stats(stats: &[livekit::webrtc::stats::RtcStats]) -> Option<f32> {
+    let candidate_pair_rtt_ms = stats
+        .iter()
+        .filter_map(|stat| match stat {
+            livekit::webrtc::stats::RtcStats::CandidatePair(pair)
+                if pair.candidate_pair.current_round_trip_time.is_finite()
+                    && pair.candidate_pair.current_round_trip_time > 0.0
+                    && (pair.candidate_pair.nominated
+                        || matches!(
+                            pair.candidate_pair.state,
+                            Some(livekit::webrtc::stats::IceCandidatePairState::Succeeded)
+                        )) =>
+            {
+                Some(pair.candidate_pair.current_round_trip_time as f32 * 1000.0)
+            }
+            _ => None,
+        })
+        .min_by(|left, right| left.total_cmp(right));
+    if candidate_pair_rtt_ms.is_some() {
+        return candidate_pair_rtt_ms;
+    }
+
+    stats
+        .iter()
+        .filter_map(|stat| match stat {
+            livekit::webrtc::stats::RtcStats::RemoteInboundRtp(remote)
+                if remote.remote_inbound.round_trip_time_measurements > 0
+                    && remote.remote_inbound.round_trip_time.is_finite()
+                    && remote.remote_inbound.round_trip_time > 0.0 =>
+            {
+                Some(remote.remote_inbound.round_trip_time as f32 * 1000.0)
+            }
+            livekit::webrtc::stats::RtcStats::RemoteOutboundRtp(remote)
+                if remote.remote_outbound.round_trip_time_measurements > 0
+                    && remote.remote_outbound.round_trip_time.is_finite()
+                    && remote.remote_outbound.round_trip_time > 0.0 =>
+            {
+                Some(remote.remote_outbound.round_trip_time as f32 * 1000.0)
+            }
+            _ => None,
+        })
+        .min_by(|left, right| left.total_cmp(right))
+}
+
+fn extract_session_rtt_ms(
+    publisher_stats: &[livekit::webrtc::stats::RtcStats],
+    subscriber_stats: &[livekit::webrtc::stats::RtcStats],
+) -> Option<f32> {
+    match (
+        extract_rtt_ms_from_stats(publisher_stats),
+        extract_rtt_ms_from_stats(subscriber_stats),
+    ) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
 /// Resample mono i16 to target_len (linear interpolation). Used when device rate != 48 kHz.
 fn resample_linear(samples: &[i16], target_len: usize) -> Vec<i16> {
     if samples.is_empty() {
@@ -1010,6 +1069,15 @@ async fn run_session(
                 } else {
                     if let Some(mut st) = session_stats.try_lock() {
                         st.incoming_speed_mbps = None;
+                    }
+                }
+                if let Ok(stats) = room.get_stats().await {
+                    if let Some(rtt_ms) =
+                        extract_session_rtt_ms(&stats.publisher_stats, &stats.subscriber_stats)
+                    {
+                        if let Some(mut st) = session_stats.try_lock() {
+                            st.latency_rtt_ms = Some(rtt_ms);
+                        }
                     }
                 }
             }
