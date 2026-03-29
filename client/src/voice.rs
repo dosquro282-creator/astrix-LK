@@ -315,6 +315,8 @@ pub enum VoiceCmd {
     SetStreamSubscription { user_id: i64, subscribed: bool },
     /// Set global input (microphone) volume multiplier (0.0 – 4.0).
     SetInputVolume(f32),
+    /// Set input sensitivity / post-denoise voice gate sensitivity (0.0 – 1.0).
+    SetInputSensitivity(f32),
     /// Set global output (speaker) volume multiplier (0.0 – 4.0).
     SetOutputVolume(f32),
     /// Enable camera video (Phase 2.4).

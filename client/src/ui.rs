@@ -120,6 +120,8 @@ pub(crate) struct Settings {
     pub(crate) denoise_max_db_df_thresh: f32,
     #[serde(default = "default_denoise_reduce_mask")]
     pub(crate) denoise_reduce_mask: String,
+    #[serde(default = "default_input_sensitivity")]
+    pub(crate) input_sensitivity: f32,
     /// Путь декодирования входящего видео: "cpu" (OpenH264) или "mft" (Media Foundation).
     #[serde(default)]
     pub(crate) decode_path: String,
@@ -162,6 +164,14 @@ fn default_denoise_reduce_mask() -> String {
     crate::denoise::default_reduce_mask_id().to_string()
 }
 
+fn default_input_sensitivity() -> f32 {
+    0.55
+}
+
+fn normalize_input_sensitivity(value: f32) -> f32 {
+    value.clamp(0.0, 1.0)
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -182,6 +192,7 @@ impl Default for Settings {
             denoise_max_db_erb_thresh: default_denoise_max_db_erb_thresh(),
             denoise_max_db_df_thresh: default_denoise_max_db_df_thresh(),
             denoise_reduce_mask: default_denoise_reduce_mask(),
+            input_sensitivity: default_input_sensitivity(),
             decode_path: String::new(),
             video_decoder_gamma: 0.0,
             video_decoder_gamma_migrated_v2: true,
@@ -240,6 +251,11 @@ impl Settings {
         }
         if !crate::denoise::is_known_reduce_mask(&s.denoise_reduce_mask) {
             s.denoise_reduce_mask = default_denoise_reduce_mask();
+            should_save = true;
+        }
+        let normalized_input_sensitivity = normalize_input_sensitivity(s.input_sensitivity);
+        if (s.input_sensitivity - normalized_input_sensitivity).abs() > f32::EPSILON {
+            s.input_sensitivity = normalized_input_sensitivity;
             should_save = true;
         }
         if s.migrate_saved_accounts() {
@@ -700,6 +716,7 @@ pub(crate) struct VoiceState {
     pub(crate) receiver_denoise_users: HashSet<i64>,
     pub(crate) speaking: Arc<Mutex<HashMap<i64, bool>>>,
     pub(crate) input_volume: f32,
+    pub(crate) input_sensitivity: f32,
     pub(crate) output_volume: f32,
     pub(crate) camera_on: bool,
     pub(crate) screen_on: bool,
@@ -722,6 +739,7 @@ impl Default for VoiceState {
             receiver_denoise_users: HashSet::new(),
             speaking: Arc::new(Mutex::new(HashMap::new())),
             input_volume: 1.0,
+            input_sensitivity: default_input_sensitivity(),
             output_volume: 1.0,
             camera_on: false,
             screen_on: false,
@@ -1218,8 +1236,6 @@ pub(crate) fn auth_screen(ctx: &egui::Context, state: &mut State, api: &ApiClien
 const COL_SERVERS_W: f32 = 72.0;
 const COL_CHANNELS_W: f32 = 240.0;
 const COL_MEMBERS_W: f32 = 220.0;
-const SERVER_CIRCLE_RADIUS: f32 = 24.0;
-const AVATAR_RADIUS: f32 = 16.0;
 
 // ─── Helper: circle with letter ──────────────────────────────────────────────
 
@@ -1257,50 +1273,6 @@ fn letter_circle(
     let pos = rect.center() - galley.size() / 2.0;
     ui.painter().galley(pos, galley, egui::Color32::WHITE);
     resp
-}
-
-/// Draw an avatar circle (image when available, else letter).
-/// `speaking` — when true, draws a green ring around the circle.
-fn avatar_circle(
-    ui: &mut egui::Ui,
-    display_name: &str,
-    radius: f32,
-    speaking: bool,
-    texture: Option<&egui::TextureHandle>,
-) {
-    let ring_margin = if speaking { 3.0_f32 } else { 0.0 };
-    let size = egui::vec2((radius + ring_margin) * 2.0, (radius + ring_margin) * 2.0);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    let circle_rect =
-        egui::Rect::from_center_size(rect.center(), egui::vec2(radius * 2.0, radius * 2.0));
-    if let Some(tex) = texture {
-        let img = egui::Image::new(tex).fit_to_exact_size(circle_rect.size());
-        img.paint_at(ui, circle_rect);
-    } else {
-        let letter = display_name
-            .chars()
-            .next()
-            .map(|c| c.to_uppercase().to_string())
-            .unwrap_or_else(|| "?".to_string());
-        ui.painter()
-            .circle_filled(rect.center(), radius, egui::Color32::from_rgb(80, 100, 160));
-        let font_size = (radius * 0.85).max(9.0);
-        let galley = ui.painter().layout(
-            letter,
-            egui::FontId::proportional(font_size),
-            egui::Color32::WHITE,
-            f32::INFINITY,
-        );
-        let pos = rect.center() - galley.size() / 2.0;
-        ui.painter().galley(pos, galley, egui::Color32::WHITE);
-    }
-    if speaking {
-        ui.painter().circle_stroke(
-            rect.center(),
-            radius + 1.5,
-            egui::Stroke::new(2.5, egui::Color32::from_rgb(67, 181, 129)),
-        );
-    }
 }
 
 /// Выполняет подключение к голосовому каналу (API + запуск движка). Вызывается из обработчика channel_panel.
@@ -1405,6 +1377,10 @@ fn apply_voice_join(
                 .ok();
                 tx.send(VoiceCmd::SetInputVolume(state.main.voice.input_volume))
                     .ok();
+                tx.send(VoiceCmd::SetInputSensitivity(
+                    state.main.voice.input_sensitivity,
+                ))
+                .ok();
                 tx.send(VoiceCmd::SetOutputVolume(state.main.voice.output_volume))
                     .ok();
                 tx.send(VoiceCmd::SetScreenAudioMuted(
@@ -1499,6 +1475,7 @@ fn apply_voice_leave(
     }
     stop_voice_engine(engine_tx, engine_done);
     state.main.voice = VoiceState::default();
+    state.main.voice.input_sensitivity = state.settings.input_sensitivity;
     state.main.show_screen_source_picker = false;
     state.main.start_stream_after_source_pick = false;
     state.main.voice_video_textures.clear();
@@ -2401,6 +2378,7 @@ pub(crate) fn main_screen(
             // Stop current engine
             stop_voice_engine(engine_tx, engine_done);
             state.main.voice = VoiceState::default();
+            state.main.voice.input_sensitivity = state.settings.input_sensitivity;
             state.main.voice_video_textures.clear();
             state.main.voice_render_fps.clear();
             state.main.voice_receiver_telemetry = None;
@@ -2679,6 +2657,7 @@ pub(crate) fn main_screen(
         let mut do_nick = false;
         let mut do_avatar = false;
         let mut new_input_vol: Option<f32> = None;
+        let mut new_input_sensitivity: Option<f32> = None;
         let mut new_output_vol: Option<f32> = None;
         egui::Window::new("Настройки")
             .collapsible(false).resizable(false)
@@ -2716,6 +2695,26 @@ pub(crate) fn main_screen(
                 if ui.add(slider_in).changed() {
                     new_input_vol = Some(iv);
                 }
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Чувствительность голосового ввода:").small());
+                let mut input_sensitivity = state.main.voice.input_sensitivity;
+                let sensitivity_slider =
+                    egui::Slider::new(&mut input_sensitivity, 0.0_f32..=1.0_f32)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                        .show_value(true);
+                if ui.add(sensitivity_slider).changed() {
+                    let input_sensitivity = normalize_input_sensitivity(input_sensitivity);
+                    state.settings.input_sensitivity = input_sensitivity;
+                    state.settings.save();
+                    new_input_sensitivity = Some(input_sensitivity);
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "Работает после шумодава; если шумодав выключен, действует как общий голосовой gate.",
+                    )
+                    .small()
+                    .weak(),
+                );
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new("Громкость динамиков:").small());
                 let mut ov = state.main.voice.output_volume;
@@ -2976,6 +2975,12 @@ pub(crate) fn main_screen(
                 tx.send(VoiceCmd::SetInputVolume(v)).ok();
             }
         }
+        if let Some(v) = new_input_sensitivity {
+            state.main.voice.input_sensitivity = v;
+            if let Some(tx) = engine_tx.as_ref() {
+                tx.send(VoiceCmd::SetInputSensitivity(v)).ok();
+            }
+        }
         if let Some(v) = new_output_vol {
             state.main.voice.output_volume = v;
             if let Some(tx) = engine_tx.as_ref() {
@@ -3140,6 +3145,9 @@ pub(crate) fn main_screen(
         state.main.my_display_name.clone()
     };
     let left_user_panel_height = bottom_panel::panel_height(state.main.voice.channel_id.is_some());
+    if state.main.voice.channel_id.is_some() {
+        ctx.request_repaint_after(Duration::from_millis(50));
+    }
 
     egui::SidePanel::left("panel_servers")
         .frame(egui::Frame::none().fill(theme.bg_tertiary))
@@ -3377,12 +3385,17 @@ pub(crate) fn main_screen(
     if server_selected {
         let left_user_panel_width =
             guild_panel::GUILD_PANEL_WIDTH + channel_panel::CHANNEL_PANEL_WIDTH;
+        let self_speaking = state
+            .user_id
+            .and_then(|id| state.main.voice.speaking.lock().get(&id).copied())
+            .unwrap_or(false);
         let voice_bar_snapshot = BottomPanelVoiceSnapshot {
             in_voice_channel: state.main.voice.channel_id.is_some(),
             mic_muted: state.main.voice.mic_muted,
             output_muted: state.main.voice.output_muted,
             screen_on: state.main.voice.screen_on,
             screen_preset: state.main.screen_preset,
+            speaking: self_speaking,
         };
         let mut bottom_actions: Vec<BottomPanelAction> = Vec::new();
         let screen_rect = ctx.screen_rect();

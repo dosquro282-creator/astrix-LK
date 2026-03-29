@@ -14,8 +14,7 @@ pub fn avatar(
     speaking: bool,
     texture: Option<&egui::TextureHandle>,
 ) -> egui::Response {
-    let ring_margin = if speaking { 3.0 } else { 0.0 };
-    let size = egui::vec2((radius + ring_margin) * 2.0, (radius + ring_margin) * 2.0);
+    let size = egui::vec2(radius * 2.0, radius * 2.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
     paint_at(
         ui,
@@ -77,7 +76,23 @@ fn paint_at(
     }
 
     if speaking {
-        ui.painter()
-            .circle_stroke(center, radius + 1.5, egui::Stroke::new(2.5, theme.success));
+        let clip_rect = ui.clip_rect().intersect(circle_rect.expand(3.0));
+        let overlay_painter = ui
+            .ctx()
+            .layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                ui.id().with((
+                    "avatar-speaking-overlay",
+                    center.x.to_bits(),
+                    center.y.to_bits(),
+                    radius.to_bits(),
+                )),
+            ))
+            .with_clip_rect(clip_rect);
+        overlay_painter.circle_stroke(
+            center,
+            (radius - 1.5).max(0.0),
+            egui::Stroke::new(3.0, theme.success),
+        );
     }
 }

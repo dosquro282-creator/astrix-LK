@@ -74,6 +74,25 @@ const SCREEN_AUDIO_SIGNAL_THRESHOLD: i16 = 32;
 const MIC_RING_CAPTURE_MAX_FRAMES: usize = 12;
 const MIC_RING_TRIM_TRIGGER_FRAMES: usize = 6;
 const MIC_RING_TARGET_FRAMES: usize = 3;
+const LOCAL_SPEAKING_RMS_THRESHOLD: f32 = 0.0035;
+const LOCAL_SPEAKING_PEAK_THRESHOLD: f32 = 0.0120;
+const LOCAL_SPEAKING_HOLD_FRAMES: usize = 18;
+const REMOTE_SPEAKING_RMS_THRESHOLD: f32 = 0.0022;
+const REMOTE_SPEAKING_PEAK_THRESHOLD: f32 = 0.0080;
+const REMOTE_SPEAKING_HOLD_FRAMES: usize = 22;
+const DEFAULT_INPUT_SENSITIVITY: f32 = 0.55;
+const MIC_GATE_FLOOR_MIN_DBFS: f32 = -78.0;
+const MIC_GATE_FLOOR_MAX_DBFS: f32 = -38.0;
+const MIC_GATE_OPEN_MARGIN_DB_MAX: f32 = 30.0;
+const MIC_GATE_OPEN_MARGIN_DB_MIN: f32 = 4.5;
+const MIC_GATE_CLOSE_HYSTERESIS_DB: f32 = 6.0;
+const MIC_GATE_OPEN_PEAK_MAX: f32 = 0.22;
+const MIC_GATE_OPEN_PEAK_MIN: f32 = 0.0075;
+const MIC_GATE_SENSITIVITY_CURVE_EXP: f32 = 0.65;
+const MIC_GATE_ATTACK: f32 = 0.88;
+const MIC_GATE_RELEASE: f32 = 0.24;
+const MIC_GATE_HOLD_FRAMES: usize = 18;
+const MIC_GATE_MIN_GAIN: f32 = 0.001;
 
 /// Resample mono i16 to target_len (linear interpolation). Used when device rate != 48 kHz.
 fn resample_linear(samples: &[i16], target_len: usize) -> Vec<i16> {
@@ -94,6 +113,131 @@ fn resample_linear(samples: &[i16], target_len: usize) -> Vec<i16> {
             (a + frac * (b - a)).clamp(-32768.0, 32767.0) as i16
         })
         .collect()
+}
+
+fn frame_rms_peak(samples: &[i16]) -> (f32, f32) {
+    if samples.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut energy = 0.0f32;
+    let mut peak = 0.0f32;
+    for &sample in samples {
+        let value = sample as f32 / 32768.0;
+        energy += value * value;
+        peak = peak.max(value.abs());
+    }
+    ((energy / samples.len() as f32).sqrt(), peak)
+}
+
+fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t.clamp(0.0, 1.0)
+}
+
+fn rms_to_dbfs(rms: f32) -> f32 {
+    (20.0 * rms.max(1.0e-6).log10()).clamp(-96.0, 0.0)
+}
+
+fn apply_gain_ramp(samples: &mut [i16], start_gain: f32, end_gain: f32) {
+    if samples.is_empty() {
+        return;
+    }
+    if start_gain <= MIC_GATE_MIN_GAIN && end_gain <= MIC_GATE_MIN_GAIN {
+        samples.fill(0);
+        return;
+    }
+    let len = samples.len().max(1) as f32;
+    for (idx, sample) in samples.iter_mut().enumerate() {
+        let t = idx as f32 / len;
+        let gain = lerp_f32(start_gain, end_gain, t);
+        *sample = ((*sample as f32) * gain).clamp(-32768.0, 32767.0) as i16;
+    }
+}
+
+struct MicSensitivityGate {
+    noise_floor_dbfs: f32,
+    current_gain: f32,
+    hold_frames: usize,
+}
+
+impl Default for MicSensitivityGate {
+    fn default() -> Self {
+        Self {
+            noise_floor_dbfs: -66.0,
+            current_gain: 0.0,
+            hold_frames: 0,
+        }
+    }
+}
+
+impl MicSensitivityGate {
+    fn process(&mut self, samples: &mut [i16], sensitivity: f32) {
+        if samples.is_empty() {
+            return;
+        }
+
+        let sensitivity = sensitivity.clamp(0.0, 1.0);
+        if sensitivity <= 0.001 {
+            let prev_gain = self.current_gain;
+            apply_gain_ramp(samples, prev_gain, 0.0);
+            self.current_gain = 0.0;
+            self.hold_frames = 0;
+            return;
+        }
+        let curve = sensitivity.powf(MIC_GATE_SENSITIVITY_CURVE_EXP);
+        let (rms, peak) = frame_rms_peak(samples);
+        let frame_dbfs = rms_to_dbfs(rms);
+        let open_margin_db = lerp_f32(
+            MIC_GATE_OPEN_MARGIN_DB_MAX,
+            MIC_GATE_OPEN_MARGIN_DB_MIN,
+            curve,
+        );
+        let close_margin_db = (open_margin_db - MIC_GATE_CLOSE_HYSTERESIS_DB).max(1.0);
+        let open_peak = lerp_f32(MIC_GATE_OPEN_PEAK_MAX, MIC_GATE_OPEN_PEAK_MIN, curve);
+        let close_peak = open_peak * 0.72;
+
+        if self.current_gain < 0.2 && peak < close_peak * 1.4 {
+            let coeff = if frame_dbfs > self.noise_floor_dbfs {
+                0.18
+            } else {
+                0.02
+            };
+            self.noise_floor_dbfs = lerp_f32(self.noise_floor_dbfs, frame_dbfs, coeff)
+                .clamp(MIC_GATE_FLOOR_MIN_DBFS, MIC_GATE_FLOOR_MAX_DBFS);
+        }
+
+        let open_threshold_dbfs = (self.noise_floor_dbfs + open_margin_db).min(-4.0);
+        let close_threshold_dbfs =
+            (self.noise_floor_dbfs + close_margin_db).min(open_threshold_dbfs - 1.0);
+        let open_now = frame_dbfs >= open_threshold_dbfs || peak >= open_peak;
+        if open_now {
+            self.hold_frames = MIC_GATE_HOLD_FRAMES;
+        } else {
+            self.hold_frames = self.hold_frames.saturating_sub(1);
+        }
+
+        let keep_open =
+            self.hold_frames > 0 || frame_dbfs >= close_threshold_dbfs || peak >= close_peak;
+        let target_open = if self.current_gain > 0.2 {
+            keep_open
+        } else {
+            open_now || self.hold_frames > 0
+        };
+
+        let prev_gain = self.current_gain;
+        let target_gain = if target_open { 1.0 } else { 0.0 };
+        let coeff = if target_open {
+            MIC_GATE_ATTACK
+        } else {
+            MIC_GATE_RELEASE
+        };
+        let next_gain = lerp_f32(prev_gain, target_gain, coeff);
+        apply_gain_ramp(samples, prev_gain, next_gain);
+        self.current_gain = if next_gain <= MIC_GATE_MIN_GAIN {
+            0.0
+        } else {
+            next_gain
+        };
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -663,6 +807,10 @@ async fn run_session(
     // Input volume: scales mic samples before sending (SetInputVolume updates this).
     let input_volume: Arc<Mutex<f32>> = Arc::new(Mutex::new(1.0));
     let input_vol_for_mic = Arc::clone(&input_volume);
+    let input_sensitivity: Arc<Mutex<f32>> = Arc::new(Mutex::new(DEFAULT_INPUT_SENSITIVITY));
+    let input_sensitivity_for_mic = Arc::clone(&input_sensitivity);
+    let mic_muted_flag = Arc::new(AtomicBool::new(false));
+    let mic_muted_for_task = Arc::clone(&mic_muted_flag);
     let use_mic_denoise = microphone_denoise_enabled();
 
     // Incoming video stats (viewer): frame count and resolution for estimated bitrate.
@@ -684,6 +832,8 @@ async fn run_session(
     // Applies input_volume to scale mic level before sending.
     let mic_ring_for_task = Arc::clone(&mic_ring);
     let source_for_timer = livekit_source.clone();
+    let speaking_for_mic = Arc::clone(&speaking);
+    let my_user_id_for_mic = my_user_id;
     let mic_timer_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(10));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -692,6 +842,8 @@ async fn run_session(
         } else {
             None
         };
+        let mut mic_gate = MicSensitivityGate::default();
+        let mut local_speaking_hold = 0usize;
         loop {
             interval.tick().await;
             let chunk: Option<Vec<i16>> = {
@@ -716,8 +868,35 @@ async fn run_session(
                 } else {
                     raw
                 };
-                if let Some(denoiser) = mic_denoiser.as_mut() {
-                    denoiser.process_i16(&mut samples);
+                let mic_muted = mic_muted_for_task.load(Ordering::Relaxed);
+                if mic_muted {
+                    local_speaking_hold = 0;
+                    if my_user_id_for_mic > 0 {
+                        speaking_for_mic.lock().remove(&my_user_id_for_mic);
+                    }
+                    samples.fill(0);
+                } else {
+                    if let Some(denoiser) = mic_denoiser.as_mut() {
+                        denoiser.process_i16(&mut samples);
+                    }
+                    let sensitivity = *input_sensitivity_for_mic.lock();
+                    mic_gate.process(&mut samples, sensitivity);
+                    if my_user_id_for_mic > 0 {
+                        let (rms, peak) = frame_rms_peak(&samples);
+                        let speaking_now = rms >= LOCAL_SPEAKING_RMS_THRESHOLD
+                            || peak >= LOCAL_SPEAKING_PEAK_THRESHOLD;
+                        if speaking_now {
+                            local_speaking_hold = LOCAL_SPEAKING_HOLD_FRAMES;
+                        } else {
+                            local_speaking_hold = local_speaking_hold.saturating_sub(1);
+                        }
+                        let mut map = speaking_for_mic.lock();
+                        if local_speaking_hold > 0 {
+                            map.insert(my_user_id_for_mic, true);
+                        } else {
+                            map.remove(&my_user_id_for_mic);
+                        }
+                    }
                 }
                 let vol = *input_vol_for_mic.lock();
                 if (vol - 1.0).abs() > 0.01 {
@@ -842,9 +1021,20 @@ async fn run_session(
                     }
                     Some(RoomEvent::ActiveSpeakersChanged { speakers }) => {
                         let mut map = speaking.lock();
-                        map.clear();
+                        let local_speaking = if my_user_id > 0 {
+                            map.get(&my_user_id).copied().unwrap_or(false)
+                        } else {
+                            false
+                        };
+                        if my_user_id > 0 {
+                            if local_speaking {
+                                map.insert(my_user_id, true);
+                            } else {
+                                map.remove(&my_user_id);
+                            }
+                        }
                         for p in speakers {
-                            if let Ok(uid) = p.identity().as_str().parse::<i64>() {
+                            if let Some(uid) = parse_remote_user_id(&p.identity().to_string()) {
                                 map.insert(uid, true);
                             }
                         }
@@ -888,7 +1078,13 @@ async fn run_session(
                                     stream: true,
                                 }));
                             }
-                            _ => {}
+                            _ => {
+                                speaking.lock().remove(&uid);
+                                let _ = mixer_tx.send(MixerFrameMsg::Remove(MixerRoute {
+                                    user_id: uid,
+                                    stream: false,
+                                }));
+                            }
                         }
                     }
                     Some(RoomEvent::DataReceived {
@@ -952,8 +1148,12 @@ async fn run_session(
                             );
                             if let Some(old) = audio_stream_tasks.remove(&task_key) {
                                 old.abort();
+                                if !route.stream {
+                                    speaking.lock().remove(&uid);
+                                }
                             }
                             let tx = mixer_tx.clone();
+                            let speaking_for_remote = Arc::clone(&speaking);
                             let denoise_enabled = remote_voice_denoise_flags
                                 .lock()
                                 .entry(uid)
@@ -967,6 +1167,7 @@ async fn run_session(
                             let handle = tokio::spawn(async move {
                                 let mut logged_non_silent_remote = false;
                                 let mut denoiser: Option<AudioDenoiser> = None;
+                                let mut remote_speaking_hold = 0usize;
                                 while let Some(frame) = stream.next().await {
                                     let mut samples: Vec<i16> = frame.data.as_ref().to_vec();
                                     if !route.stream && denoise_enabled.load(Ordering::Relaxed) {
@@ -974,6 +1175,23 @@ async fn run_session(
                                             AudioDenoiser::new_receiver_voice(route.user_id)
                                         });
                                         denoiser.process_i16(&mut samples);
+                                    }
+                                    if !route.stream {
+                                        let (rms, peak) = frame_rms_peak(&samples);
+                                        let speaking_now = rms >= REMOTE_SPEAKING_RMS_THRESHOLD
+                                            || peak >= REMOTE_SPEAKING_PEAK_THRESHOLD;
+                                        if speaking_now {
+                                            remote_speaking_hold = REMOTE_SPEAKING_HOLD_FRAMES;
+                                        } else {
+                                            remote_speaking_hold =
+                                                remote_speaking_hold.saturating_sub(1);
+                                        }
+                                        let mut map = speaking_for_remote.lock();
+                                        if remote_speaking_hold > 0 {
+                                            map.insert(route.user_id, true);
+                                        } else {
+                                            map.remove(&route.user_id);
+                                        }
                                     }
                                     if route.stream
                                         && !logged_non_silent_remote
@@ -991,6 +1209,9 @@ async fn run_session(
                                     if samples.len() >= SAMPLES_PER_10MS {
                                         let _ = tx.send(MixerFrameMsg::Frame(route, samples));
                                     }
+                                }
+                                if !route.stream {
+                                    speaking_for_remote.lock().remove(&route.user_id);
                                 }
                             });
                             audio_stream_tasks.insert(task_key, handle);
@@ -1329,7 +1550,15 @@ async fn run_session(
                         break;
                     }
                     Some(VoiceCmd::SetMicMuted(m)) => {
-                        if m { mic_publication.mute(); } else { mic_publication.unmute(); }
+                        mic_muted_flag.store(m, Ordering::Relaxed);
+                        if m && my_user_id > 0 {
+                            speaking.lock().remove(&my_user_id);
+                        }
+                        if m {
+                            mic_publication.mute();
+                        } else {
+                            mic_publication.unmute();
+                        }
                     }
                     Some(VoiceCmd::StartCamera) => {
                         camera_running.store(true, Ordering::Relaxed);
@@ -1577,6 +1806,9 @@ async fn run_session(
                     }
                     Some(VoiceCmd::SetInputVolume(vol)) => {
                         *input_volume.lock() = vol.clamp(0.0, 4.0);
+                    }
+                    Some(VoiceCmd::SetInputSensitivity(value)) => {
+                        *input_sensitivity.lock() = value.clamp(0.0, 1.0);
                     }
                     _ => {}
                 }

@@ -62,16 +62,18 @@ impl AstrixApp {
             auth_state.password = settings.saved_password.clone();
             auth_state.remember_me = true;
         }
+        let mut state = State {
+            screen: ui::Screen::Auth,
+            auth: auth_state,
+            settings: settings.clone(),
+            dark_mode: true,
+            ..Default::default()
+        };
+        state.main.voice.input_sensitivity = settings.input_sensitivity;
         Self {
             theme: Theme::default(),
             app_state: AppState::default(),
-            state: Arc::new(Mutex::new(State {
-                screen: ui::Screen::Auth,
-                auth: auth_state,
-                settings: settings.clone(),
-                dark_mode: true,
-                ..Default::default()
-            })),
+            state: Arc::new(Mutex::new(state)),
             api,
             ws_events: new_event_queue(),
             ws_tx: None,
@@ -957,6 +959,7 @@ impl eframe::App for AstrixApp {
             st.access_token = None;
             st.user_id = None;
             st.main = ui::MainState::default();
+            st.main.voice.input_sensitivity = st.settings.input_sensitivity;
             st.screen = ui::Screen::Auth;
             ctx.request_repaint();
         }

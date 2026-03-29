@@ -41,6 +41,7 @@ pub struct BottomPanelVoiceSnapshot {
     pub output_muted: bool,
     pub screen_on: bool,
     pub screen_preset: ScreenPreset,
+    pub speaking: bool,
 }
 
 pub struct BottomPanelParams<'a> {
@@ -106,7 +107,7 @@ fn base_user_row(
             theme,
             user_display,
             AVATAR_RADIUS,
-            false,
+            voice.speaking,
             avatar_texture,
         );
 
