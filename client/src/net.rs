@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const DEFAULT_API_BASE: &str = "http://104.128.136.203:8080";
+pub const DEFAULT_API_BASE: &str = "http://193.233.251.173:8080";
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 

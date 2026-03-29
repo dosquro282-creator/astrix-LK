@@ -71,11 +71,15 @@ Bundled Windows runtime:
 - `client/vendor/deepfilternet/libdf.dll`
 - Built from upstream `DeepFilterNet` commit `d375b2d8309e0935d165700c91da9de862a99c31`
 - Build command: `cargo build -p deep_filter --release --features capi`
+- Extended locally with:
+  - `df_create_ext(...)` for explicit model init parameters
+  - `df_set_thresholds(...)` for live threshold tuning without reloading the model
 
 ## Model Catalog
 
 The settings UI now exposes only the models that were validated against the bundled Windows `libDF` runtime:
 
+- `Без шумодава`
 - `DeepFilterNet3_ll_onnx.tar.gz`
 - `DeepFilterNet3_onnx.tar.gz`
 
@@ -93,6 +97,46 @@ Validation result on the current Windows runtime:
 - `DeepFilterNet2_onnx_ll.tar.gz`: crashes inside `tract` during model init
 
 If the backend is unavailable, the denoiser falls back to bypass and logs once.
+
+The settings UI now exposes the actual runtime parameters instead of a single abstract strength
+slider:
+
+- model (`off`, `DeepFilterNet3_ll_onnx.tar.gz`, `DeepFilterNet3_onnx.tar.gz`)
+- attenuation limit
+- post-filter beta
+- `min_db_thresh`
+- `max_db_erb_thresh`
+- `max_db_df_thresh`
+- reduce-mask mode
+
+Live-updated without full model reload:
+
+- attenuation limit (`df_set_atten_lim`)
+- post-filter beta (`df_set_post_filter_beta`)
+- thresholds (`df_set_thresholds`)
+
+Require backend rebuild:
+
+- model switch
+- reduce-mask mode switch
+
+The receiver-side per-user toggle still only enables or bypasses the selected global DeepFilterNet
+configuration locally for that remote user.
+
+## Latency And Artifact Guards
+
+To keep sender-side denoise from turning into a permanent delay after short stalls:
+
+- the LiveKit local audio queue is kept small (`40 ms`)
+- the microphone capture ring is capped tightly instead of allowing ~500 ms backlog
+- stale microphone samples are dropped when the sender falls behind, so latency stays bounded
+
+To reduce crackling on loud input or bright transients:
+
+- processed frames are run through a simple post-denoise clip guard
+- if DeepFilterNet pushes a frame above the safe headroom, the frame is scaled down before
+  conversion back to `i16`
+- the gain recovers gradually to avoid obvious pumping between adjacent frames
 
 ## Implementation Roadmap
 

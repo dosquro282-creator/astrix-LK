@@ -24,7 +24,7 @@ services:
       HTTP_ADDR: "0.0.0.0:8080"
 
       # ВРЕМЕННО, пока без nginx/ssl:
-      LIVEKIT_URL: "ws://104.128.136.203:7880"
+      LIVEKIT_URL: "ws://193.233.251.173:7880"
 
       # ПОТОМ, когда будет домен + ssl:
       # LIVEKIT_URL: "wss://astrix-commanda.ru"

@@ -108,6 +108,18 @@ pub(crate) struct Settings {
     pub(crate) receiver_denoise_by_user: HashSet<String>,
     #[serde(default = "default_denoise_model_id")]
     pub(crate) denoise_model_id: String,
+    #[serde(default = "default_denoise_atten_lim_db")]
+    pub(crate) denoise_atten_lim_db: f32,
+    #[serde(default = "default_denoise_post_filter_beta")]
+    pub(crate) denoise_post_filter_beta: f32,
+    #[serde(default = "default_denoise_min_db_thresh")]
+    pub(crate) denoise_min_db_thresh: f32,
+    #[serde(default = "default_denoise_max_db_erb_thresh")]
+    pub(crate) denoise_max_db_erb_thresh: f32,
+    #[serde(default = "default_denoise_max_db_df_thresh")]
+    pub(crate) denoise_max_db_df_thresh: f32,
+    #[serde(default = "default_denoise_reduce_mask")]
+    pub(crate) denoise_reduce_mask: String,
     /// Путь декодирования входящего видео: "cpu" (OpenH264) или "mft" (Media Foundation).
     #[serde(default)]
     pub(crate) decode_path: String,
@@ -126,6 +138,30 @@ fn default_denoise_model_id() -> String {
     crate::denoise::default_model_id().to_string()
 }
 
+fn default_denoise_atten_lim_db() -> f32 {
+    crate::denoise::default_atten_lim_db()
+}
+
+fn default_denoise_post_filter_beta() -> f32 {
+    crate::denoise::default_post_filter_beta()
+}
+
+fn default_denoise_min_db_thresh() -> f32 {
+    crate::denoise::default_min_db_thresh()
+}
+
+fn default_denoise_max_db_erb_thresh() -> f32 {
+    crate::denoise::default_max_db_erb_thresh()
+}
+
+fn default_denoise_max_db_df_thresh() -> f32 {
+    crate::denoise::default_max_db_df_thresh()
+}
+
+fn default_denoise_reduce_mask() -> String {
+    crate::denoise::default_reduce_mask_id().to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -140,6 +176,12 @@ impl Default for Settings {
             stream_volume_by_user: HashMap::new(),
             receiver_denoise_by_user: HashSet::new(),
             denoise_model_id: default_denoise_model_id(),
+            denoise_atten_lim_db: default_denoise_atten_lim_db(),
+            denoise_post_filter_beta: default_denoise_post_filter_beta(),
+            denoise_min_db_thresh: default_denoise_min_db_thresh(),
+            denoise_max_db_erb_thresh: default_denoise_max_db_erb_thresh(),
+            denoise_max_db_df_thresh: default_denoise_max_db_df_thresh(),
+            denoise_reduce_mask: default_denoise_reduce_mask(),
             decode_path: String::new(),
             video_decoder_gamma: 0.0,
             video_decoder_gamma_migrated_v2: true,
@@ -167,6 +209,39 @@ impl Settings {
             s.denoise_model_id = default_denoise_model_id();
             should_save = true;
         }
+        let normalized_atten_lim = crate::denoise::normalize_atten_lim_db(s.denoise_atten_lim_db);
+        if (s.denoise_atten_lim_db - normalized_atten_lim).abs() > f32::EPSILON {
+            s.denoise_atten_lim_db = normalized_atten_lim;
+            should_save = true;
+        }
+        let normalized_post_filter =
+            crate::denoise::normalize_post_filter_beta(s.denoise_post_filter_beta);
+        if (s.denoise_post_filter_beta - normalized_post_filter).abs() > f32::EPSILON {
+            s.denoise_post_filter_beta = normalized_post_filter;
+            should_save = true;
+        }
+        let normalized_min_thresh =
+            crate::denoise::normalize_min_db_thresh(s.denoise_min_db_thresh);
+        if (s.denoise_min_db_thresh - normalized_min_thresh).abs() > f32::EPSILON {
+            s.denoise_min_db_thresh = normalized_min_thresh;
+            should_save = true;
+        }
+        let normalized_max_erb =
+            crate::denoise::normalize_max_db_erb_thresh(s.denoise_max_db_erb_thresh);
+        if (s.denoise_max_db_erb_thresh - normalized_max_erb).abs() > f32::EPSILON {
+            s.denoise_max_db_erb_thresh = normalized_max_erb;
+            should_save = true;
+        }
+        let normalized_max_df =
+            crate::denoise::normalize_max_db_df_thresh(s.denoise_max_db_df_thresh);
+        if (s.denoise_max_db_df_thresh - normalized_max_df).abs() > f32::EPSILON {
+            s.denoise_max_db_df_thresh = normalized_max_df;
+            should_save = true;
+        }
+        if !crate::denoise::is_known_reduce_mask(&s.denoise_reduce_mask) {
+            s.denoise_reduce_mask = default_denoise_reduce_mask();
+            should_save = true;
+        }
         if s.migrate_saved_accounts() {
             should_save = true;
         }
@@ -185,6 +260,14 @@ impl Settings {
         #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
         crate::d3d11_rgba::set_video_decoder_gamma(s.video_decoder_gamma);
         crate::denoise::set_selected_model(&s.denoise_model_id);
+        crate::denoise::set_denoise_atten_lim_db(s.denoise_atten_lim_db);
+        crate::denoise::set_denoise_post_filter_beta(s.denoise_post_filter_beta);
+        crate::denoise::set_denoise_thresholds(
+            s.denoise_min_db_thresh,
+            s.denoise_max_db_erb_thresh,
+            s.denoise_max_db_df_thresh,
+        );
+        crate::denoise::set_denoise_reduce_mask(&s.denoise_reduce_mask);
         if should_save {
             s.save();
         }
@@ -2682,10 +2765,179 @@ pub(crate) fn main_screen(
                     state.settings.save();
                 }
                 ui.label(
-                    egui::RichText::new(format!("Файл: {}", state.settings.denoise_model_id))
+                    egui::RichText::new(format!(
+                        "Файл: {}",
+                        if state.settings.denoise_model_id == "off" {
+                            "—".to_string()
+                        } else {
+                            state.settings.denoise_model_id.clone()
+                        }
+                    ))
                         .small()
                         .weak(),
                 );
+                ui.add_space(4.0);
+                if state.settings.denoise_model_id == "off" {
+                    ui.label(
+                        egui::RichText::new("Шумоподавление полностью отключено.")
+                            .small()
+                            .weak(),
+                    );
+                } else {
+                    ui.label(egui::RichText::new("Режим маски:").small());
+                    let mut denoise_reduce_mask = state.settings.denoise_reduce_mask.clone();
+                    egui::ComboBox::from_id_source("denoise_reduce_mask")
+                        .selected_text(
+                            crate::denoise::reduce_mask_label(&denoise_reduce_mask).to_string(),
+                        )
+                        .show_ui(ui, |ui| {
+                            for mask in crate::denoise::known_reduce_masks() {
+                                let _ = ui.selectable_value(
+                                    &mut denoise_reduce_mask,
+                                    mask.id.to_string(),
+                                    mask.label,
+                                );
+                            }
+                        });
+                    if denoise_reduce_mask != state.settings.denoise_reduce_mask {
+                        state.settings.denoise_reduce_mask = denoise_reduce_mask.clone();
+                        crate::denoise::set_denoise_reduce_mask(&denoise_reduce_mask);
+                        state.settings.save();
+                    }
+                    ui.label(
+                        egui::RichText::new(
+                            "Для mono voice-трактов этот режим влияет слабее, чем остальные параметры."
+                        )
+                        .small()
+                        .weak(),
+                    );
+                    ui.add_space(4.0);
+
+                    ui.label(egui::RichText::new("Лимит подавления:").small());
+                    let mut denoise_atten_lim_db = state.settings.denoise_atten_lim_db;
+                    let atten_slider =
+                        egui::Slider::new(&mut denoise_atten_lim_db, 0.0_f32..=80.0_f32)
+                            .custom_formatter(|v, _| format!("{v:.0} dB"))
+                            .show_value(true);
+                    if ui.add(atten_slider).changed() {
+                        denoise_atten_lim_db =
+                            crate::denoise::normalize_atten_lim_db(denoise_atten_lim_db);
+                        state.settings.denoise_atten_lim_db = denoise_atten_lim_db;
+                        crate::denoise::set_denoise_atten_lim_db(denoise_atten_lim_db);
+                        state.settings.save();
+                    }
+
+                    ui.label(egui::RichText::new("Post-filter beta:").small());
+                    let mut denoise_post_filter_beta = state.settings.denoise_post_filter_beta;
+                    let post_slider =
+                        egui::Slider::new(&mut denoise_post_filter_beta, 0.0_f32..=0.050_f32)
+                            .step_by(0.001)
+                            .custom_formatter(|v, _| format!("{v:.3}"))
+                            .show_value(true);
+                    if ui.add(post_slider).changed() {
+                        denoise_post_filter_beta =
+                            crate::denoise::normalize_post_filter_beta(denoise_post_filter_beta);
+                        state.settings.denoise_post_filter_beta = denoise_post_filter_beta;
+                        crate::denoise::set_denoise_post_filter_beta(denoise_post_filter_beta);
+                        state.settings.save();
+                    }
+
+                    ui.label(egui::RichText::new("Min dB threshold:").small());
+                    let mut denoise_min_db_thresh = state.settings.denoise_min_db_thresh;
+                    let min_thresh_slider =
+                        egui::Slider::new(&mut denoise_min_db_thresh, -40.0_f32..=5.0_f32)
+                            .custom_formatter(|v, _| format!("{v:.0} dB"))
+                            .show_value(true);
+                    if ui.add(min_thresh_slider).changed() {
+                        denoise_min_db_thresh =
+                            crate::denoise::normalize_min_db_thresh(denoise_min_db_thresh);
+                        state.settings.denoise_min_db_thresh = denoise_min_db_thresh;
+                        crate::denoise::set_denoise_thresholds(
+                            denoise_min_db_thresh,
+                            state.settings.denoise_max_db_erb_thresh,
+                            state.settings.denoise_max_db_df_thresh,
+                        );
+                        state.settings.save();
+                    }
+
+                    ui.label(egui::RichText::new("Max ERB threshold:").small());
+                    let mut denoise_max_db_erb_thresh = state.settings.denoise_max_db_erb_thresh;
+                    let max_erb_slider =
+                        egui::Slider::new(&mut denoise_max_db_erb_thresh, 0.0_f32..=60.0_f32)
+                            .custom_formatter(|v, _| format!("{v:.0} dB"))
+                            .show_value(true);
+                    if ui.add(max_erb_slider).changed() {
+                        denoise_max_db_erb_thresh = crate::denoise::normalize_max_db_erb_thresh(
+                            denoise_max_db_erb_thresh,
+                        );
+                        state.settings.denoise_max_db_erb_thresh = denoise_max_db_erb_thresh;
+                        crate::denoise::set_denoise_thresholds(
+                            state.settings.denoise_min_db_thresh,
+                            denoise_max_db_erb_thresh,
+                            state.settings.denoise_max_db_df_thresh,
+                        );
+                        state.settings.save();
+                    }
+
+                    ui.label(egui::RichText::new("Max DF threshold:").small());
+                    let mut denoise_max_db_df_thresh = state.settings.denoise_max_db_df_thresh;
+                    let max_df_slider =
+                        egui::Slider::new(&mut denoise_max_db_df_thresh, 0.0_f32..=60.0_f32)
+                            .custom_formatter(|v, _| format!("{v:.0} dB"))
+                            .show_value(true);
+                    if ui.add(max_df_slider).changed() {
+                        denoise_max_db_df_thresh =
+                            crate::denoise::normalize_max_db_df_thresh(denoise_max_db_df_thresh);
+                        state.settings.denoise_max_db_df_thresh = denoise_max_db_df_thresh;
+                        crate::denoise::set_denoise_thresholds(
+                            state.settings.denoise_min_db_thresh,
+                            state.settings.denoise_max_db_erb_thresh,
+                            denoise_max_db_df_thresh,
+                        );
+                        state.settings.save();
+                    }
+
+                    if ui.button("Сбросить параметры шумодава").clicked() {
+                        state.settings.denoise_atten_lim_db =
+                            crate::denoise::default_atten_lim_db();
+                        state.settings.denoise_post_filter_beta =
+                            crate::denoise::default_post_filter_beta();
+                        state.settings.denoise_min_db_thresh =
+                            crate::denoise::default_min_db_thresh();
+                        state.settings.denoise_max_db_erb_thresh =
+                            crate::denoise::default_max_db_erb_thresh();
+                        state.settings.denoise_max_db_df_thresh =
+                            crate::denoise::default_max_db_df_thresh();
+                        state.settings.denoise_reduce_mask =
+                            crate::denoise::default_reduce_mask_id().to_string();
+                        crate::denoise::set_denoise_reduce_mask(&state.settings.denoise_reduce_mask);
+                        crate::denoise::set_denoise_atten_lim_db(
+                            state.settings.denoise_atten_lim_db,
+                        );
+                        crate::denoise::set_denoise_post_filter_beta(
+                            state.settings.denoise_post_filter_beta,
+                        );
+                        crate::denoise::set_denoise_thresholds(
+                            state.settings.denoise_min_db_thresh,
+                            state.settings.denoise_max_db_erb_thresh,
+                            state.settings.denoise_max_db_df_thresh,
+                        );
+                        state.settings.save();
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Текущие параметры: atten {:.0} dB, beta {:.3}, thresholds [{:.0}, {:.0}, {:.0}], mask {}",
+                            state.settings.denoise_atten_lim_db,
+                            state.settings.denoise_post_filter_beta,
+                            state.settings.denoise_min_db_thresh,
+                            state.settings.denoise_max_db_erb_thresh,
+                            state.settings.denoise_max_db_df_thresh,
+                            crate::denoise::reduce_mask_label(&state.settings.denoise_reduce_mask)
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(6.0);

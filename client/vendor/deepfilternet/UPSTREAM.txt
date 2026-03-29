@@ -6,5 +6,9 @@ Commit: d375b2d8309e0935d165700c91da9de862a99c31
 Built locally on Windows with:
 cargo build -p deep_filter --release --features capi
 
+Local patch set on top of the upstream commit:
+- added df_create_ext(...) for explicit runtime init parameters
+- added df_set_thresholds(...) for live threshold tuning
+
 Bundled artifact:
 - libdf.dll (copied from upstream build output df.dll)

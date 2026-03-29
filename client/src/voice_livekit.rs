@@ -68,8 +68,12 @@ const STREAM_KEYFRAME_REQUEST_TOPIC: &str = "astrix.stream-keyframe";
 const STREAM_PREVIEW_INTERVAL: Duration = Duration::from_secs(30);
 const STREAM_PREVIEW_MAX_DIM: u32 = 640;
 const STREAM_PREVIEW_JPEG_QUALITY: u8 = 55;
+const LOCAL_AUDIO_QUEUE_MS: u32 = 40;
 const SCREEN_AUDIO_QUEUE_MS: u32 = 500;
 const SCREEN_AUDIO_SIGNAL_THRESHOLD: i16 = 32;
+const MIC_RING_CAPTURE_MAX_FRAMES: usize = 12;
+const MIC_RING_TRIM_TRIGGER_FRAMES: usize = 6;
+const MIC_RING_TARGET_FRAMES: usize = 3;
 
 /// Resample mono i16 to target_len (linear interpolation). Used when device rate != 48 kHz.
 fn resample_linear(samples: &[i16], target_len: usize) -> Vec<i16> {
@@ -630,9 +634,10 @@ async fn run_session(
         noise_suppression: false,
         auto_gain_control: false,
     };
-    // buffer_ms reduced from 1000 → 100 to cut latency and avoid double-buffering glitches
-    // (1000 ms was introducing ~500 ms of extra latency over the internet).
-    let livekit_source = NativeAudioSource::new(source_options, SAMPLE_RATE, 1, 100);
+    // Keep the internal queue tight so sender-side DSP does not silently turn into
+    // long-lived playout delay after a temporary stall.
+    let livekit_source =
+        NativeAudioSource::new(source_options, SAMPLE_RATE, 1, LOCAL_AUDIO_QUEUE_MS);
     let track = LocalAudioTrack::create_audio_track(
         "microphone",
         RtcAudioSource::Native(livekit_source.clone()),
@@ -681,6 +686,7 @@ async fn run_session(
     let source_for_timer = livekit_source.clone();
     let mic_timer_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(10));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut mic_denoiser = if use_mic_denoise {
             Some(AudioDenoiser::new_sender_microphone())
         } else {
@@ -690,6 +696,14 @@ async fn run_session(
             interval.tick().await;
             let chunk: Option<Vec<i16>> = {
                 let mut ring = mic_ring_for_task.lock();
+                let trim_threshold = input_10ms_len * MIC_RING_TRIM_TRIGGER_FRAMES;
+                if ring.len() > trim_threshold {
+                    let target_len = input_10ms_len * MIC_RING_TARGET_FRAMES;
+                    let drop_count = ring.len().saturating_sub(target_len.max(input_10ms_len));
+                    for _ in 0..drop_count {
+                        ring.pop_front();
+                    }
+                }
                 if ring.len() >= input_10ms_len {
                     Some(ring.drain(..input_10ms_len).collect())
                 } else {
@@ -5600,8 +5614,8 @@ fn capture_mic_to_ring(
     );
 
     let err_fn = |e| eprintln!("[voice][livekit] mic stream error: {}", e);
-    // Cap the ring buffer at ~500 ms so we never grow unboundedly if the consumer stalls.
-    let max_ring = (input_rate / 2) as usize;
+    // Cap the capture-side ring tightly so sender latency stays bounded even if DSP falls behind.
+    let max_ring = ((input_rate / 100) as usize).saturating_mul(MIC_RING_CAPTURE_MAX_FRAMES);
 
     let stream = device
         .build_input_stream(
