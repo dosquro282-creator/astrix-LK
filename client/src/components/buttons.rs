@@ -17,11 +17,35 @@ pub fn icon_circle(
     active: bool,
     id_source: impl std::hash::Hash,
 ) -> egui::Response {
-    icon_circle_sized(
+    icon_circle_sized_with_label_size(
         ctx,
         ui,
         theme,
         DEFAULT_ICON_RADIUS,
+        None,
+        label,
+        tooltip,
+        active,
+        id_source,
+    )
+}
+
+pub fn icon_circle_with_label_size(
+    ctx: &egui::Context,
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    label: &str,
+    tooltip: &str,
+    active: bool,
+    label_size: f32,
+    id_source: impl std::hash::Hash,
+) -> egui::Response {
+    icon_circle_sized_with_label_size(
+        ctx,
+        ui,
+        theme,
+        DEFAULT_ICON_RADIUS,
+        Some(label_size),
         label,
         tooltip,
         active,
@@ -34,6 +58,22 @@ pub fn icon_circle_sized(
     ui: &mut egui::Ui,
     theme: &Theme,
     radius: f32,
+    label: &str,
+    tooltip: &str,
+    active: bool,
+    id_source: impl std::hash::Hash,
+) -> egui::Response {
+    icon_circle_sized_with_label_size(
+        ctx, ui, theme, radius, None, label, tooltip, active, id_source,
+    )
+}
+
+fn icon_circle_sized_with_label_size(
+    ctx: &egui::Context,
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    radius: f32,
+    label_size: Option<f32>,
     label: &str,
     tooltip: &str,
     active: bool,
@@ -76,7 +116,7 @@ pub fn icon_circle_sized(
     } else {
         Theme::lerp_color(theme.text_secondary, theme.text_primary, hover_t)
     };
-    let font_size = (radius * 0.72).clamp(14.0, 22.0);
+    let font_size = label_size.unwrap_or_else(|| (radius * 0.72).clamp(14.0, 22.0));
     let galley = ui.painter().layout(
         label.to_string(),
         egui::FontId::proportional(font_size),

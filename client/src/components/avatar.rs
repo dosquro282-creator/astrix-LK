@@ -77,18 +77,7 @@ fn paint_at(
 
     if speaking {
         let clip_rect = ui.clip_rect().intersect(circle_rect.expand(3.0));
-        let overlay_painter = ui
-            .ctx()
-            .layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                ui.id().with((
-                    "avatar-speaking-overlay",
-                    center.x.to_bits(),
-                    center.y.to_bits(),
-                    radius.to_bits(),
-                )),
-            ))
-            .with_clip_rect(clip_rect);
+        let overlay_painter = ui.painter().with_clip_rect(clip_rect);
         overlay_painter.circle_stroke(
             center,
             (radius - 1.5).max(0.0),

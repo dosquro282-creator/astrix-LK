@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::denoise::{microphone_denoise_enabled, AudioDenoiser};
 use futures_util::StreamExt;
@@ -151,6 +151,19 @@ fn extract_session_rtt_ms(
         (None, Some(right)) => Some(right),
         (None, None) => None,
     }
+}
+
+fn extract_outgoing_bytes_sent(stats: &[livekit::webrtc::stats::RtcStats]) -> Option<u64> {
+    let total_bytes = stats
+        .iter()
+        .filter_map(|stat| match stat {
+            livekit::webrtc::stats::RtcStats::OutboundRtp(outbound) => {
+                Some(outbound.sent.bytes_sent)
+            }
+            _ => None,
+        })
+        .sum::<u64>();
+    (total_bytes > 0).then_some(total_bytes)
 }
 
 /// Resample mono i16 to target_len (linear interpolation). Used when device rate != 48 kHz.
@@ -1049,6 +1062,7 @@ async fn run_session(
     let mut stream_audio_publications: HashMap<i64, RemoteTrackPublication> = HashMap::new();
     let mut desired_stream_subscriptions: HashSet<i64> = HashSet::new();
     let telemetry_enabled = is_telemetry_enabled();
+    let mut outgoing_bitrate_sample: Option<(Instant, u64)> = None;
 
     let mut incoming_stats_interval = tokio::time::interval(Duration::from_secs(1));
     incoming_stats_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1072,12 +1086,35 @@ async fn run_session(
                     }
                 }
                 if let Ok(stats) = room.get_stats().await {
-                    if let Some(rtt_ms) =
-                        extract_session_rtt_ms(&stats.publisher_stats, &stats.subscriber_stats)
-                    {
-                        if let Some(mut st) = session_stats.try_lock() {
+                    let rtt_ms =
+                        extract_session_rtt_ms(&stats.publisher_stats, &stats.subscriber_stats);
+                    let outgoing_speed_mbps =
+                        if let Some(total_bytes_sent) = extract_outgoing_bytes_sent(&stats.publisher_stats)
+                        {
+                            let now = Instant::now();
+                            let bitrate_mbps = outgoing_bitrate_sample.and_then(|(prev_at, prev_bytes)| {
+                                let elapsed_seconds = now.saturating_duration_since(prev_at).as_secs_f32();
+                                if elapsed_seconds > 0.0 && total_bytes_sent >= prev_bytes {
+                                    Some(
+                                        ((total_bytes_sent - prev_bytes) as f32 * 8.0)
+                                            / elapsed_seconds
+                                            / 1_000_000.0,
+                                    )
+                                } else {
+                                    None
+                                }
+                            });
+                            outgoing_bitrate_sample = Some((now, total_bytes_sent));
+                            bitrate_mbps
+                        } else {
+                            outgoing_bitrate_sample = None;
+                            None
+                        };
+                    if let Some(mut st) = session_stats.try_lock() {
+                        if let Some(rtt_ms) = rtt_ms {
                             st.latency_rtt_ms = Some(rtt_ms);
                         }
+                        st.connection_speed_mbps = outgoing_speed_mbps;
                     }
                 }
             }
@@ -1700,7 +1737,6 @@ async fn run_session(
                                 st.resolution = Some((width, height));
                                 st.stream_fps = Some(fps as f32);
                                 st.frames_per_second = Some(fps as f32);
-                                st.connection_speed_mbps = Some(bitrate as f32 / 1_000_000.0);
                             }
                             let mut opts = TrackPublishOptions::default();
                             opts.source = TrackSource::Screenshare;
@@ -2691,13 +2727,12 @@ fn start_screen_capture_xcap(
     Option<LocalVideoTrack>,
     Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>,
 ) {
-    let (video_width, video_height, max_fps, bitrate) = preset.params();
+    let (video_width, video_height, max_fps, _bitrate) = preset.params();
     {
         let mut st = session_stats.lock();
         st.resolution = Some((video_width, video_height));
         st.stream_fps = Some(max_fps as f32);
         st.frames_per_second = Some(max_fps as f32);
-        st.connection_speed_mbps = Some(bitrate as f32 / 1_000_000.0);
         st.encoding_path = Some(
             EncodingPath::OpenH264 {
                 threads: encoder_threads_for_resolution(video_width, video_height),
@@ -4362,10 +4397,6 @@ fn start_screen_capture(
                                         webrtc_target_fps
                                     );
                                 }
-                                if let Some(mut st) = stats_enc.try_lock() {
-                                    st.connection_speed_mbps =
-                                        Some(webrtc_target_bitrate_bps as f32 / 1_000_000.0);
-                                }
                             }
                             // Phase 1: lazy init + BGRA→NV12 (pool lock scope).
                             // Skip conversion when WGC hasn't delivered new content —
@@ -5681,7 +5712,6 @@ fn start_screen_capture(
         st.resolution = Some((video_width, video_height));
         st.stream_fps = Some(max_fps as f32);
         st.frames_per_second = Some(max_fps as f32);
-        st.connection_speed_mbps = Some(bitrate as f32 / 1_000_000.0);
         st.encoding_path = Some(
             EncodingPath::OpenH264 {
                 threads: encoder_threads_for_resolution(video_width, video_height),

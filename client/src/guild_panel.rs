@@ -54,27 +54,6 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: GuildPanelParams<'_>
             ui.vertical_centered(|ui| {
                 ui.add_space(12.0);
 
-                let home = buttons::icon_circle(
-                    ctx,
-                    ui,
-                    theme,
-                    "A",
-                    "Home",
-                    selected_server.is_none(),
-                    "guild_home",
-                );
-                if home.clicked() {
-                    (*on_action)(GuildPanelAction::SelectDms);
-                }
-
-                ui.add_space(8.0);
-                let sep_rect = ui
-                    .allocate_exact_size(egui::vec2(32.0, 2.0), egui::Sense::hover())
-                    .0;
-                ui.painter()
-                    .rect_filled(sep_rect, 1.0, theme.bg_active.linear_multiply(0.75));
-                ui.add_space(8.0);
-
                 if servers_loading && servers.is_empty() {
                     ui.spinner();
                     ui.add_space(8.0);
@@ -125,24 +104,18 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: GuildPanelParams<'_>
                     ui.add_space(8.0);
                 }
 
-                let add =
-                    buttons::icon_circle(ctx, ui, theme, "+", "Create server", false, "guild_add");
-                if add.clicked() {
-                    (*on_action)(GuildPanelAction::AddServer);
-                }
-                ui.add_space(8.0);
-
-                let explore = buttons::icon_circle(
+                let add = buttons::icon_circle_with_label_size(
                     ctx,
                     ui,
                     theme,
-                    "o",
-                    "Explore servers",
+                    "+",
+                    "Create server",
                     false,
-                    "guild_explore",
+                    18.0,
+                    "guild_add",
                 );
-                if explore.clicked() {
-                    (*on_action)(GuildPanelAction::Explore);
+                if add.clicked() {
+                    (*on_action)(GuildPanelAction::AddServer);
                 }
                 ui.add_space(8.0);
             });

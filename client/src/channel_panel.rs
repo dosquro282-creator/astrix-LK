@@ -119,7 +119,10 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
             );
             let title_rect = egui::Rect::from_min_max(
                 egui::pos2(rect.left() + left_padding, rect.top()),
-                egui::pos2((buttons_rect.left() - 12.0).max(rect.left() + left_padding), rect.bottom()),
+                egui::pos2(
+                    (buttons_rect.left() - 12.0).max(rect.left() + left_padding),
+                    rect.bottom(),
+                ),
             );
 
             ui.allocate_ui_at_rect(title_rect, |ui| {

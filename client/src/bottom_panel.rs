@@ -10,15 +10,19 @@ const CONTROL_SIZE: f32 = 28.0;
 const LATENCY_BUTTON_SIZE: egui::Vec2 = egui::vec2(28.0, 24.0);
 const BASE_ROW_HEIGHT: f32 = 34.0;
 const VOICE_ROW_HEIGHT: f32 = 32.0;
-const LATENCY_ROW_HEIGHT: f32 = 24.0;
+const LATENCY_ROW_HEIGHT: f32 = 34.0;
 const CONTROLS_TO_LATENCY_GAP: f32 = 8.0;
 const LATENCY_TO_BASE_GAP: f32 = 8.0;
 const BASE_PANEL_HEIGHT: f32 = 58.0;
 const VOICE_EXTRA_HEIGHT: f32 =
     VOICE_ROW_HEIGHT + LATENCY_ROW_HEIGHT + CONTROLS_TO_LATENCY_GAP + LATENCY_TO_BASE_GAP;
 const STREAM_BUTTON_GAP: f32 = 4.0;
-const DISCONNECT_GAP: f32 = 4.0;
 const LATENCY_GRAPH_HEIGHT: f32 = 84.0;
+const STREAM_BUTTON_WIDTH: f32 = 42.0;
+const PRESET_BUTTON_WIDTH: f32 = 82.0;
+const STREAM_AUDIO_BUTTON_WIDTH: f32 = 32.0;
+const DISCONNECT_BUTTON_WIDTH: f32 = 38.0;
+const LATENCY_LABEL_GAP: f32 = 8.0;
 
 pub fn panel_height(in_voice_channel: bool) -> f32 {
     if in_voice_channel {
@@ -32,6 +36,7 @@ pub fn panel_height(in_voice_channel: bool) -> f32 {
 pub enum BottomPanelAction {
     SetMicMuted(bool),
     SetDeafened(bool),
+    SetScreenAudioMuted(bool),
     OpenSettings,
     OpenStreamPicker,
     StopStream,
@@ -49,6 +54,13 @@ pub struct BottomPanelVoiceSnapshot {
     pub speaking: bool,
     pub latency_ms: Option<f32>,
     pub latency_history_ms: Vec<f32>,
+    pub screen_audio_muted: bool,
+    pub voice_connection_label: Option<String>,
+    pub stream_fps: Option<f32>,
+    pub resolution: Option<(u32, u32)>,
+    pub outgoing_speed_mbps: Option<f32>,
+    pub encoding_path: Option<String>,
+    pub decoding_path: Option<String>,
 }
 
 pub struct BottomPanelParams<'a> {
@@ -78,6 +90,11 @@ pub fn show(ui: &mut egui::Ui, params: BottomPanelParams<'_>) {
         egui::vec2(content_rect.width(), BASE_ROW_HEIGHT),
     );
 
+    ui.allocate_ui_at_rect(base_row_rect, |ui| {
+        ui.set_width(base_row_rect.width());
+        base_user_row(ui, theme, user_display, &voice, avatar_texture, on_action);
+    });
+
     if voice.in_voice_channel {
         let latency_row_rect = egui::Rect::from_min_size(
             egui::pos2(
@@ -93,6 +110,7 @@ pub fn show(ui: &mut egui::Ui, params: BottomPanelParams<'_>) {
             ),
             egui::vec2(content_rect.width(), VOICE_ROW_HEIGHT),
         );
+
         ui.allocate_ui_at_rect(voice_row_rect, |ui| {
             ui.set_width(voice_row_rect.width());
             voice_controls_row(ui, theme, &voice, on_action);
@@ -102,11 +120,6 @@ pub fn show(ui: &mut egui::Ui, params: BottomPanelParams<'_>) {
             voice_latency_row(ui, theme, &voice);
         });
     }
-
-    ui.allocate_ui_at_rect(base_row_rect, |ui| {
-        ui.set_width(base_row_rect.width());
-        base_user_row(ui, theme, user_display, &voice, avatar_texture, on_action);
-    });
 }
 
 fn base_user_row(
@@ -144,19 +157,13 @@ fn base_user_row(
                         .strong()
                         .color(theme.text_primary),
                 );
-                ui.label(
-                    egui::RichText::new(if voice.in_voice_channel {
-                        "В голосовом канале"
-                    } else {
-                        "В сети"
-                    })
-                    .size(11.0)
-                    .color(if voice.in_voice_channel {
-                        theme.success
-                    } else {
-                        theme.text_muted
-                    }),
-                );
+                if !voice.in_voice_channel {
+                    ui.label(
+                        egui::RichText::new("В сети")
+                            .size(11.0)
+                            .color(theme.text_muted),
+                    );
+                }
             },
         );
 
@@ -207,53 +214,47 @@ fn voice_controls_row(
     on_action: &mut dyn FnMut(BottomPanelAction),
 ) {
     let row_rect = ui.max_rect();
-    let disconnect_width = 38.0;
-    let preset_width = 102.0;
-    let main_width = (row_rect.width()
-        - preset_width
-        - disconnect_width
-        - STREAM_BUTTON_GAP
-        - DISCONNECT_GAP)
-        .max(92.0);
     let stream_rect = egui::Rect::from_min_size(
         row_rect.min,
-        egui::vec2(main_width, VOICE_ROW_HEIGHT),
+        egui::vec2(STREAM_BUTTON_WIDTH, VOICE_ROW_HEIGHT),
     );
     let preset_rect = egui::Rect::from_min_size(
         egui::pos2(stream_rect.right() + STREAM_BUTTON_GAP, row_rect.top()),
-        egui::vec2(preset_width, VOICE_ROW_HEIGHT),
+        egui::vec2(PRESET_BUTTON_WIDTH, VOICE_ROW_HEIGHT),
+    );
+    let stream_audio_rect = egui::Rect::from_min_size(
+        egui::pos2(preset_rect.right() + STREAM_BUTTON_GAP, row_rect.top()),
+        egui::vec2(STREAM_AUDIO_BUTTON_WIDTH, VOICE_ROW_HEIGHT),
     );
     let leave_rect = egui::Rect::from_min_size(
-        egui::pos2(preset_rect.right() + DISCONNECT_GAP, row_rect.top()),
-        egui::vec2(disconnect_width, VOICE_ROW_HEIGHT),
+        egui::pos2(row_rect.right() - DISCONNECT_BUTTON_WIDTH, row_rect.top()),
+        egui::vec2(DISCONNECT_BUTTON_WIDTH, VOICE_ROW_HEIGHT),
     );
 
-    let stream_label = if voice.screen_on {
-        "Остановить трансляцию"
-    } else {
-        "Начать трансляцию"
-    };
-    let stream_response = ui.put(
-        stream_rect,
-        egui::Button::new(
-            egui::RichText::new(stream_label)
-                .size(12.5)
-                .color(theme.text_primary),
+    let stream_response = ui
+        .put(
+            stream_rect,
+            egui::Button::new("")
+                .min_size(stream_rect.size())
+                .fill(if voice.screen_on {
+                    theme.success
+                } else {
+                    theme.accent
+                })
+                .stroke(egui::Stroke::NONE)
+                .rounding(egui::Rounding {
+                    nw: 6.0,
+                    ne: 0.0,
+                    sw: 6.0,
+                    se: 0.0,
+                }),
         )
-        .min_size(stream_rect.size())
-        .fill(if voice.screen_on {
-            theme.success
+        .on_hover_text(if voice.screen_on {
+            "Остановить трансляцию"
         } else {
-            theme.accent
-        })
-        .stroke(egui::Stroke::NONE)
-        .rounding(egui::Rounding {
-            nw: 6.0,
-            ne: 0.0,
-            sw: 6.0,
-            se: 0.0,
-        }),
-    );
+            "Начать трансляцию"
+        });
+    paint_stream_icon(ui.painter(), stream_response.rect, theme.text_primary);
     if stream_response.clicked() {
         if voice.screen_on {
             on_action(BottomPanelAction::StopStream);
@@ -268,7 +269,7 @@ fn voice_controls_row(
             preset_rect,
             egui::Button::new(
                 egui::RichText::new(preset_button_label(voice.screen_preset))
-                    .size(11.0)
+                    .size(10.0)
                     .color(theme.text_primary),
             )
             .min_size(preset_rect.size())
@@ -295,7 +296,7 @@ fn voice_controls_row(
         &preset_response,
         egui::popup::PopupCloseBehavior::CloseOnClickOutside,
         |ui| {
-            ui.set_min_width(preset_width.max(preset_response.rect.width()));
+            ui.set_min_width(PRESET_BUTTON_WIDTH.max(preset_response.rect.width()));
             for &preset in ScreenPreset::ALL {
                 if ui
                     .selectable_label(preset == voice.screen_preset, preset.label())
@@ -307,6 +308,36 @@ fn voice_controls_row(
             }
         },
     );
+
+    let stream_audio_response = ui
+        .put(
+            stream_audio_rect,
+            egui::Button::new("")
+                .min_size(stream_audio_rect.size())
+                .fill(if voice.screen_audio_muted {
+                    theme.error
+                } else {
+                    theme.success
+                })
+                .stroke(egui::Stroke::NONE)
+                .rounding(egui::Rounding::same(6.0)),
+        )
+        .on_hover_text(if voice.screen_audio_muted {
+            "Включить звук трансляции"
+        } else {
+            "Выключить звук трансляции"
+        });
+    paint_stream_audio_icon(
+        ui.painter(),
+        stream_audio_response.rect,
+        theme.text_primary,
+        voice.screen_audio_muted,
+    );
+    if stream_audio_response.clicked() {
+        on_action(BottomPanelAction::SetScreenAudioMuted(
+            !voice.screen_audio_muted,
+        ));
+    }
 
     let leave = ui.put(
         leave_rect,
@@ -330,7 +361,7 @@ fn voice_latency_row(ui: &mut egui::Ui, theme: &Theme, voice: &BottomPanelVoiceS
     let popup_id = ui.make_persistent_id("bottom_voice_latency_popup");
     let button_rect = egui::Rect::from_min_size(
         egui::pos2(
-            row_rect.right() - LATENCY_BUTTON_SIZE.x,
+            row_rect.left(),
             row_rect.center().y - LATENCY_BUTTON_SIZE.y * 0.5,
         ),
         LATENCY_BUTTON_SIZE,
@@ -350,10 +381,39 @@ fn voice_latency_row(ui: &mut egui::Ui, theme: &Theme, voice: &BottomPanelVoiceS
                 .rounding(egui::Rounding::same(6.0)),
         )
         .on_hover_text(tooltip);
-    paint_wifi_icon(ui.painter(), response.rect.shrink2(egui::vec2(5.0, 3.0)), indicator_color);
+    paint_wifi_icon(
+        ui.painter(),
+        response.rect.shrink2(egui::vec2(5.0, 3.0)),
+        indicator_color,
+    );
     if response.clicked() {
         ui.memory_mut(|mem| mem.toggle_popup(popup_id));
     }
+
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(button_rect.right() + LATENCY_LABEL_GAP, row_rect.top()),
+        egui::pos2(row_rect.right(), row_rect.bottom()),
+    );
+    let connection_label = voice
+        .voice_connection_label
+        .as_deref()
+        .unwrap_or("Сервер / Голосовой канал");
+    ui.allocate_ui_at_rect(text_rect, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+            ui.label(
+                egui::RichText::new("В голосовом канале")
+                    .size(12.0)
+                    .color(theme.text_primary),
+            );
+            ui.label(
+                egui::RichText::new(connection_label)
+                    .size(10.5)
+                    .color(theme.text_muted),
+            );
+        });
+    });
+
     egui::popup::popup_below_widget(
         ui,
         popup_id,
@@ -365,12 +425,8 @@ fn voice_latency_row(ui: &mut egui::Ui, theme: &Theme, voice: &BottomPanelVoiceS
     );
 }
 
-fn latency_popup_contents(
-    ui: &mut egui::Ui,
-    theme: &Theme,
-    voice: &BottomPanelVoiceSnapshot,
-) {
-    ui.set_min_width(220.0);
+fn latency_popup_contents(ui: &mut egui::Ui, theme: &Theme, voice: &BottomPanelVoiceSnapshot) {
+    ui.set_min_width(290.0);
     ui.label(
         egui::RichText::new("Задержка соединения")
             .size(13.0)
@@ -434,6 +490,56 @@ fn latency_popup_contents(
             );
         });
     });
+
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(8.0);
+
+    popup_stat_row(
+        ui,
+        theme,
+        "ФПС трансляции",
+        voice
+            .stream_fps
+            .map(|fps| format!("{fps:.1}"))
+            .unwrap_or_else(|| "—".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Разрешение",
+        voice
+            .resolution
+            .map(|(width, height)| format!("{width}×{height}"))
+            .unwrap_or_else(|| "—".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Исходящая скорость",
+        voice
+            .outgoing_speed_mbps
+            .map(|speed| format!("{speed:.2} Мбит/с"))
+            .unwrap_or_else(|| "—".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Кодирование",
+        voice
+            .encoding_path
+            .clone()
+            .unwrap_or_else(|| "—".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Декодирование",
+        voice
+            .decoding_path
+            .clone()
+            .unwrap_or_else(|| "—".to_string()),
+    );
 }
 
 fn latency_graph(
@@ -482,7 +588,10 @@ fn latency_graph(
                 egui::pos2(plot_rect.left(), y),
                 egui::pos2(plot_rect.right(), y),
             ],
-            egui::Stroke::new(1.0, Theme::lerp_color(theme.border, theme.bg_quaternary, 0.45)),
+            egui::Stroke::new(
+                1.0,
+                Theme::lerp_color(theme.border, theme.bg_quaternary, 0.45),
+            ),
         );
     }
 
@@ -530,8 +639,8 @@ fn latency_min_max(latency_history_ms: &[f32]) -> Option<(f32, f32)> {
 
 fn latency_indicator_color(theme: &Theme, latency_ms: Option<f32>) -> egui::Color32 {
     match latency_ms {
-        Some(latency) if latency < 80.0 => theme.success,
-        Some(latency) if latency < 140.0 => theme.warning,
+        Some(latency) if latency <= 50.0 => theme.success,
+        Some(latency) if latency < 150.0 => theme.warning,
         Some(_) => theme.error,
         None => theme.text_muted,
     }
@@ -549,9 +658,107 @@ fn paint_wifi_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color
     painter.circle_filled(egui::pos2(center.x, center.y + 2.0), 1.8, color);
 }
 
+fn paint_stream_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let icon_rect = rect.shrink2(egui::vec2(8.0, 7.0));
+    let screen_rect = egui::Rect::from_min_max(
+        egui::pos2(icon_rect.left(), icon_rect.top() + 1.0),
+        egui::pos2(icon_rect.left() + 13.0, icon_rect.top() + 10.0),
+    );
+    let stroke = egui::Stroke::new(1.35, color);
+
+    painter.rect_stroke(screen_rect, egui::Rounding::same(1.5), stroke);
+    painter.line_segment(
+        [
+            egui::pos2(screen_rect.center().x, screen_rect.bottom()),
+            egui::pos2(screen_rect.center().x, screen_rect.bottom() + 3.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(screen_rect.left() + 2.0, screen_rect.bottom() + 3.6),
+            egui::pos2(screen_rect.right() - 2.0, screen_rect.bottom() + 3.6),
+        ],
+        stroke,
+    );
+
+    let arrow_y = screen_rect.center().y;
+    let arrow_start = egui::pos2(screen_rect.right() + 2.5, arrow_y);
+    let arrow_end = egui::pos2(icon_rect.right(), arrow_y);
+    painter.line_segment([arrow_start, arrow_end], stroke);
+    painter.line_segment(
+        [egui::pos2(arrow_end.x - 3.2, arrow_y - 2.5), arrow_end],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(arrow_end.x - 3.2, arrow_y + 2.5), arrow_end],
+        stroke,
+    );
+}
+
+fn paint_stream_audio_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    color: egui::Color32,
+    muted: bool,
+) {
+    let stroke = egui::Stroke::new(1.35, color);
+    let icon_rect = rect.shrink2(egui::vec2(8.0, 7.0));
+
+    let speaker_points = vec![
+        egui::pos2(icon_rect.left(), icon_rect.center().y - 2.0),
+        egui::pos2(icon_rect.left() + 3.0, icon_rect.center().y - 2.0),
+        egui::pos2(icon_rect.left() + 6.5, icon_rect.top()),
+        egui::pos2(icon_rect.left() + 6.5, icon_rect.bottom()),
+        egui::pos2(icon_rect.left() + 3.0, icon_rect.center().y + 2.0),
+        egui::pos2(icon_rect.left(), icon_rect.center().y + 2.0),
+    ];
+    painter.add(egui::Shape::closed_line(speaker_points, stroke));
+
+    if muted {
+        painter.line_segment(
+            [
+                egui::pos2(icon_rect.left() + 9.0, icon_rect.top() + 0.5),
+                egui::pos2(icon_rect.right(), icon_rect.bottom() - 0.5),
+            ],
+            stroke,
+        );
+        painter.line_segment(
+            [
+                egui::pos2(icon_rect.left() + 9.0, icon_rect.bottom() - 0.5),
+                egui::pos2(icon_rect.right(), icon_rect.top() + 0.5),
+            ],
+            stroke,
+        );
+    } else {
+        let center = egui::pos2(icon_rect.left() + 8.2, icon_rect.center().y);
+        for radius in [3.0, 5.5] {
+            painter.add(egui::Shape::line(
+                speaker_wave_points(center, radius, 8),
+                stroke,
+            ));
+        }
+    }
+}
+
 fn wifi_arc_points(center: egui::Pos2, radius: f32, segments: usize) -> Vec<egui::Pos2> {
     let start_angle = std::f32::consts::PI * 1.20;
     let end_angle = std::f32::consts::PI * 1.80;
+    (0..=segments)
+        .map(|step| {
+            let t = step as f32 / segments as f32;
+            let angle = egui::lerp(start_angle..=end_angle, t);
+            egui::pos2(
+                center.x + angle.cos() * radius,
+                center.y + angle.sin() * radius,
+            )
+        })
+        .collect()
+}
+
+fn speaker_wave_points(center: egui::Pos2, radius: f32, segments: usize) -> Vec<egui::Pos2> {
+    let start_angle = -0.65;
+    let end_angle = 0.65;
     (0..=segments)
         .map(|step| {
             let t = step as f32 / segments as f32;
@@ -590,14 +797,29 @@ fn icon_button(
 
 fn preset_button_label(preset: ScreenPreset) -> &'static str {
     match preset {
-        ScreenPreset::P720F30 => "720p 30fps",
-        ScreenPreset::P720F60 => "720p 60fps",
-        ScreenPreset::P720F120 => "720p 120fps",
-        ScreenPreset::P1080F30 => "1080p 30fps",
-        ScreenPreset::P1080F60 => "1080p 60fps",
-        ScreenPreset::P1080F120 => "1080p 120fps",
-        ScreenPreset::P1440F30 => "1440p 30fps",
-        ScreenPreset::P1440F60 => "1440p 60fps",
-        ScreenPreset::P1440F90 => "1440p 90fps",
+        ScreenPreset::P720F30 => "720p30",
+        ScreenPreset::P720F60 => "720p60",
+        ScreenPreset::P720F120 => "720p120",
+        ScreenPreset::P1080F30 => "1080p30",
+        ScreenPreset::P1080F60 => "1080p60",
+        ScreenPreset::P1080F120 => "1080p120",
+        ScreenPreset::P1440F30 => "1440p30",
+        ScreenPreset::P1440F60 => "1440p60",
+        ScreenPreset::P1440F90 => "1440p90",
     }
+}
+
+fn popup_stat_row(ui: &mut egui::Ui, theme: &Theme, label: &str, value: String) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new(format!("{label}:"))
+                .size(11.0)
+                .color(theme.text_muted),
+        );
+        ui.label(
+            egui::RichText::new(value)
+                .size(11.0)
+                .color(theme.text_primary),
+        );
+    });
 }
