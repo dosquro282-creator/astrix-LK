@@ -11,7 +11,9 @@ async fn main() -> eframe::Result<()> {
         .unwrap_or(false);
 
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size(egui::vec2(1200.0, 800.0)),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size(egui::vec2(1200.0, 800.0))
+            .with_min_inner_size(egui::vec2(800.0, 600.0)),
         vsync,
         ..Default::default()
     };

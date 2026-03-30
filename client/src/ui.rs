@@ -717,6 +717,7 @@ pub(crate) struct VoiceState {
     pub(crate) participants: Vec<VoiceParticipant>,
     pub(crate) mic_muted: bool,
     pub(crate) output_muted: bool,
+    pub(crate) deafened_via_toggle: bool,
     pub(crate) local_volumes: HashMap<i64, f32>,
     pub(crate) locally_muted: HashSet<i64>,
     pub(crate) stream_volumes: HashMap<i64, f32>,
@@ -740,6 +741,7 @@ impl Default for VoiceState {
             participants: Vec::new(),
             mic_muted: false,
             output_muted: false,
+            deafened_via_toggle: false,
             local_volumes: HashMap::new(),
             locally_muted: HashSet::new(),
             stream_volumes: HashMap::new(),
@@ -1714,6 +1716,24 @@ fn set_local_mic_muted(
     user_id: Option<i64>,
     muted: bool,
 ) {
+    if state.main.voice.deafened_via_toggle
+        && state.main.voice.output_muted
+        && state.main.voice.mic_muted != muted
+    {
+        state.main.voice.deafened_via_toggle = false;
+        apply_local_output_muted(ctx, state, engine_tx, false);
+    }
+    apply_local_mic_muted(ctx, state, api, engine_tx, user_id, muted);
+}
+
+fn apply_local_mic_muted(
+    ctx: &egui::Context,
+    state: &mut State,
+    api: &ApiClient,
+    engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: Option<i64>,
+    muted: bool,
+) {
     state.main.voice.mic_muted = muted;
     if let Some(tx) = engine_tx {
         tx.send(VoiceCmd::SetMicMuted(muted)).ok();
@@ -1724,6 +1744,16 @@ fn set_local_mic_muted(
 }
 
 fn set_local_output_muted(
+    ctx: &egui::Context,
+    state: &mut State,
+    engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    muted: bool,
+) {
+    state.main.voice.deafened_via_toggle = false;
+    apply_local_output_muted(ctx, state, engine_tx, muted);
+}
+
+fn apply_local_output_muted(
     ctx: &egui::Context,
     state: &mut State,
     engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
@@ -1744,8 +1774,9 @@ fn set_local_deafened(
     user_id: Option<i64>,
     deafened: bool,
 ) {
-    set_local_output_muted(ctx, state, engine_tx, deafened);
-    set_local_mic_muted(ctx, state, api, engine_tx, user_id, deafened);
+    state.main.voice.deafened_via_toggle = deafened;
+    apply_local_output_muted(ctx, state, engine_tx, deafened);
+    apply_local_mic_muted(ctx, state, api, engine_tx, user_id, deafened);
 }
 
 fn open_screen_share_picker(ctx: &egui::Context, state: &mut State, start_after_pick: bool) {
@@ -3832,6 +3863,7 @@ pub(crate) fn main_screen(
                 if in_this_voice {
                     ctx.request_repaint_after(std::time::Duration::from_millis(80));
                 }
+                let voice_viewport = ui.available_rect_before_wrap();
                 if participants.is_empty() {
                     ui.centered_and_justified(|ui| {
                         ui.label(if in_this_voice {
@@ -4327,6 +4359,7 @@ pub(crate) fn main_screen(
                         });
                     }
                 }
+                show_voice_grid_members_toggle_button(ui, theme, state, voice_viewport);
             }
         });
 
@@ -4545,6 +4578,8 @@ const VOICE_GRID_TILE_ASPECT: f32 = 16.0 / 9.0;
 const VOICE_GRID_TILE_GAP: f32 = 14.0;
 const VOICE_GRID_TILE_ROUNDING: f32 = 16.0;
 const VOICE_GRID_TILE_PADDING: f32 = 12.0;
+const VOICE_GRID_MEMBERS_BUTTON_SIZE: f32 = 30.0;
+const VOICE_GRID_MEMBERS_BUTTON_MARGIN: f32 = 10.0;
 
 #[derive(Clone, Copy)]
 struct VoiceGridLayout {
@@ -4697,6 +4732,60 @@ fn show_voice_grid(
                 *speaking_snap.get(&participant.user_id).unwrap_or(&false),
             );
         }
+    }
+}
+
+fn show_voice_grid_members_toggle_button(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    state: &mut State,
+    viewport: egui::Rect,
+) {
+    if viewport.width() <= 1.0 || viewport.height() <= 1.0 {
+        return;
+    }
+
+    let show_members = state.main.show_member_panel.unwrap_or(true);
+    let tooltip = if show_members {
+        "Скрыть участников"
+    } else {
+        "Показать панель участников"
+    };
+    let button_size = egui::vec2(
+        VOICE_GRID_MEMBERS_BUTTON_SIZE,
+        VOICE_GRID_MEMBERS_BUTTON_SIZE,
+    );
+    let button_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            (viewport.right() - VOICE_GRID_MEMBERS_BUTTON_MARGIN - button_size.x)
+                .max(viewport.left()),
+            viewport.top() + VOICE_GRID_MEMBERS_BUTTON_MARGIN,
+        ),
+        button_size,
+    );
+    let fill = if show_members {
+        Theme::lerp_color(theme.bg_quaternary, theme.bg_hover, 0.22)
+    } else {
+        Theme::lerp_color(theme.bg_quaternary, theme.accent, 0.18)
+    };
+    let text_color = if show_members {
+        theme.text_secondary
+    } else {
+        theme.text_primary
+    };
+    let response = ui
+        .put(
+            button_rect,
+            egui::Button::new(egui::RichText::new("M").size(12.0).color(text_color))
+                .fill(fill)
+                .stroke(egui::Stroke::new(1.0, theme.border))
+                .rounding(egui::Rounding::same(8.0)),
+        )
+        .on_hover_text(tooltip);
+
+    if response.clicked() {
+        state.main.show_member_panel = Some(!show_members);
+        ui.ctx().request_repaint();
     }
 }
 
