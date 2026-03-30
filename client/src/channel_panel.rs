@@ -235,7 +235,8 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
 
                     if let Some(participants) = voice.channel_voice.get(id) {
                         for participant in participants {
-                            let is_locally_muted = voice.locally_muted.contains(&participant.user_id);
+                            let is_locally_muted =
+                                voice.locally_muted.contains(&participant.user_id);
                             let row = voice_participant_row(
                                 ui,
                                 theme,

@@ -134,7 +134,7 @@ pub(crate) struct Settings {
     /// Путь декодирования входящего видео: "cpu" (OpenH264) или "mft" (Media Foundation).
     #[serde(default)]
     pub(crate) decode_path: String,
-    /// Legacy gamma override for the GPU decode path. Normally keep 0; non-zero darkens the image.
+    /// Retired legacy gamma override kept only for config migration. It is forced to 0 on load.
     #[serde(default = "default_video_decoder_gamma")]
     pub(crate) video_decoder_gamma: f32,
     #[serde(default)]
@@ -270,14 +270,15 @@ impl Settings {
         if s.migrate_saved_accounts() {
             should_save = true;
         }
+        if s.video_decoder_gamma.abs() > f32::EPSILON {
+            eprintln!(
+                "[video] clearing retired decoder gamma override {:.2} -> 0.00",
+                s.video_decoder_gamma
+            );
+            s.video_decoder_gamma = 0.0;
+            should_save = true;
+        }
         if !s.video_decoder_gamma_migrated_v2 {
-            if s.video_decoder_gamma > 0.0 && s.video_decoder_gamma <= 0.75 {
-                eprintln!(
-                    "[video] resetting legacy decoder gamma workaround {:.2} -> 0.00 after GPU video color-path fix",
-                    s.video_decoder_gamma
-                );
-                s.video_decoder_gamma = 0.0;
-            }
             s.video_decoder_gamma_migrated_v2 = true;
             should_save = true;
         }
@@ -777,6 +778,18 @@ impl Default for ScreenSourceTab {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsSection {
+    Account,
+    VoiceVideo,
+}
+
+impl Default for SettingsSection {
+    fn default() -> Self {
+        Self::Account
+    }
+}
+
 pub(crate) struct MainState {
     pub(crate) servers: Vec<Server>,
     pub(crate) channels: Vec<Channel>,
@@ -800,6 +813,7 @@ pub(crate) struct MainState {
     pub(crate) show_create_channel_dialog: bool,
     pub(crate) show_invite_dialog: bool,
     pub(crate) show_settings_dialog: bool,
+    pub(crate) settings_section: SettingsSection,
     pub(crate) new_channel_name: String,
     pub(crate) new_channel_is_voice: bool,
     pub(crate) current_channel_key: Option<ChannelKey>,
@@ -882,6 +896,7 @@ impl Clone for MainState {
             show_create_channel_dialog: self.show_create_channel_dialog,
             show_invite_dialog: self.show_invite_dialog,
             show_settings_dialog: self.show_settings_dialog,
+            settings_section: self.settings_section,
             new_channel_name: self.new_channel_name.clone(),
             new_channel_is_voice: self.new_channel_is_voice,
             current_channel_key: self.current_channel_key.clone(),
@@ -956,6 +971,7 @@ impl Default for MainState {
             show_create_channel_dialog: false,
             show_invite_dialog: false,
             show_settings_dialog: false,
+            settings_section: SettingsSection::default(),
             new_channel_name: String::new(),
             new_channel_is_voice: false,
             current_channel_key: None,
@@ -2459,6 +2475,38 @@ pub(crate) fn main_screen(
         .find(|c| Some(c.id) == state.main.selected_channel)
         .map(|c| c.r#type == "text")
         .unwrap_or(false);
+    let settings_overlay_rect = ctx.screen_rect();
+    let settings_window_rect = egui::Rect::from_min_max(
+        settings_overlay_rect.min + egui::vec2(100.0, 50.0),
+        settings_overlay_rect.max - egui::vec2(100.0, 50.0),
+    );
+    let settings_window_size = egui::vec2(
+        settings_window_rect.width().max(360.0),
+        settings_window_rect.height().max(320.0),
+    );
+    let settings_window_frame = egui::Frame::window(ctx.style().as_ref());
+    let settings_window_margin = settings_window_frame.inner_margin;
+    let settings_window_border_padding = settings_window_frame.stroke.width / 2.0;
+    let mut settings_window_inner_margin = settings_window_margin;
+    settings_window_inner_margin += settings_window_border_padding;
+    let settings_title_bar_height = egui::TextStyle::Heading
+        .resolve(ctx.style().as_ref())
+        .size
+        .max(ctx.style().spacing.interact_size.y)
+        + settings_window_margin.top
+        + settings_window_margin.bottom;
+    let settings_window_chrome = settings_window_frame.outer_margin.sum()
+        + settings_window_inner_margin.sum()
+        + egui::vec2(0.0, settings_title_bar_height);
+    let settings_window_inner_size = egui::vec2(
+        (settings_window_size.x - settings_window_chrome.x).max(0.0),
+        (settings_window_size.y - settings_window_chrome.y).max(0.0),
+    );
+    let settings_scroll_max_height = (settings_window_inner_size.y - 92.0).max(120.0);
+    let settings_menu_width = (settings_window_size.x * 0.22).clamp(170.0, 230.0);
+    let settings_content_width = (settings_window_size.x - settings_menu_width - 40.0).max(180.0);
+    let settings_group_width = (settings_content_width - 20.0).max(160.0);
+    let settings_input_width = (settings_group_width - 32.0).max(160.0);
 
     // ── Dialog: voice server switch confirmation ──────────────────────────
     if let Some((target_ch, target_srv)) = state.main.voice_switch_confirm {
@@ -2789,39 +2837,161 @@ pub(crate) fn main_screen(
     // ── Dialog: user settings ─────────────────────────────────────────────
     if state.main.show_settings_dialog {
         let mut should_close = false;
+        let mut settings_open = true;
         let mut do_nick = false;
         let mut do_avatar = false;
         let mut new_input_vol: Option<f32> = None;
         let mut new_input_sensitivity: Option<f32> = None;
         let mut new_output_vol: Option<f32> = None;
-        egui::Window::new("Настройки")
-            .collapsible(false).resizable(false)
-            .min_width(260.0)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        egui::Area::new(egui::Id::new("settings_backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(settings_overlay_rect.min)
             .show(ctx, |ui| {
-                ui.heading("Профиль");
-                ui.add_space(6.0);
-                ui.label("Никнейм на сервере:");
-                ui.add(egui::TextEdit::singleline(&mut state.main.settings_nickname_input)
-                    .hint_text("Ваш ник").desired_width(220.0));
-                if ui.button("Сохранить никнейм").clicked() {
-                    do_nick = true;
-                }
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(6.0);
-                ui.label("Аватарка:");
-                if ui.button("Выбрать файл...").clicked() {
-                    do_avatar = true;
-                }
-                if let Some(ref p) = state.main.settings_avatar_path {
-                    ui.label(egui::RichText::new(p.display().to_string()).small().weak());
-                }
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(6.0);
-                ui.heading("Голос");
-                ui.add_space(6.0);
+                let (rect, _response) = ui.allocate_exact_size(
+                    settings_overlay_rect.size(),
+                    egui::Sense::click_and_drag(),
+                );
+                ui.painter().rect_filled(
+                    rect,
+                    egui::Rounding::ZERO,
+                    egui::Color32::from_black_alpha(170),
+                );
+            });
+        egui::Window::new("Настройки")
+            .order(egui::Order::Foreground)
+            .open(&mut settings_open)
+            .collapsible(false)
+            .resizable(false)
+            .vscroll(true)
+            .fixed_pos(settings_window_rect.min)
+            .fixed_size(settings_window_inner_size)
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(settings_menu_width);
+                            ui.heading("Разделы");
+                            ui.add_space(10.0);
+
+                            let account_selected =
+                                state.main.settings_section == SettingsSection::Account;
+                            if ui
+                                .add_sized(
+                                    [settings_menu_width - 10.0, 34.0],
+                                    egui::SelectableLabel::new(account_selected, "Аккаунт"),
+                                )
+                                .clicked()
+                            {
+                                state.main.settings_section = SettingsSection::Account;
+                            }
+
+                            let voice_video_selected =
+                                state.main.settings_section == SettingsSection::VoiceVideo;
+                            if ui
+                                .add_sized(
+                                    [settings_menu_width - 10.0, 34.0],
+                                    egui::SelectableLabel::new(
+                                        voice_video_selected,
+                                        "Голос и видео",
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                state.main.settings_section = SettingsSection::VoiceVideo;
+                            }
+                        });
+
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+
+                        egui::ScrollArea::vertical()
+                            .id_source("settings_dialog_scroll")
+                            .max_height(settings_scroll_max_height)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.set_min_width(settings_content_width);
+                                ui.vertical(|ui| match state.main.settings_section {
+                                SettingsSection::Account => {
+                                    ui.heading("Аккаунт");
+                                    ui.add_space(4.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Управляйте тем, как вас видят на сервере.",
+                                        )
+                                        .small()
+                                        .weak(),
+                                    );
+                                    ui.add_space(12.0);
+
+                                    ui.group(|ui| {
+                                        ui.set_min_width(settings_group_width);
+                                        ui.label(egui::RichText::new("Смена никнейма").strong());
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Никнейм меняется только для текущего сервера.",
+                                            )
+                                            .small()
+                                            .weak(),
+                                        );
+                                        ui.add_space(8.0);
+                                        ui.add(
+                                            egui::TextEdit::singleline(
+                                                &mut state.main.settings_nickname_input,
+                                            )
+                                            .hint_text("Ваш ник")
+                                            .desired_width(settings_input_width),
+                                        );
+                                        ui.add_space(8.0);
+                                        if ui.button("Сохранить никнейм").clicked() {
+                                            do_nick = true;
+                                        }
+                                    });
+
+                                    ui.add_space(10.0);
+
+                                    ui.group(|ui| {
+                                        ui.set_min_width(settings_group_width);
+                                        ui.label(egui::RichText::new("Изменение аватарки").strong());
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Поддерживаются PNG, JPG, GIF и WebP.",
+                                            )
+                                            .small()
+                                            .weak(),
+                                        );
+                                        ui.add_space(8.0);
+                                        if ui.button("Выбрать файл...").clicked() {
+                                            do_avatar = true;
+                                        }
+                                        if let Some(ref p) = state.main.settings_avatar_path {
+                                            ui.add_space(6.0);
+                                            ui.label(
+                                                egui::RichText::new(p.display().to_string())
+                                                    .small()
+                                                    .weak(),
+                                            );
+                                        }
+                                    });
+                                }
+                                SettingsSection::VoiceVideo => {
+                                    ui.heading("Голос и видео");
+                                    ui.add_space(4.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Настройки захвата, шумоподавления и воспроизведения.",
+                                        )
+                                        .small()
+                                        .weak(),
+                                    );
+                                    ui.add_space(12.0);
+
+                                    ui.group(|ui| {
+                                        ui.set_min_width(settings_group_width);
+                                        ui.heading("Голос");
+                                        ui.add_space(8.0);
                 ui.label(egui::RichText::new("Громкость микрофона:").small());
                 let mut iv = state.main.voice.input_volume;
                 let slider_in = egui::Slider::new(&mut iv, 0.0_f32..=2.0_f32)
@@ -3072,37 +3242,76 @@ pub(crate) fn main_screen(
                         .weak(),
                     );
                 }
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(6.0);
-                ui.heading("Видео");
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("Декодирование входящего видео:").small());
-                let mut dp: String = state.settings.decode_path.clone();
-                egui::ComboBox::from_id_source("decode_path")
-                    .selected_text(if dp == "mft" { "MFT (Media Foundation)" } else { "CPU (OpenH264)" })
-                    .show_ui(ui, |ui| {
-                        let _ = ui.selectable_value(&mut dp, "cpu".to_string(), "CPU (OpenH264)");
-                        let _ = ui.selectable_value(&mut dp, "mft".to_string(), "MFT (Media Foundation)");
+                                    });
+
+                                    ui.add_space(10.0);
+
+                                    ui.group(|ui| {
+                                        ui.set_min_width(settings_group_width);
+                                        ui.heading("Видео");
+                                        ui.add_space(8.0);
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Декодирование входящего видео:",
+                                            )
+                                            .small(),
+                                        );
+                                        let mut dp: String = state.settings.decode_path.clone();
+                                        egui::ComboBox::from_id_source("decode_path")
+                                            .selected_text(if dp == "mft" {
+                                                "MFT (Media Foundation)"
+                                            } else {
+                                                "CPU (OpenH264)"
+                                            })
+                                            .show_ui(ui, |ui| {
+                                                let _ = ui.selectable_value(
+                                                    &mut dp,
+                                                    "cpu".to_string(),
+                                                    "CPU (OpenH264)",
+                                                );
+                                                let _ = ui.selectable_value(
+                                                    &mut dp,
+                                                    "mft".to_string(),
+                                                    "MFT (Media Foundation)",
+                                                );
+                                            });
+                                        if dp != state.settings.decode_path {
+                                            state.settings.decode_path = dp;
+                                            state.settings.save();
+                                        }
+
+                                        ui.add_space(6.0);
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Ползунок гаммы удалён: цветокоррекция декодера больше не используется.",
+                                            )
+                                            .small()
+                                            .weak(),
+                                        );
+                                    });
+                                }
+                                });
+                            });
                     });
-                if dp != state.settings.decode_path {
-                    state.settings.decode_path = dp;
-                }
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("Гамма декодера (MFT, GPU): pow(rgb, 1/γ). 0 = выкл.").small());
-                ui.label(egui::RichText::new("Legacy note: after the color-path fix this should normally stay at 0. Non-zero values intentionally darken the image.").small());
-                let mut gamma = state.settings.video_decoder_gamma;
-                if ui.add(egui::Slider::new(&mut gamma, 0.0..=3.0).step_by(0.01).suffix("")).changed() {
-                    state.settings.video_decoder_gamma = gamma;
-                    #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-                    crate::d3d11_rgba::set_video_decoder_gamma(gamma);
-                }
-                ui.add_space(8.0);
-                if let Some(ref msg) = state.main.settings_msg {
-                    ui.label(msg);
-                }
-                if ui.button("Закрыть").clicked() { should_close = true; }
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if let Some(ref msg) = state.main.settings_msg {
+                            ui.label(msg);
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Закрыть").clicked() {
+                                should_close = true;
+                            }
+                        });
+                    });
+                });
             });
+        if !settings_open {
+            should_close = true;
+        }
 
         if let Some(v) = new_input_vol {
             state.main.voice.input_volume = v;
@@ -3173,6 +3382,7 @@ pub(crate) fn main_screen(
 
         if should_close {
             state.main.show_settings_dialog = false;
+            state.main.settings_avatar_path = None;
             state.main.settings_msg = None;
             state.settings.save();
         }
@@ -3495,7 +3705,9 @@ pub(crate) fn main_screen(
                 }
                 ChannelPanelAction::OpenSettings => {
                     state.main.show_settings_dialog = true;
+                    state.main.settings_section = SettingsSection::Account;
                     state.main.settings_nickname_input = state.main.my_display_name.clone();
+                    state.main.settings_avatar_path = None;
                     state.main.settings_msg = None;
                 }
                 ChannelPanelAction::Logout => {
@@ -3626,7 +3838,9 @@ pub(crate) fn main_screen(
                 }
                 BottomPanelAction::OpenSettings => {
                     state.main.show_settings_dialog = true;
+                    state.main.settings_section = SettingsSection::Account;
                     state.main.settings_nickname_input = state.main.my_display_name.clone();
+                    state.main.settings_avatar_path = None;
                     state.main.settings_msg = None;
                 }
                 BottomPanelAction::OpenStreamPicker => {
@@ -3918,477 +4132,511 @@ pub(crate) fn main_screen(
                         in_this_voice,
                     );
                     if false {
-                    let n = participants.len().max(1);
-                    let avail = ui.available_size_before_wrap();
-                    let (n_cols, tile_w, tile_h) = match n {
-                        1 => (1, (avail.x * 0.95).min(400.0), (avail.y * 0.6).min(300.0)),
-                        2 => (2, avail.x * 0.5 - 4.0, (avail.y * 0.5).min(280.0)),
-                        3 | 4 => (2, avail.x * 0.5 - 4.0, (avail.y * 0.45).min(220.0)),
-                        _ => {
-                            let cols = (n as f32).sqrt().ceil() as usize;
-                            let c = cols.max(1);
-                            let w = (avail.x / c as f32) - 4.0;
-                            let rows = (n + c - 1) / c;
-                            let h = (avail.y / rows as f32).min(180.0);
-                            (c, w, h)
-                        }
-                    };
-                    const ROUNDING: f32 = 12.0; // Rounded rectangles for avatars/video
+                        let n = participants.len().max(1);
+                        let avail = ui.available_size_before_wrap();
+                        let (n_cols, tile_w, tile_h) = match n {
+                            1 => (1, (avail.x * 0.95).min(400.0), (avail.y * 0.6).min(300.0)),
+                            2 => (2, avail.x * 0.5 - 4.0, (avail.y * 0.5).min(280.0)),
+                            3 | 4 => (2, avail.x * 0.5 - 4.0, (avail.y * 0.45).min(220.0)),
+                            _ => {
+                                let cols = (n as f32).sqrt().ceil() as usize;
+                                let c = cols.max(1);
+                                let w = (avail.x / c as f32) - 4.0;
+                                let rows = (n + c - 1) / c;
+                                let h = (avail.y / rows as f32).min(180.0);
+                                (c, w, h)
+                            }
+                        };
+                        const ROUNDING: f32 = 12.0; // Rounded rectangles for avatars/video
 
-                    egui::ScrollArea::vertical()
-                        .id_source("voice_grid_scroll")
-                        .show(ui, |ui| {
-                            for chunk in participants.chunks(n_cols) {
-                                ui.horizontal(|ui| {
-                                    for p in chunk {
-                                        ui.push_id(p.user_id, |ui| {
-                                            let (rect, resp) = ui.allocate_exact_size(
-                                                egui::vec2(tile_w, tile_h),
-                                                egui::Sense::hover(),
-                                            );
-                                            let is_speaking =
-                                                *speaking_snap.get(&p.user_id).unwrap_or(&false);
-                                            let is_locally_muted = in_this_voice
-                                                && state
-                                                    .main
-                                                    .voice
-                                                    .locally_muted
-                                                    .contains(&p.user_id);
-                                            let is_stream_subscribed = in_this_voice
-                                                && state
-                                                    .main
-                                                    .voice
-                                                    .stream_subscriptions
-                                                    .contains(&p.user_id);
-                                            let show_stream_preview = p.streaming
-                                                && in_this_voice
-                                                && !is_stream_subscribed;
+                        egui::ScrollArea::vertical()
+                            .id_source("voice_grid_scroll")
+                            .show(ui, |ui| {
+                                for chunk in participants.chunks(n_cols) {
+                                    ui.horizontal(|ui| {
+                                        for p in chunk {
+                                            ui.push_id(p.user_id, |ui| {
+                                                let (rect, resp) = ui.allocate_exact_size(
+                                                    egui::vec2(tile_w, tile_h),
+                                                    egui::Sense::hover(),
+                                                );
+                                                let is_speaking = *speaking_snap
+                                                    .get(&p.user_id)
+                                                    .unwrap_or(&false);
+                                                let is_locally_muted = in_this_voice
+                                                    && state
+                                                        .main
+                                                        .voice
+                                                        .locally_muted
+                                                        .contains(&p.user_id);
+                                                let is_stream_subscribed = in_this_voice
+                                                    && state
+                                                        .main
+                                                        .voice
+                                                        .stream_subscriptions
+                                                        .contains(&p.user_id);
+                                                let show_stream_preview = p.streaming
+                                                    && in_this_voice
+                                                    && !is_stream_subscribed;
 
-                                            // Background (rounded rect)
-                                            let fill = ui.visuals().faint_bg_color;
-                                            ui.painter().rect_filled(
-                                                rect,
-                                                egui::Rounding::same(ROUNDING),
-                                                fill,
-                                            );
+                                                // Background (rounded rect)
+                                                let fill = ui.visuals().faint_bg_color;
+                                                ui.painter().rect_filled(
+                                                    rect,
+                                                    egui::Rounding::same(ROUNDING),
+                                                    fill,
+                                                );
 
-                                            // Avatar/video area: prefer stream texture when p.streaming
-                                            let content_margin = 8.0;
-                                            let avatar_rect = rect.shrink2(egui::vec2(
-                                                content_margin,
-                                                content_margin,
-                                            ));
-                                            let avatar_rect = egui::Rect::from_min_max(
-                                                avatar_rect.min,
-                                                egui::pos2(
-                                                    avatar_rect.max.x,
-                                                    avatar_rect.min.y
-                                                        + (avatar_rect.height() * 0.72),
-                                                ),
-                                            );
-                                            let stream_key = video_frame_key(p.user_id, true);
-                                            let stream_preview_key =
-                                                video_preview_frame_key(p.user_id);
-                                            let camera_key = p.user_id;
-                                            let has_stream_texture = state
-                                                .main
-                                                .voice_video_gpu_textures
-                                                .contains_key(&stream_key)
-                                                || state
+                                                // Avatar/video area: prefer stream texture when p.streaming
+                                                let content_margin = 8.0;
+                                                let avatar_rect = rect.shrink2(egui::vec2(
+                                                    content_margin,
+                                                    content_margin,
+                                                ));
+                                                let avatar_rect = egui::Rect::from_min_max(
+                                                    avatar_rect.min,
+                                                    egui::pos2(
+                                                        avatar_rect.max.x,
+                                                        avatar_rect.min.y
+                                                            + (avatar_rect.height() * 0.72),
+                                                    ),
+                                                );
+                                                let stream_key = video_frame_key(p.user_id, true);
+                                                let stream_preview_key =
+                                                    video_preview_frame_key(p.user_id);
+                                                let camera_key = p.user_id;
+                                                let has_stream_texture = state
                                                     .main
-                                                    .voice_video_textures
-                                                    .contains_key(&stream_key);
-                                            let has_stream_preview_texture = state
-                                                .main
-                                                .voice_video_gpu_textures
-                                                .contains_key(&stream_preview_key)
-                                                || state
+                                                    .voice_video_gpu_textures
+                                                    .contains_key(&stream_key)
+                                                    || state
+                                                        .main
+                                                        .voice_video_textures
+                                                        .contains_key(&stream_key);
+                                                let has_stream_preview_texture = state
                                                     .main
-                                                    .voice_video_textures
-                                                    .contains_key(&stream_preview_key);
-                                            let has_camera_texture = state
-                                                .main
-                                                .voice_video_gpu_textures
-                                                .contains_key(&camera_key)
-                                                || state
+                                                    .voice_video_gpu_textures
+                                                    .contains_key(&stream_preview_key)
+                                                    || state
+                                                        .main
+                                                        .voice_video_textures
+                                                        .contains_key(&stream_preview_key);
+                                                let has_camera_texture = state
                                                     .main
-                                                    .voice_video_textures
-                                                    .contains_key(&camera_key);
-                                            let show_stream_connecting = p.streaming
-                                                && in_this_voice
-                                                && is_stream_subscribed
-                                                && !has_stream_texture;
-                                            let show_stream_controls = p.streaming
-                                                && in_this_voice
-                                                && is_stream_subscribed
-                                                && has_stream_texture;
-                                            let tex_key = if p.streaming {
-                                                if has_stream_texture {
-                                                    Some(stream_key)
-                                                } else if has_stream_preview_texture
-                                                    && !is_stream_subscribed
-                                                {
-                                                    Some(stream_preview_key)
+                                                    .voice_video_gpu_textures
+                                                    .contains_key(&camera_key)
+                                                    || state
+                                                        .main
+                                                        .voice_video_textures
+                                                        .contains_key(&camera_key);
+                                                let show_stream_connecting = p.streaming
+                                                    && in_this_voice
+                                                    && is_stream_subscribed
+                                                    && !has_stream_texture;
+                                                let show_stream_controls = p.streaming
+                                                    && in_this_voice
+                                                    && is_stream_subscribed
+                                                    && has_stream_texture;
+                                                let tex_key = if p.streaming {
+                                                    if has_stream_texture {
+                                                        Some(stream_key)
+                                                    } else if has_stream_preview_texture
+                                                        && !is_stream_subscribed
+                                                    {
+                                                        Some(stream_preview_key)
+                                                    } else {
+                                                        None
+                                                    }
+                                                } else if has_camera_texture {
+                                                    Some(camera_key)
                                                 } else {
                                                     None
-                                                }
-                                            } else if has_camera_texture {
-                                                Some(camera_key)
-                                            } else {
-                                                None
-                                            };
-                                            if let Some(key) = tex_key {
-                                                // Phase 3.5: prefer GPU zero-copy texture (TextureId::User),
-                                                // fall back to CPU-uploaded TextureHandle.
-                                                let rendered = if let Some(&(_, gl_tex_id, _, _)) =
-                                                    state.main.voice_video_gpu_textures.get(&key)
-                                                {
-                                                    paint_wgl_video_texture(
-                                                        ui,
-                                                        avatar_rect,
-                                                        gl_tex_id,
-                                                    );
-                                                    true
-                                                } else {
-                                                    false
                                                 };
-                                                if !rendered {
-                                                    if let Some(tex) =
-                                                        state.main.voice_video_textures.get(&key)
-                                                    {
-                                                        let size = avatar_rect.size();
-                                                        ui.put(
-                                                            avatar_rect,
-                                                            egui::Image::new(tex)
-                                                                .fit_to_exact_size(size),
-                                                        );
-                                                    }
-                                                }
-                                                if is_speaking && !p.streaming {
-                                                    ui.painter().rect_stroke(
-                                                        avatar_rect.expand(2.0),
-                                                        egui::Rounding::same(ROUNDING + 2.0),
-                                                        egui::Stroke::new(
-                                                            2.0,
-                                                            egui::Color32::from_rgb(67, 181, 129),
-                                                        ),
-                                                    );
-                                                }
-                                                if show_stream_preview {
-                                                    ui.painter().rect_filled(
-                                                        avatar_rect,
-                                                        egui::Rounding::same(ROUNDING),
-                                                        egui::Color32::from_black_alpha(120),
-                                                    );
-                                                    let watch_rect = egui::Rect::from_center_size(
-                                                        avatar_rect.center(),
-                                                        egui::vec2(120.0, 34.0),
-                                                    );
-                                                    ui.allocate_ui_at_rect(watch_rect, |ui| {
-                                                        if ui.button("Смотреть").clicked() {
-                                                            set_stream_subscription(
-                                                                state, engine_tx, p.user_id, true,
+                                                if let Some(key) = tex_key {
+                                                    // Phase 3.5: prefer GPU zero-copy texture (TextureId::User),
+                                                    // fall back to CPU-uploaded TextureHandle.
+                                                    let rendered =
+                                                        if let Some(&(_, gl_tex_id, _, _)) = state
+                                                            .main
+                                                            .voice_video_gpu_textures
+                                                            .get(&key)
+                                                        {
+                                                            paint_wgl_video_texture(
+                                                                ui,
+                                                                avatar_rect,
+                                                                gl_tex_id,
+                                                            );
+                                                            true
+                                                        } else {
+                                                            false
+                                                        };
+                                                    if !rendered {
+                                                        if let Some(tex) = state
+                                                            .main
+                                                            .voice_video_textures
+                                                            .get(&key)
+                                                        {
+                                                            let size = avatar_rect.size();
+                                                            ui.put(
+                                                                avatar_rect,
+                                                                egui::Image::new(tex)
+                                                                    .fit_to_exact_size(size),
                                                             );
                                                         }
-                                                    });
+                                                    }
+                                                    if is_speaking && !p.streaming {
+                                                        ui.painter().rect_stroke(
+                                                            avatar_rect.expand(2.0),
+                                                            egui::Rounding::same(ROUNDING + 2.0),
+                                                            egui::Stroke::new(
+                                                                2.0,
+                                                                egui::Color32::from_rgb(
+                                                                    67, 181, 129,
+                                                                ),
+                                                            ),
+                                                        );
+                                                    }
+                                                    if show_stream_preview {
+                                                        ui.painter().rect_filled(
+                                                            avatar_rect,
+                                                            egui::Rounding::same(ROUNDING),
+                                                            egui::Color32::from_black_alpha(120),
+                                                        );
+                                                        let watch_rect =
+                                                            egui::Rect::from_center_size(
+                                                                avatar_rect.center(),
+                                                                egui::vec2(120.0, 34.0),
+                                                            );
+                                                        ui.allocate_ui_at_rect(watch_rect, |ui| {
+                                                            if ui.button("Смотреть").clicked()
+                                                            {
+                                                                set_stream_subscription(
+                                                                    state, engine_tx, p.user_id,
+                                                                    true,
+                                                                );
+                                                            }
+                                                        });
+                                                    }
+                                                    if show_stream_connecting {
+                                                        ui.painter().rect_filled(
+                                                            avatar_rect,
+                                                            egui::Rounding::same(ROUNDING),
+                                                            egui::Color32::from_black_alpha(96),
+                                                        );
+                                                        ui.painter().text(
+                                                            avatar_rect.center(),
+                                                            egui::Align2::CENTER_CENTER,
+                                                            "Подключение...",
+                                                            egui::FontId::proportional(16.0),
+                                                            egui::Color32::WHITE,
+                                                        );
+                                                    }
+                                                    // Stream tile: overlay with fullscreen + mute in corner
+                                                    if show_stream_controls {
+                                                        let corner =
+                                                            avatar_rect.max - egui::vec2(4.0, 4.0);
+                                                        let btn_size = egui::vec2(28.0, 28.0);
+                                                        let fullscreen_rect =
+                                                            egui::Rect::from_min_size(
+                                                                corner
+                                                                    - egui::vec2(
+                                                                        btn_size.x * 2.0 + 4.0,
+                                                                        0.0,
+                                                                    ),
+                                                                btn_size,
+                                                            );
+                                                        let mute_rect = egui::Rect::from_min_size(
+                                                            corner - egui::vec2(btn_size.x, 0.0),
+                                                            btn_size,
+                                                        );
+                                                        ui.allocate_ui_at_rect(
+                                                            fullscreen_rect,
+                                                            |ui| {
+                                                                if ui
+                                                                    .button("⛶")
+                                                                    .on_hover_text("На весь экран")
+                                                                    .clicked()
+                                                                {
+                                                                    state
+                                                                        .main
+                                                                        .fullscreen_stream_user =
+                                                                        Some(p.user_id);
+                                                                }
+                                                            },
+                                                        );
+                                                        ui.allocate_ui_at_rect(mute_rect, |ui| {
+                                                            show_stream_audio_button(
+                                                                ui, state, engine_tx, p.user_id,
+                                                            );
+                                                        });
+                                                    }
+                                                    // FPS overlay: отрисованные кадры/сек (не полученные/декодированные)
+                                                    if show_stream_controls {
+                                                        let fps = state
+                                                            .main
+                                                            .voice_render_fps
+                                                            .get_mut(&key)
+                                                            .map(|t| t.update_and_get())
+                                                            .unwrap_or(0.0);
+                                                        if fps > 0.0 {
+                                                            let fps_text =
+                                                                format!("{:.0} fps", fps);
+                                                            let pos = avatar_rect.left_bottom()
+                                                                + egui::vec2(4.0, -18.0);
+                                                            let size = egui::vec2(36.0, 16.0);
+                                                            let bg_rect = egui::Rect::from_min_size(
+                                                                pos, size,
+                                                            );
+                                                            ui.painter().rect_filled(
+                                                                bg_rect,
+                                                                egui::Rounding::same(2.0),
+                                                                egui::Color32::from_black_alpha(
+                                                                    180,
+                                                                ),
+                                                            );
+                                                            ui.painter().text(
+                                                                pos + egui::vec2(4.0, 2.0),
+                                                                egui::Align2::LEFT_TOP,
+                                                                fps_text,
+                                                                egui::FontId::proportional(11.0),
+                                                                egui::Color32::WHITE,
+                                                            );
+                                                        }
+                                                    }
                                                 }
-                                                if show_stream_connecting {
+                                                if tex_key.is_none() {
+                                                    // No video texture — show rounded rect avatar (letter)
                                                     ui.painter().rect_filled(
                                                         avatar_rect,
                                                         egui::Rounding::same(ROUNDING),
-                                                        egui::Color32::from_black_alpha(96),
+                                                        egui::Color32::from_rgb(80, 100, 160),
                                                     );
-                                                    ui.painter().text(
-                                                        avatar_rect.center(),
-                                                        egui::Align2::CENTER_CENTER,
-                                                        "Подключение...",
-                                                        egui::FontId::proportional(16.0),
+                                                    if is_speaking {
+                                                        ui.painter().rect_stroke(
+                                                            avatar_rect.expand(2.0),
+                                                            egui::Rounding::same(ROUNDING + 2.0),
+                                                            egui::Stroke::new(
+                                                                2.0,
+                                                                egui::Color32::from_rgb(
+                                                                    67, 181, 129,
+                                                                ),
+                                                            ),
+                                                        );
+                                                    }
+                                                    let letter = p
+                                                        .username
+                                                        .chars()
+                                                        .next()
+                                                        .map(|c| c.to_uppercase().to_string())
+                                                        .unwrap_or_else(|| "?".to_string());
+                                                    let font_size =
+                                                        (avatar_rect.height() * 0.4).max(14.0);
+                                                    let galley = ui.painter().layout(
+                                                        letter,
+                                                        egui::FontId::proportional(font_size),
+                                                        egui::Color32::WHITE,
+                                                        f32::INFINITY,
+                                                    );
+                                                    let pos =
+                                                        avatar_rect.center() - galley.size() / 2.0;
+                                                    ui.painter().galley(
+                                                        pos,
+                                                        galley,
                                                         egui::Color32::WHITE,
                                                     );
-                                                }
-                                                // Stream tile: overlay with fullscreen + mute in corner
-                                                if show_stream_controls {
-                                                    let corner =
-                                                        avatar_rect.max - egui::vec2(4.0, 4.0);
-                                                    let btn_size = egui::vec2(28.0, 28.0);
-                                                    let fullscreen_rect = egui::Rect::from_min_size(
-                                                        corner
-                                                            - egui::vec2(
-                                                                btn_size.x * 2.0 + 4.0,
-                                                                0.0,
-                                                            ),
-                                                        btn_size,
-                                                    );
-                                                    let mute_rect = egui::Rect::from_min_size(
-                                                        corner - egui::vec2(btn_size.x, 0.0),
-                                                        btn_size,
-                                                    );
-                                                    ui.allocate_ui_at_rect(fullscreen_rect, |ui| {
-                                                        if ui
-                                                            .button("⛶")
-                                                            .on_hover_text("На весь экран")
-                                                            .clicked()
-                                                        {
-                                                            state.main.fullscreen_stream_user =
-                                                                Some(p.user_id);
-                                                        }
-                                                    });
-                                                    ui.allocate_ui_at_rect(mute_rect, |ui| {
-                                                        show_stream_audio_button(
-                                                            ui, state, engine_tx, p.user_id,
-                                                        );
-                                                    });
-                                                }
-                                                // FPS overlay: отрисованные кадры/сек (не полученные/декодированные)
-                                                if show_stream_controls {
-                                                    let fps = state
-                                                        .main
-                                                        .voice_render_fps
-                                                        .get_mut(&key)
-                                                        .map(|t| t.update_and_get())
-                                                        .unwrap_or(0.0);
-                                                    if fps > 0.0 {
-                                                        let fps_text = format!("{:.0} fps", fps);
-                                                        let pos = avatar_rect.left_bottom()
-                                                            + egui::vec2(4.0, -18.0);
-                                                        let size = egui::vec2(36.0, 16.0);
-                                                        let bg_rect =
-                                                            egui::Rect::from_min_size(pos, size);
+                                                    if show_stream_preview {
                                                         ui.painter().rect_filled(
-                                                            bg_rect,
-                                                            egui::Rounding::same(2.0),
-                                                            egui::Color32::from_black_alpha(180),
+                                                            avatar_rect,
+                                                            egui::Rounding::same(ROUNDING),
+                                                            egui::Color32::from_black_alpha(120),
+                                                        );
+                                                        let watch_rect =
+                                                            egui::Rect::from_center_size(
+                                                                avatar_rect.center(),
+                                                                egui::vec2(120.0, 34.0),
+                                                            );
+                                                        ui.allocate_ui_at_rect(watch_rect, |ui| {
+                                                            if ui.button("Смотреть").clicked()
+                                                            {
+                                                                set_stream_subscription(
+                                                                    state, engine_tx, p.user_id,
+                                                                    true,
+                                                                );
+                                                            }
+                                                        });
+                                                    }
+                                                    if show_stream_connecting {
+                                                        ui.painter().rect_filled(
+                                                            avatar_rect,
+                                                            egui::Rounding::same(ROUNDING),
+                                                            egui::Color32::from_black_alpha(96),
                                                         );
                                                         ui.painter().text(
-                                                            pos + egui::vec2(4.0, 2.0),
-                                                            egui::Align2::LEFT_TOP,
-                                                            fps_text,
-                                                            egui::FontId::proportional(11.0),
+                                                            avatar_rect.center(),
+                                                            egui::Align2::CENTER_CENTER,
+                                                            "Подключение...",
+                                                            egui::FontId::proportional(16.0),
                                                             egui::Color32::WHITE,
                                                         );
                                                     }
                                                 }
-                                            }
-                                            if tex_key.is_none() {
-                                                // No video texture — show rounded rect avatar (letter)
-                                                ui.painter().rect_filled(
-                                                    avatar_rect,
-                                                    egui::Rounding::same(ROUNDING),
-                                                    egui::Color32::from_rgb(80, 100, 160),
-                                                );
-                                                if is_speaking {
-                                                    ui.painter().rect_stroke(
-                                                        avatar_rect.expand(2.0),
-                                                        egui::Rounding::same(ROUNDING + 2.0),
-                                                        egui::Stroke::new(
-                                                            2.0,
-                                                            egui::Color32::from_rgb(67, 181, 129),
+
+                                                // Name and icons below avatar area
+                                                let name_y = avatar_rect.bottom() + 4.0;
+                                                let name_rect = egui::Rect::from_min_max(
+                                                    rect.left_top()
+                                                        + egui::vec2(content_margin, name_y),
+                                                    rect.right_top()
+                                                        + egui::vec2(
+                                                            -content_margin,
+                                                            name_y + 18.0,
                                                         ),
-                                                    );
-                                                }
-                                                let letter = p
-                                                    .username
-                                                    .chars()
-                                                    .next()
-                                                    .map(|c| c.to_uppercase().to_string())
-                                                    .unwrap_or_else(|| "?".to_string());
-                                                let font_size =
-                                                    (avatar_rect.height() * 0.4).max(14.0);
-                                                let galley = ui.painter().layout(
-                                                    letter,
-                                                    egui::FontId::proportional(font_size),
-                                                    egui::Color32::WHITE,
-                                                    f32::INFINITY,
                                                 );
-                                                let pos =
-                                                    avatar_rect.center() - galley.size() / 2.0;
-                                                ui.painter().galley(
-                                                    pos,
-                                                    galley,
-                                                    egui::Color32::WHITE,
+                                                let color = if is_locally_muted {
+                                                    ui.visuals().weak_text_color()
+                                                } else {
+                                                    ui.visuals().text_color()
+                                                };
+                                                let name = p.username.as_str();
+                                                let max_chars = (tile_w / 7.0).max(8.0) as usize;
+                                                let trunc = if name.len() > max_chars {
+                                                    format!("{}…", &name[..max_chars])
+                                                } else {
+                                                    name.to_string()
+                                                };
+                                                ui.painter().text(
+                                                    name_rect.left_center(),
+                                                    egui::Align2::LEFT_CENTER,
+                                                    trunc,
+                                                    egui::FontId::proportional(12.0),
+                                                    color,
                                                 );
-                                                if show_stream_preview {
-                                                    ui.painter().rect_filled(
-                                                        avatar_rect,
-                                                        egui::Rounding::same(ROUNDING),
-                                                        egui::Color32::from_black_alpha(120),
-                                                    );
-                                                    let watch_rect = egui::Rect::from_center_size(
-                                                        avatar_rect.center(),
-                                                        egui::vec2(120.0, 34.0),
-                                                    );
-                                                    ui.allocate_ui_at_rect(watch_rect, |ui| {
-                                                        if ui.button("Смотреть").clicked() {
-                                                            set_stream_subscription(
-                                                                state, engine_tx, p.user_id, true,
-                                                            );
-                                                        }
-                                                    });
-                                                }
-                                                if show_stream_connecting {
-                                                    ui.painter().rect_filled(
-                                                        avatar_rect,
-                                                        egui::Rounding::same(ROUNDING),
-                                                        egui::Color32::from_black_alpha(96),
-                                                    );
+                                                let icon_y = name_y + 10.0;
+                                                let mut icon_x = rect.left_top().x + content_margin;
+                                                if p.mic_muted {
                                                     ui.painter().text(
-                                                        avatar_rect.center(),
-                                                        egui::Align2::CENTER_CENTER,
-                                                        "Подключение...",
-                                                        egui::FontId::proportional(16.0),
-                                                        egui::Color32::WHITE,
+                                                        egui::pos2(icon_x, icon_y),
+                                                        egui::Align2::LEFT_TOP,
+                                                        "🔇",
+                                                        egui::FontId::proportional(10.0),
+                                                        color,
+                                                    );
+                                                    icon_x += 14.0;
+                                                }
+                                                if p.cam_enabled {
+                                                    ui.painter().text(
+                                                        egui::pos2(icon_x, icon_y),
+                                                        egui::Align2::LEFT_TOP,
+                                                        "📷",
+                                                        egui::FontId::proportional(10.0),
+                                                        color,
+                                                    );
+                                                    icon_x += 14.0;
+                                                }
+                                                if p.streaming {
+                                                    ui.painter().text(
+                                                        egui::pos2(icon_x, icon_y),
+                                                        egui::Align2::LEFT_TOP,
+                                                        "📺",
+                                                        egui::FontId::proportional(10.0),
+                                                        color,
                                                     );
                                                 }
-                                            }
 
-                                            // Name and icons below avatar area
-                                            let name_y = avatar_rect.bottom() + 4.0;
-                                            let name_rect = egui::Rect::from_min_max(
-                                                rect.left_top()
-                                                    + egui::vec2(content_margin, name_y),
-                                                rect.right_top()
-                                                    + egui::vec2(-content_margin, name_y + 18.0),
-                                            );
-                                            let color = if is_locally_muted {
-                                                ui.visuals().weak_text_color()
-                                            } else {
-                                                ui.visuals().text_color()
-                                            };
-                                            let name = p.username.as_str();
-                                            let max_chars = (tile_w / 7.0).max(8.0) as usize;
-                                            let trunc = if name.len() > max_chars {
-                                                format!("{}…", &name[..max_chars])
-                                            } else {
-                                                name.to_string()
-                                            };
-                                            ui.painter().text(
-                                                name_rect.left_center(),
-                                                egui::Align2::LEFT_CENTER,
-                                                trunc,
-                                                egui::FontId::proportional(12.0),
-                                                color,
-                                            );
-                                            let icon_y = name_y + 10.0;
-                                            let mut icon_x = rect.left_top().x + content_margin;
-                                            if p.mic_muted {
-                                                ui.painter().text(
-                                                    egui::pos2(icon_x, icon_y),
-                                                    egui::Align2::LEFT_TOP,
-                                                    "🔇",
-                                                    egui::FontId::proportional(10.0),
-                                                    color,
-                                                );
-                                                icon_x += 14.0;
-                                            }
-                                            if p.cam_enabled {
-                                                ui.painter().text(
-                                                    egui::pos2(icon_x, icon_y),
-                                                    egui::Align2::LEFT_TOP,
-                                                    "📷",
-                                                    egui::FontId::proportional(10.0),
-                                                    color,
-                                                );
-                                                icon_x += 14.0;
-                                            }
-                                            if p.streaming {
-                                                ui.painter().text(
-                                                    egui::pos2(icon_x, icon_y),
-                                                    egui::Align2::LEFT_TOP,
-                                                    "📺",
-                                                    egui::FontId::proportional(10.0),
-                                                    color,
-                                                );
-                                            }
-
-                                            if in_this_voice {
-                                                resp.context_menu(|ui| {
-                                                    let mute_label = if is_locally_muted {
-                                                        "Снять локальный мут"
-                                                    } else {
-                                                        "Заглушить локально"
-                                                    };
-                                                    if ui.button(mute_label).clicked() {
-                                                        if is_locally_muted {
-                                                            state
-                                                                .main
-                                                                .voice
-                                                                .locally_muted
-                                                                .remove(&p.user_id);
+                                                if in_this_voice {
+                                                    resp.context_menu(|ui| {
+                                                        let mute_label = if is_locally_muted {
+                                                            "Снять локальный мут"
                                                         } else {
-                                                            state
-                                                                .main
-                                                                .voice
-                                                                .locally_muted
-                                                                .insert(p.user_id);
+                                                            "Заглушить локально"
+                                                        };
+                                                        if ui.button(mute_label).clicked() {
+                                                            if is_locally_muted {
+                                                                state
+                                                                    .main
+                                                                    .voice
+                                                                    .locally_muted
+                                                                    .remove(&p.user_id);
+                                                            } else {
+                                                                state
+                                                                    .main
+                                                                    .voice
+                                                                    .locally_muted
+                                                                    .insert(p.user_id);
+                                                            }
+                                                            sync_user_volume(
+                                                                engine_tx,
+                                                                &state.main.voice,
+                                                                p.user_id,
+                                                            );
+                                                            ui.close_menu();
                                                         }
-                                                        sync_user_volume(
-                                                            engine_tx,
-                                                            &state.main.voice,
-                                                            p.user_id,
+                                                        let denoise_enabled = state
+                                                            .main
+                                                            .voice
+                                                            .receiver_denoise_users
+                                                            .contains(&p.user_id);
+                                                        let denoise_label = if denoise_enabled {
+                                                            "Выключить шумоподавление (локально)"
+                                                        } else {
+                                                            "Включить шумоподавление (локально)"
+                                                        };
+                                                        if ui.button(denoise_label).clicked() {
+                                                            set_receiver_denoise_enabled(
+                                                                state,
+                                                                engine_tx,
+                                                                p.user_id,
+                                                                !denoise_enabled,
+                                                            );
+                                                            ui.close_menu();
+                                                        }
+                                                        ui.label(
+                                                            "Громкость 0–300%, по умолчанию 100%",
                                                         );
-                                                        ui.close_menu();
-                                                    }
-                                                    let denoise_enabled = state
-                                                        .main
-                                                        .voice
-                                                        .receiver_denoise_users
-                                                        .contains(&p.user_id);
-                                                    let denoise_label = if denoise_enabled {
-                                                        "Выключить шумоподавление (локально)"
-                                                    } else {
-                                                        "Включить шумоподавление (локально)"
-                                                    };
-                                                    if ui.button(denoise_label).clicked() {
-                                                        set_receiver_denoise_enabled(
-                                                            state,
-                                                            engine_tx,
-                                                            p.user_id,
-                                                            !denoise_enabled,
-                                                        );
-                                                        ui.close_menu();
-                                                    }
-                                                    ui.label("Громкость 0–300%, по умолчанию 100%");
-                                                    let uid = p.user_id;
-                                                    let mut vol = *state
-                                                        .main
-                                                        .voice
-                                                        .local_volumes
-                                                        .get(&uid)
-                                                        .unwrap_or(&1.0);
-                                                    if ui
-                                                        .add(
-                                                            egui::Slider::new(&mut vol, 0.0..=3.0)
+                                                        let uid = p.user_id;
+                                                        let mut vol = *state
+                                                            .main
+                                                            .voice
+                                                            .local_volumes
+                                                            .get(&uid)
+                                                            .unwrap_or(&1.0);
+                                                        if ui
+                                                            .add(
+                                                                egui::Slider::new(
+                                                                    &mut vol,
+                                                                    0.0..=3.0,
+                                                                )
                                                                 .custom_formatter(|v, _| {
                                                                     format!("{:.0}%", v * 100.0)
                                                                 })
                                                                 .text(""),
-                                                        )
-                                                        .changed()
-                                                    {
-                                                        state
-                                                            .main
-                                                            .voice
-                                                            .local_volumes
-                                                            .insert(uid, vol);
-                                                        state
-                                                            .settings
-                                                            .voice_volume_by_user
-                                                            .insert(uid.to_string(), vol);
-                                                        state.settings.save();
-                                                        sync_user_volume(
-                                                            engine_tx,
-                                                            &state.main.voice,
-                                                            uid,
-                                                        );
-                                                    }
-                                                });
-                                            }
-                                        });
-                                    }
-                                });
-                                ui.add_space(4.0);
-                            }
-                        });
+                                                            )
+                                                            .changed()
+                                                        {
+                                                            state
+                                                                .main
+                                                                .voice
+                                                                .local_volumes
+                                                                .insert(uid, vol);
+                                                            state
+                                                                .settings
+                                                                .voice_volume_by_user
+                                                                .insert(uid.to_string(), vol);
+                                                            state.settings.save();
+                                                            sync_user_volume(
+                                                                engine_tx,
+                                                                &state.main.voice,
+                                                                uid,
+                                                            );
+                                                        }
+                                                    });
+                                                }
+                                            });
+                                        }
+                                    });
+                                    ui.add_space(4.0);
+                                }
+                            });
                     }
                 }
                 show_voice_grid_members_toggle_button(ui, theme, state, voice_viewport);
@@ -4637,7 +4885,10 @@ fn show_voice_grid(
     in_this_voice: bool,
 ) {
     if let Some(focused_user) = state.main.voice_grid_focus_user {
-        if !participants.iter().any(|participant| participant.user_id == focused_user) {
+        if !participants
+            .iter()
+            .any(|participant| participant.user_id == focused_user)
+        {
             state.main.voice_grid_focus_user = None;
         }
     }
@@ -4706,8 +4957,7 @@ fn show_voice_grid(
                 );
                 let row_width = thumb_size.x * count as f32
                     + VOICE_GRID_TILE_GAP * count.saturating_sub(1) as f32;
-                let start_x =
-                    strip_rect.left() + ((strip_rect.width() - row_width).max(0.0) * 0.5);
+                let start_x = strip_rect.left() + ((strip_rect.width() - row_width).max(0.0) * 0.5);
                 let start_y =
                     strip_rect.top() + ((strip_rect.height() - thumb_size.y).max(0.0) * 0.5);
                 for (idx, participant) in others.iter().enumerate() {
@@ -4750,7 +5000,10 @@ fn show_voice_grid(
 
         for (idx, participant) in row_participants.iter().enumerate() {
             let rect = egui::Rect::from_min_size(
-                egui::pos2(start_x + idx as f32 * (layout.tile_size.x + VOICE_GRID_TILE_GAP), y),
+                egui::pos2(
+                    start_x + idx as f32 * (layout.tile_size.x + VOICE_GRID_TILE_GAP),
+                    y,
+                ),
                 layout.tile_size,
             );
             show_voice_participant_tile(
@@ -4844,8 +5097,12 @@ fn show_voice_participant_tile(
 
     let is_focused = state.main.voice_grid_focus_user == Some(participant.user_id);
     let is_full_muted = participant.deafened;
-    let is_locally_muted =
-        in_this_voice && state.main.voice.locally_muted.contains(&participant.user_id);
+    let is_locally_muted = in_this_voice
+        && state
+            .main
+            .voice
+            .locally_muted
+            .contains(&participant.user_id);
     let can_open_context_menu = in_this_voice && Some(participant.user_id) != state.user_id;
 
     let hover_t = ui.ctx().animate_bool(id.with("hover"), response.hovered());
@@ -4918,7 +5175,13 @@ fn show_voice_participant_tile(
             egui::pos2(right - 46.0, footer_rect.top()),
             egui::pos2(right, footer_rect.top() + tag_height),
         );
-        paint_tile_tag(ui.painter(), pill_rect, "LIVE", theme.error, theme.text_primary);
+        paint_tile_tag(
+            ui.painter(),
+            pill_rect,
+            "LIVE",
+            theme.error,
+            theme.text_primary,
+        );
         right = pill_rect.left() - 6.0;
     }
     if participant.cam_enabled {
@@ -4938,7 +5201,10 @@ fn show_voice_participant_tile(
 
     let name_rect = egui::Rect::from_min_max(
         egui::pos2(footer_rect.left(), footer_rect.top()),
-        egui::pos2(right.max(footer_rect.left()), footer_rect.top() + tag_height),
+        egui::pos2(
+            right.max(footer_rect.left()),
+            footer_rect.top() + tag_height,
+        ),
     );
     let approx_char_width = (name_font_size * 0.58).max(6.0);
     let max_chars = (name_rect.width() / approx_char_width).floor().max(6.0) as usize;
@@ -4997,15 +5263,30 @@ fn paint_voice_tile_media(
     let stream_key = video_frame_key(participant.user_id, true);
     let stream_preview_key = video_preview_frame_key(participant.user_id);
     let camera_key = participant.user_id;
-    let has_stream_texture = state.main.voice_video_gpu_textures.contains_key(&stream_key)
+    let has_stream_texture = state
+        .main
+        .voice_video_gpu_textures
+        .contains_key(&stream_key)
         || state.main.voice_video_textures.contains_key(&stream_key);
-    let has_stream_preview_texture =
-        state.main.voice_video_gpu_textures.contains_key(&stream_preview_key)
-            || state.main.voice_video_textures.contains_key(&stream_preview_key);
-    let has_camera_texture = state.main.voice_video_gpu_textures.contains_key(&camera_key)
+    let has_stream_preview_texture = state
+        .main
+        .voice_video_gpu_textures
+        .contains_key(&stream_preview_key)
+        || state
+            .main
+            .voice_video_textures
+            .contains_key(&stream_preview_key);
+    let has_camera_texture = state
+        .main
+        .voice_video_gpu_textures
+        .contains_key(&camera_key)
         || state.main.voice_video_textures.contains_key(&camera_key);
-    let is_stream_subscribed =
-        in_this_voice && state.main.voice.stream_subscriptions.contains(&participant.user_id);
+    let is_stream_subscribed = in_this_voice
+        && state
+            .main
+            .voice
+            .stream_subscriptions
+            .contains(&participant.user_id);
     let show_stream_preview = participant.streaming && in_this_voice && !is_stream_subscribed;
     let show_stream_connecting =
         participant.streaming && in_this_voice && is_stream_subscribed && !has_stream_texture;
@@ -5078,10 +5359,8 @@ fn paint_voice_tile_media(
                 egui::pos2(right - button_size.x * 2.0 - 6.0, top),
                 button_size,
             );
-            let audio_rect = egui::Rect::from_min_size(
-                egui::pos2(right - button_size.x, top),
-                button_size,
-            );
+            let audio_rect =
+                egui::Rect::from_min_size(egui::pos2(right - button_size.x, top), button_size);
             ui.allocate_ui_at_rect(fullscreen_rect, |ui| {
                 if ui
                     .button("⛶")
@@ -5261,10 +5540,10 @@ fn best_voice_grid_layout(count: usize, available: egui::Vec2) -> VoiceGridLayou
 
     for cols in 1..=count.max(1) {
         let rows = (count.max(1) + cols - 1) / cols;
-        let max_width = (available.x - VOICE_GRID_TILE_GAP * cols.saturating_sub(1) as f32)
-            / cols as f32;
-        let max_height = (available.y - VOICE_GRID_TILE_GAP * rows.saturating_sub(1) as f32)
-            / rows as f32;
+        let max_width =
+            (available.x - VOICE_GRID_TILE_GAP * cols.saturating_sub(1) as f32) / cols as f32;
+        let max_height =
+            (available.y - VOICE_GRID_TILE_GAP * rows.saturating_sub(1) as f32) / rows as f32;
         if max_width <= 0.0 || max_height <= 0.0 {
             continue;
         }
