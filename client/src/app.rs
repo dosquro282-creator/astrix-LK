@@ -495,6 +495,9 @@ impl AstrixApp {
                                 {
                                     p.mic_muted = v;
                                 }
+                                if let Some(v) = payload.get("deafened").and_then(|v| v.as_bool()) {
+                                    p.deafened = v;
+                                }
                                 if let Some(v) =
                                     payload.get("cam_enabled").and_then(|v| v.as_bool())
                                 {

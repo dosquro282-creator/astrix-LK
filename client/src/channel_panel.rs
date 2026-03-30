@@ -242,9 +242,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                                 participant,
                                 *voice.speaking.get(&participant.user_id).unwrap_or(&false),
                                 Some(participant.user_id) == user_id,
-                                Some(participant.user_id) == user_id
-                                    && voice.mic_muted
-                                    && voice.output_muted,
+                                participant.deafened,
                                 is_locally_muted,
                             );
                             if voice.channel_id == Some(*id) && Some(participant.user_id) != user_id

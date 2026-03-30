@@ -107,6 +107,8 @@ pub struct VoiceParticipant {
     #[serde(default)]
     pub mic_muted: bool,
     #[serde(default)]
+    pub deafened: bool,
+    #[serde(default)]
     pub cam_enabled: bool,
     #[serde(default)]
     pub streaming: bool,
@@ -622,12 +624,13 @@ impl ApiClient {
         Ok(())
     }
 
-    /// Update mic/cam/streaming state in the current voice room.
+    /// Update mic/cam/streaming/deafened state in the current voice room.
     pub async fn voice_update_state(
         &self,
         token: &str,
         channel_id: i64,
         mic_muted: bool,
+        deafened: bool,
         cam_enabled: bool,
         streaming: bool,
     ) -> Result<(), ApiError> {
@@ -638,6 +641,7 @@ impl ApiClient {
             .json(&serde_json::json!({
                 "channel_id":  channel_id,
                 "mic_muted":   mic_muted,
+                "deafened":    deafened,
                 "cam_enabled": cam_enabled,
                 "streaming":   streaming,
             }))

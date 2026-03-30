@@ -1572,10 +1572,15 @@ fn sync_voice_presence(state: &State, api: &ApiClient) {
             &token,
             ch_id,
             state.main.voice.mic_muted,
+            current_voice_deafened(&state.main.voice),
             state.main.voice.camera_on,
             state.main.voice.screen_on,
         ));
     }
+}
+
+fn current_voice_deafened(voice: &VoiceState) -> bool {
+    voice.mic_muted && voice.output_muted
 }
 
 fn update_local_camera_flag(state: &mut State, user_id: Option<i64>, enabled: bool) {
@@ -1633,6 +1638,27 @@ fn update_local_mic_flag(state: &mut State, user_id: Option<i64>, muted: bool) {
                 for participant in list.iter_mut() {
                     if participant.user_id == uid {
                         participant.mic_muted = muted;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn update_local_deafened_flag(state: &mut State, user_id: Option<i64>, deafened: bool) {
+    if let Some(uid) = user_id {
+        for participant in &mut state.main.voice.participants {
+            if participant.user_id == uid {
+                participant.deafened = deafened;
+                break;
+            }
+        }
+        if let Some(ch_id) = state.main.voice.channel_id {
+            if let Some(list) = state.main.channel_voice.get_mut(&ch_id) {
+                for participant in list.iter_mut() {
+                    if participant.user_id == uid {
+                        participant.deafened = deafened;
                         break;
                     }
                 }
@@ -1738,19 +1764,25 @@ fn apply_local_mic_muted(
     if let Some(tx) = engine_tx {
         tx.send(VoiceCmd::SetMicMuted(muted)).ok();
     }
+    let deafened = current_voice_deafened(&state.main.voice);
     sync_voice_presence(state, api);
     update_local_mic_flag(state, user_id, muted);
+    update_local_deafened_flag(state, user_id, deafened);
     ctx.request_repaint();
 }
 
 fn set_local_output_muted(
     ctx: &egui::Context,
     state: &mut State,
+    api: &ApiClient,
     engine_tx: Option<&tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: Option<i64>,
     muted: bool,
 ) {
     state.main.voice.deafened_via_toggle = false;
     apply_local_output_muted(ctx, state, engine_tx, muted);
+    update_local_deafened_flag(state, user_id, current_voice_deafened(&state.main.voice));
+    sync_voice_presence(state, api);
 }
 
 fn apply_local_output_muted(
@@ -3424,7 +3456,7 @@ pub(crate) fn main_screen(
                     set_local_mic_muted(ctx, state, api, engine_tx.as_ref(), user_id, muted);
                 }
                 ChannelPanelAction::SetOutputMuted(muted) => {
-                    set_local_output_muted(ctx, state, engine_tx.as_ref(), muted);
+                    set_local_output_muted(ctx, state, api, engine_tx.as_ref(), user_id, muted);
                 }
                 ChannelPanelAction::SetParticipantMuted { user_id, muted } => {
                     set_local_participant_muted(state, engine_tx, user_id, muted);
@@ -4811,8 +4843,7 @@ fn show_voice_participant_tile(
     }
 
     let is_focused = state.main.voice_grid_focus_user == Some(participant.user_id);
-    let is_self = Some(participant.user_id) == state.user_id;
-    let is_full_muted = is_self && state.main.voice.mic_muted && state.main.voice.output_muted;
+    let is_full_muted = participant.deafened;
     let is_locally_muted =
         in_this_voice && state.main.voice.locally_muted.contains(&participant.user_id);
     let can_open_context_menu = in_this_voice && Some(participant.user_id) != state.user_id;

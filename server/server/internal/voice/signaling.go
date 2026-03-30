@@ -96,14 +96,15 @@ func RegisterRoutes(r chi.Router, mgr *Manager, st *store.Store, cfg config.Conf
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// POST /voice/mute  — update mic / cam / streaming state
-	// Body: { "channel_id": N, "mic_muted": bool, "cam_enabled": bool, "streaming": bool }
+	// POST /voice/mute  — update mic / deafened / cam / streaming state
+	// Body: { "channel_id": N, "mic_muted": bool, "deafened": bool, "cam_enabled": bool, "streaming": bool }
 	r.Post("/mute", func(w http.ResponseWriter, r *http.Request) {
 		userID, _ := mustUser(r)
 
 		var body struct {
 			ChannelID  int64 `json:"channel_id"`
 			MicMuted   bool  `json:"mic_muted"`
+			Deafened   bool  `json:"deafened"`
 			CamEnabled bool  `json:"cam_enabled"`
 			Streaming  bool  `json:"streaming"`
 		}
@@ -112,9 +113,16 @@ func RegisterRoutes(r chi.Router, mgr *Manager, st *store.Store, cfg config.Conf
 			return
 		}
 
-		mgr.UpdateState(body.ChannelID, userID, body.MicMuted, body.CamEnabled, body.Streaming)
+		mgr.UpdateState(
+			body.ChannelID,
+			userID,
+			body.MicMuted,
+			body.Deafened,
+			body.CamEnabled,
+			body.Streaming,
+		)
 		_ = st.VoiceUpdateState(r.Context(), body.ChannelID, userID,
-			body.MicMuted, body.CamEnabled, body.Streaming)
+			body.MicMuted, body.Deafened, body.CamEnabled, body.Streaming)
 
 		w.WriteHeader(http.StatusNoContent)
 	})

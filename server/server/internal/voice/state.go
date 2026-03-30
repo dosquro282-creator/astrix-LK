@@ -27,6 +27,7 @@ type Participant struct {
 	UserID     int64
 	Username   string
 	MicMuted   bool
+	Deafened   bool
 	CamEnabled bool
 	Streaming  bool
 }
@@ -36,6 +37,7 @@ type PeerInfo struct {
 	UserID     int64  `json:"user_id"`
 	Username   string `json:"username"`
 	MicMuted   bool   `json:"mic_muted"`
+	Deafened   bool   `json:"deafened"`
 	CamEnabled bool   `json:"cam_enabled"`
 	Streaming  bool   `json:"streaming"`
 	ChannelID  int64  `json:"channel_id,omitempty"`
@@ -130,8 +132,8 @@ func (m *Manager) LeaveAll(userID int64) {
 	}
 }
 
-// UpdateState updates mic/cam/streaming and broadcasts voice.state_update.
-func (m *Manager) UpdateState(channelID, userID int64, micMuted, camEnabled, streaming bool) {
+// UpdateState updates mic/deafened/cam/streaming and broadcasts voice.state_update.
+func (m *Manager) UpdateState(channelID, userID int64, micMuted, deafened, camEnabled, streaming bool) {
 	m.mu.RLock()
 	room, ok := m.rooms[channelID]
 	m.mu.RUnlock()
@@ -143,6 +145,7 @@ func (m *Manager) UpdateState(channelID, userID int64, micMuted, camEnabled, str
 	peer, ok := room.peers[userID]
 	if ok {
 		peer.MicMuted = micMuted
+		peer.Deafened = deafened
 		peer.CamEnabled = camEnabled
 		peer.Streaming = streaming
 	}
@@ -156,6 +159,7 @@ func (m *Manager) UpdateState(channelID, userID int64, micMuted, camEnabled, str
 		"user_id":     userID,
 		"channel_id":  channelID,
 		"mic_muted":   micMuted,
+		"deafened":    deafened,
 		"cam_enabled": camEnabled,
 		"streaming":   streaming,
 	})
@@ -199,6 +203,7 @@ func (m *Manager) roomState(channelID int64) []PeerInfo {
 			UserID:     p.UserID,
 			Username:   p.Username,
 			MicMuted:   p.MicMuted,
+			Deafened:   p.Deafened,
 			CamEnabled: p.CamEnabled,
 			Streaming:  p.Streaming,
 		})

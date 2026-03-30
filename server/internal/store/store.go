@@ -107,11 +107,13 @@ func (s *Store) runMigrations(ctx context.Context) error {
 			channel_id  INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
 			user_id     INTEGER NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
 			mic_muted   BOOLEAN NOT NULL DEFAULT false,
+			deafened    BOOLEAN NOT NULL DEFAULT false,
 			cam_enabled BOOLEAN NOT NULL DEFAULT false,
 			streaming   BOOLEAN NOT NULL DEFAULT false,
 			updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (channel_id, user_id)
 		);`,
+		`ALTER TABLE voice_presence ADD COLUMN IF NOT EXISTS deafened BOOLEAN NOT NULL DEFAULT false;`,
 		// Read receipts: last message id read per (user, channel). Persists across reconnects.
 		`CREATE TABLE IF NOT EXISTS channel_reads (
 			user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -516,6 +518,7 @@ type VoicePresenceRow struct {
 	ChannelID  int64
 	UserID     int64
 	MicMuted   bool
+	Deafened   bool
 	CamEnabled bool
 	Streaming  bool
 }
@@ -533,7 +536,7 @@ func (s *Store) VoiceJoin(ctx context.Context, channelID, userID int64) error {
 		`INSERT INTO voice_presence (channel_id, user_id, updated_at)
 		 VALUES ($1, $2, NOW())
 		 ON CONFLICT (channel_id, user_id) DO UPDATE
-		   SET mic_muted = false, cam_enabled = false, streaming = false,
+		   SET mic_muted = false, deafened = false, cam_enabled = false, streaming = false,
 		       updated_at = NOW()`,
 		channelID, userID,
 	)
@@ -549,13 +552,13 @@ func (s *Store) VoiceLeave(ctx context.Context, channelID, userID int64) error {
 	return err
 }
 
-// VoiceUpdateState updates mic/cam/streaming flags for a participant.
-func (s *Store) VoiceUpdateState(ctx context.Context, channelID, userID int64, micMuted, camEnabled, streaming bool) error {
+// VoiceUpdateState updates mic/deafened/cam/streaming flags for a participant.
+func (s *Store) VoiceUpdateState(ctx context.Context, channelID, userID int64, micMuted, deafened, camEnabled, streaming bool) error {
 	_, err := s.DB.Exec(ctx,
 		`UPDATE voice_presence
-		 SET mic_muted = $3, cam_enabled = $4, streaming = $5, updated_at = NOW()
+		 SET mic_muted = $3, deafened = $4, cam_enabled = $5, streaming = $6, updated_at = NOW()
 		 WHERE channel_id = $1 AND user_id = $2`,
-		channelID, userID, micMuted, camEnabled, streaming,
+		channelID, userID, micMuted, deafened, camEnabled, streaming,
 	)
 	return err
 }
@@ -563,7 +566,7 @@ func (s *Store) VoiceUpdateState(ctx context.Context, channelID, userID int64, m
 // VoiceListPresence returns current participants in a voice channel.
 func (s *Store) VoiceListPresence(ctx context.Context, channelID int64) ([]VoicePresenceRow, error) {
 	rows, err := s.DB.Query(ctx,
-		`SELECT channel_id, user_id, mic_muted, cam_enabled, streaming
+		`SELECT channel_id, user_id, mic_muted, deafened, cam_enabled, streaming
 		 FROM voice_presence WHERE channel_id = $1`,
 		channelID,
 	)
@@ -574,7 +577,7 @@ func (s *Store) VoiceListPresence(ctx context.Context, channelID int64) ([]Voice
 	var list []VoicePresenceRow
 	for rows.Next() {
 		var r VoicePresenceRow
-		if err := rows.Scan(&r.ChannelID, &r.UserID, &r.MicMuted, &r.CamEnabled, &r.Streaming); err != nil {
+		if err := rows.Scan(&r.ChannelID, &r.UserID, &r.MicMuted, &r.Deafened, &r.CamEnabled, &r.Streaming); err != nil {
 			return nil, err
 		}
 		list = append(list, r)
