@@ -439,6 +439,18 @@ impl Default for LoadState {
     }
 }
 
+fn clear_chat_search_state(main: &mut MainState) {
+    main.chat_search_results.clear();
+    main.chat_search_load = LoadState::Idle;
+    main.chat_search_started_server = None;
+    main.chat_search_started_query.clear();
+    main.chat_search_request_seq = main.chat_search_request_seq.wrapping_add(1);
+}
+
+fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> bool {
+    haystack.to_lowercase().contains(needle_lower)
+}
+
 /// Таймаут для фоновых загрузок (секунды).
 const LOAD_TIMEOUT_SECS: u64 = 15;
 
@@ -690,6 +702,148 @@ pub(crate) fn process_background_loads(
 
 // ─── State (pub(crate) for app.rs) ────────────────────────────────────────────
 
+pub(crate) fn process_message_search(
+    ctx: egui::Context,
+    state: Arc<Mutex<State>>,
+    api: ApiClient,
+) {
+    let (token, server_id, channels, query, channels_ready) = {
+        let st = state.lock();
+        if st.screen != Screen::Main {
+            return;
+        }
+        let token = match &st.access_token {
+            Some(token) => token.clone(),
+            None => return,
+        };
+        (
+            token,
+            st.main.selected_server,
+            st.main.channels.clone(),
+            st.main.chat_search_query.trim().to_string(),
+            st.main.channels_load == LoadState::Loaded,
+        )
+    };
+
+    let Some(server_id) = server_id else {
+        let mut st = state.lock();
+        clear_chat_search_state(&mut st.main);
+        return;
+    };
+
+    if query.is_empty() {
+        let mut st = state.lock();
+        clear_chat_search_state(&mut st.main);
+        return;
+    }
+
+    if !channels_ready {
+        let mut st = state.lock();
+        st.main.chat_search_results.clear();
+        st.main.chat_search_load = LoadState::Loading;
+        st.main.chat_search_started_server = None;
+        st.main.chat_search_started_query.clear();
+        return;
+    }
+
+    let text_channels: Vec<(i64, String)> = channels
+        .into_iter()
+        .filter(|channel| channel.r#type == "text")
+        .map(|channel| (channel.id, channel.name))
+        .collect();
+
+    let request_seq = {
+        let mut st = state.lock();
+        let already_running = st.main.chat_search_started_server == Some(server_id)
+            && st.main.chat_search_started_query == query
+            && matches!(
+                st.main.chat_search_load,
+                LoadState::Loading | LoadState::Loaded | LoadState::Error(_)
+            );
+        if already_running {
+            return;
+        }
+        st.main.chat_search_request_seq = st.main.chat_search_request_seq.wrapping_add(1);
+        st.main.chat_search_started_server = Some(server_id);
+        st.main.chat_search_started_query = query.clone();
+        st.main.chat_search_results.clear();
+        st.main.chat_search_load = LoadState::Loading;
+        st.main.chat_search_request_seq
+    };
+
+    let state_c = Arc::clone(&state);
+    let ctx_c = ctx.clone();
+    tokio::spawn(async move {
+        let query_lower = query.to_lowercase();
+        let mut results = Vec::new();
+
+        for (channel_id, channel_name) in text_channels {
+            {
+                let st = state_c.lock();
+                if st.main.chat_search_request_seq != request_seq
+                    || st.main.selected_server != Some(server_id)
+                    || st.main.chat_search_query.trim() != query
+                {
+                    return;
+                }
+            }
+
+            let fetch = tokio::time::timeout(
+                Duration::from_secs(LOAD_TIMEOUT_SECS),
+                api.list_messages(&token, channel_id),
+            )
+            .await;
+
+            let messages = match fetch {
+                Ok(Ok(messages)) => messages,
+                Ok(Err(err)) => {
+                    let mut st = state_c.lock();
+                    if st.main.chat_search_request_seq == request_seq {
+                        st.main.chat_search_load =
+                            LoadState::Error(format!("Ошибка поиска: {err}"));
+                    }
+                    ctx_c.request_repaint();
+                    return;
+                }
+                Err(_) => {
+                    let mut st = state_c.lock();
+                    if st.main.chat_search_request_seq == request_seq {
+                        st.main.chat_search_load =
+                            LoadState::Error("Таймаут поиска сообщений".to_string());
+                    }
+                    ctx_c.request_repaint();
+                    return;
+                }
+            };
+
+            results.extend(messages.into_iter().filter_map(|message| {
+                if contains_case_insensitive(&message.content, &query_lower) {
+                    Some(chat_panel::ChatSearchResult {
+                        channel_id,
+                        channel_name: channel_name.clone(),
+                        message,
+                    })
+                } else {
+                    None
+                }
+            }));
+        }
+
+        results.sort_by(|left, right| right.message.created_at.cmp(&left.message.created_at));
+
+        let mut st = state_c.lock();
+        if st.main.chat_search_request_seq != request_seq
+            || st.main.selected_server != Some(server_id)
+            || st.main.chat_search_query.trim() != query
+        {
+            return;
+        }
+        st.main.chat_search_results = results;
+        st.main.chat_search_load = LoadState::Loaded;
+        ctx_c.request_repaint();
+    });
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Screen {
     Auth,
@@ -798,6 +952,12 @@ pub(crate) struct MainState {
     pub(crate) unread_channels: HashSet<i64>,
     pub(crate) selected_server: Option<i64>,
     pub(crate) selected_channel: Option<i64>,
+    pub(crate) chat_search_query: String,
+    pub(crate) chat_search_results: Vec<chat_panel::ChatSearchResult>,
+    pub(crate) chat_search_load: LoadState,
+    pub(crate) chat_search_started_server: Option<i64>,
+    pub(crate) chat_search_started_query: String,
+    pub(crate) chat_search_request_seq: u64,
     pub(crate) new_message: String,
     pub(crate) prev_message: String,
     pub(crate) new_server_name: String,
@@ -881,6 +1041,12 @@ impl Clone for MainState {
             unread_channels: self.unread_channels.clone(),
             selected_server: self.selected_server,
             selected_channel: self.selected_channel,
+            chat_search_query: self.chat_search_query.clone(),
+            chat_search_results: self.chat_search_results.clone(),
+            chat_search_load: self.chat_search_load.clone(),
+            chat_search_started_server: self.chat_search_started_server,
+            chat_search_started_query: self.chat_search_started_query.clone(),
+            chat_search_request_seq: self.chat_search_request_seq,
             new_message: self.new_message.clone(),
             prev_message: self.prev_message.clone(),
             new_server_name: self.new_server_name.clone(),
@@ -956,6 +1122,12 @@ impl Default for MainState {
             unread_channels: HashSet::new(),
             selected_server: None,
             selected_channel: None,
+            chat_search_query: String::new(),
+            chat_search_results: Vec::new(),
+            chat_search_load: LoadState::Idle,
+            chat_search_started_server: None,
+            chat_search_started_query: String::new(),
+            chat_search_request_seq: 0,
             new_message: String::new(),
             prev_message: String::new(),
             new_server_name: String::new(),
@@ -3969,6 +4141,11 @@ pub(crate) fn main_screen(
                     LoadState::Error(s) => Some(s.clone()),
                     _ => None,
                 };
+                let search_loading = state.main.chat_search_load == LoadState::Loading;
+                let search_error = match &state.main.chat_search_load {
+                    LoadState::Error(s) => Some(s.as_str()),
+                    _ => None,
+                };
                 chat_panel::show(
                     ctx,
                     ui,
@@ -3977,6 +4154,10 @@ pub(crate) fn main_screen(
                         channel_name: &ch_name,
                         channel_description: None,
                         messages: &state.main.messages,
+                        search_query: &mut state.main.chat_search_query,
+                        search_results: &state.main.chat_search_results,
+                        search_loading,
+                        search_error,
                         new_message: &mut state.main.new_message,
                         typing_users: &typing_users,
                         pending_attachment: state.main.pending_attachment.as_ref(),

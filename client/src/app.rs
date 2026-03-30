@@ -18,7 +18,8 @@ use crate::net::{
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::ui::{
-    self, auth_screen, block_on, find_attachment_mime, main_screen, process_background_loads, State,
+    self, auth_screen, block_on, find_attachment_mime, main_screen, process_background_loads,
+    process_message_search, State,
 };
 use crate::voice::{video_frame_key, video_preview_frame_key, VideoFrames, VoiceCmd};
 
@@ -149,9 +150,11 @@ impl AstrixApp {
                             {
                                 st.main.unread_channels.insert(msg.channel_id);
                             }
-                            if !st.main.messages.iter().any(|m| m.id == msg.id) {
+                            if Some(msg.channel_id) == st.main.selected_channel
+                                && !st.main.messages.iter().any(|m| m.id == msg.id)
+                            {
                                 st.main.messages.push(msg.clone());
-                            } else {
+                            } else if Some(msg.channel_id) == st.main.selected_channel {
                                 for m in &mut st.main.messages {
                                     if m.id == msg.id {
                                         m.seen_by = msg.seen_by.clone();
@@ -930,6 +933,9 @@ impl eframe::App for AstrixApp {
             #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
             frame,
         );
+        drop(st);
+        process_message_search(ctx.clone(), Arc::clone(&self.state), self.api.clone());
+        let mut st = self.state.lock();
 
         // Phase 3.5: Lock all WGL interop objects for the upcoming GL render pass.
         // Must be called after building egui UI, before eframe renders to screen.
