@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use eframe::egui;
+use egui::scroll_area::ScrollBarVisibility;
 
 use crate::net::{AttachmentMeta, Member, Message};
 use crate::theme::Theme;
@@ -10,10 +11,16 @@ use crate::theme::Theme;
 const CHANNEL_HEADER_HEIGHT: f32 = 48.0;
 const TOOLBAR_ICON_SIZE: f32 = 24.0;
 const COMPOSER_BUTTON_SIZE: f32 = 32.0;
-const SEARCH_WIDTH: f32 = 240.0;
-const SEARCH_RESULTS_MAX_HEIGHT: f32 = 340.0;
-const MESSAGE_INPUT_MIN_HEIGHT: f32 = 34.0;
-const MESSAGE_INPUT_MAX_HEIGHT: f32 = 140.0;
+const SEARCH_WIDTH: f32 = 360.0;
+const SEARCH_SCROLLBAR_WIDTH: f32 = 10.0;
+const SEARCH_SCROLLBAR_GAP: f32 = 8.0;
+const SEARCH_RESULT_ROW_HEIGHT: f32 = 66.0;
+const SEARCH_RESULT_GAP: f32 = 8.0;
+const SEARCH_RESULTS_MAX_HEIGHT: f32 = 600.0;
+const SEARCH_RESULTS_RIGHT_PADDING: f32 = 10.0;
+const SEARCH_RESULTS_VERTICAL_PADDING: f32 = 10.0;
+const MESSAGE_INPUT_BASE_HEIGHT: f32 = 48.0;
+const MESSAGE_INPUT_MAX_HEIGHT: f32 = 156.0;
 
 #[derive(Debug, Clone)]
 pub struct ChatSearchResult {
@@ -34,6 +41,7 @@ pub enum ChatPanelAction {
     Search,
     Inbox,
     Help,
+    OpenSearchResult { channel_id: i64, message_id: i64 },
     StubGif,
     StubEmoji,
     StubStickers,
@@ -47,8 +55,12 @@ pub struct ChatPanelParams<'a> {
     pub messages: &'a [Message],
     pub search_query: &'a mut String,
     pub search_results: &'a [ChatSearchResult],
+    pub search_scroll_offset: &'a mut f32,
     pub search_loading: bool,
     pub search_error: Option<&'a str>,
+    pub highlighted_message_id: Option<i64>,
+    pub highlighted_message_t: Option<f32>,
+    pub scroll_to_highlighted: &'a mut bool,
     pub new_message: &'a mut String,
     pub typing_users: &'a [(i64, String)],
     pub pending_attachment: Option<&'a AttachmentMeta>,
@@ -70,8 +82,12 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
         messages,
         search_query,
         search_results,
+        search_scroll_offset,
         search_loading,
         search_error,
+        highlighted_message_id,
+        highlighted_message_t,
+        scroll_to_highlighted,
         new_message,
         typing_users,
         pending_attachment,
@@ -85,18 +101,22 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
         messages_loading,
     } = params;
 
+    let chat_rect = ui.max_rect();
     ui.painter()
-        .rect_filled(ui.max_rect(), egui::Rounding::ZERO, theme.bg_primary);
+        .rect_filled(chat_rect, egui::Rounding::ZERO, theme.bg_primary);
 
-    let message_rows = estimate_message_rows(new_message, ui.available_width());
-    let input_height =
-        (MESSAGE_INPUT_MIN_HEIGHT + (message_rows.saturating_sub(1) as f32 * 18.0))
-            .clamp(MESSAGE_INPUT_MIN_HEIGHT, MESSAGE_INPUT_MAX_HEIGHT);
+    let message_rows = estimate_message_rows(new_message, chat_rect.width());
+    let input_height = (MESSAGE_INPUT_BASE_HEIGHT + (message_rows.saturating_sub(1) as f32 * 18.0))
+        .clamp(MESSAGE_INPUT_BASE_HEIGHT, MESSAGE_INPUT_MAX_HEIGHT);
     let composer_base_height = crate::bottom_panel::BASE_PANEL_HEIGHT;
-    let composer_row_height = (composer_base_height + (input_height - MESSAGE_INPUT_MIN_HEIGHT))
+    let composer_row_height = (composer_base_height + (input_height - MESSAGE_INPUT_BASE_HEIGHT))
         .max(composer_base_height);
     let typing_height = if typing_users.is_empty() { 0.0 } else { 24.0 };
-    let attachment_height = if pending_attachment.is_some() { 42.0 } else { 0.0 };
+    let attachment_height = if pending_attachment.is_some() {
+        42.0
+    } else {
+        0.0
+    };
     let composer_height = composer_row_height + typing_height + attachment_height;
     let mut search_anchor_rect = None;
 
@@ -157,11 +177,14 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
             show_search_results_popup(
                 ctx,
                 theme,
+                chat_rect,
                 anchor_rect,
                 server_members,
                 search_results,
+                search_scroll_offset,
                 search_loading,
                 search_error,
+                on_action,
             );
         }
     }
@@ -235,26 +258,23 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                 ui.set_width(composer_rect.width());
                 egui::Frame::none()
                     .fill(theme.bg_quaternary)
-                    .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+                    .inner_margin(egui::Margin {
+                        left: 12.0,
+                        right: 12.0,
+                        top: 10.0,
+                        bottom: 0.0,
+                    })
                     .show(ui, |ui| {
                         ui.horizontal_top(|ui| {
-                            button_with_vertical_offset(
-                                ui,
-                                ((input_height - COMPOSER_BUTTON_SIZE) * 0.5).max(0.0),
-                                |ui| {
-                                    if composer_button_sized(
-                                        ui,
-                                        theme,
-                                        "+",
-                                        "Attach file",
-                                        21.0,
-                                    )
+                            let button_offset =
+                                ((input_height - COMPOSER_BUTTON_SIZE) * 0.5).max(0.0);
+                            button_with_vertical_offset(ui, button_offset, |ui| {
+                                if composer_button_sized(ui, theme, "+", "Attach file", 21.0)
                                     .clicked()
-                                    {
-                                        (*on_action)(ChatPanelAction::AttachRequest);
-                                    }
-                                },
-                            );
+                                {
+                                    (*on_action)(ChatPanelAction::AttachRequest);
+                                }
+                            });
 
                             let side_buttons_width = COMPOSER_BUTTON_SIZE * 3.0 + 18.0;
                             let input_w = (ui.available_width() - side_buttons_width).max(120.0);
@@ -263,40 +283,30 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                                 egui::TextEdit::multiline(new_message)
                                     .desired_rows(1)
                                     .lock_focus(true)
+                                    .margin(egui::Margin::symmetric(4.0, 0.0))
+                                    .horizontal_align(egui::Align::Min)
+                                    .vertical_align(egui::Align::Center)
                                     .hint_text(format!(
                                         "Написать в #{}",
                                         channel_name.trim_start_matches("# ")
                                     )),
                             );
 
-                            button_with_vertical_offset(
-                                ui,
-                                ((input_height - COMPOSER_BUTTON_SIZE) * 0.5).max(0.0),
-                                |ui| {
-                                    if composer_button(ui, theme, "GIF", "Insert GIF").clicked() {
-                                        (*on_action)(ChatPanelAction::StubGif);
-                                    }
-                                },
-                            );
-                            button_with_vertical_offset(
-                                ui,
-                                ((input_height - COMPOSER_BUTTON_SIZE) * 0.5).max(0.0),
-                                |ui| {
-                                    if composer_button(ui, theme, ":)", "Emoji picker").clicked() {
-                                        (*on_action)(ChatPanelAction::StubEmoji);
-                                    }
-                                },
-                            );
-                            button_with_vertical_offset(
-                                ui,
-                                ((input_height - COMPOSER_BUTTON_SIZE) * 0.5).max(0.0),
-                                |ui| {
-                                    if composer_button(ui, theme, "Send", "Send message").clicked()
-                                    {
-                                        (*on_action)(ChatPanelAction::SendMessage);
-                                    }
-                                },
-                            );
+                            button_with_vertical_offset(ui, button_offset, |ui| {
+                                if composer_button(ui, theme, "GIF", "Insert GIF").clicked() {
+                                    (*on_action)(ChatPanelAction::StubGif);
+                                }
+                            });
+                            button_with_vertical_offset(ui, button_offset, |ui| {
+                                if composer_button(ui, theme, ":)", "Emoji picker").clicked() {
+                                    (*on_action)(ChatPanelAction::StubEmoji);
+                                }
+                            });
+                            button_with_vertical_offset(ui, button_offset, |ui| {
+                                if composer_button(ui, theme, "Send", "Send message").clicked() {
+                                    (*on_action)(ChatPanelAction::SendMessage);
+                                }
+                            });
 
                             let enter_send = response.has_focus()
                                 && ui.input(|input| {
@@ -361,7 +371,8 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
             }
 
             for message in messages {
-                message_row(
+                let is_highlighted = highlighted_message_id == Some(message.id);
+                if message_row(
                     ui,
                     theme,
                     message,
@@ -370,7 +381,15 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                     media_textures,
                     media_bytes,
                     avatar_textures.get(&message.author_id),
-                );
+                    if is_highlighted {
+                        highlighted_message_t
+                    } else {
+                        None
+                    },
+                    is_highlighted && *scroll_to_highlighted,
+                ) {
+                    *scroll_to_highlighted = false;
+                }
             }
         });
 }
@@ -448,100 +467,251 @@ fn button_with_vertical_offset(
 fn show_search_results_popup(
     ctx: &egui::Context,
     theme: &Theme,
+    chat_rect: egui::Rect,
     anchor_rect: egui::Rect,
     server_members: &[Member],
     search_results: &[ChatSearchResult],
+    search_scroll_offset: &mut f32,
     search_loading: bool,
     search_error: Option<&str>,
+    on_action: &mut dyn FnMut(ChatPanelAction),
 ) {
-    let screen_rect = ctx.screen_rect();
-    let width = 420.0_f32.min(screen_rect.width() - 24.0).max(300.0);
-    let max_x = (screen_rect.right() - width - 12.0).max(screen_rect.left() + 12.0);
-    let x = (anchor_rect.right() - width).clamp(screen_rect.left() + 12.0, max_x);
+    let width = chat_rect.width().max(1.0);
     let y = anchor_rect.bottom() + 6.0;
 
     egui::Area::new(egui::Id::new("chat_search_results_popup"))
         .order(egui::Order::Foreground)
-        .fixed_pos(egui::pos2(x, y))
+        .fixed_pos(egui::pos2(chat_rect.left(), y))
         .show(ctx, |ui| {
             egui::Frame::none()
                 .fill(theme.bg_secondary)
                 .rounding(egui::Rounding::same(10.0))
                 .stroke(egui::Stroke::new(1.0, theme.border))
-                .inner_margin(egui::Margin::symmetric(10.0, 10.0))
+                .inner_margin(egui::Margin {
+                    left: 0.0,
+                    right: 0.0,
+                    top: 0.0,
+                    bottom: 0.0,
+                })
                 .show(ui, |ui| {
                     ui.set_width(width);
 
                     if search_loading {
+                        ui.add_space(SEARCH_RESULTS_VERTICAL_PADDING);
                         ui.horizontal(|ui| {
+                            ui.add_space(12.0);
                             ui.spinner();
                             ui.label(
-                                egui::RichText::new("Поиск сообщений...")
-                                    .color(theme.text_muted),
+                                egui::RichText::new("Поиск сообщений...").color(theme.text_muted),
                             );
                         });
+                        ui.add_space(SEARCH_RESULTS_VERTICAL_PADDING);
                         return;
                     }
 
                     if let Some(error) = search_error {
-                        ui.label(egui::RichText::new(error).color(theme.error));
+                        ui.add_space(SEARCH_RESULTS_VERTICAL_PADDING);
+                        ui.horizontal(|ui| {
+                            ui.add_space(12.0);
+                            ui.label(egui::RichText::new(error).color(theme.error));
+                        });
+                        ui.add_space(SEARCH_RESULTS_VERTICAL_PADDING);
                         return;
                     }
 
                     if search_results.is_empty() {
-                        ui.label(
-                            egui::RichText::new("совпадений не найдено")
-                                .color(theme.text_muted),
-                        );
+                        ui.add_space(SEARCH_RESULTS_VERTICAL_PADDING);
+                        ui.horizontal(|ui| {
+                            ui.add_space(12.0);
+                            ui.label(
+                                egui::RichText::new("совпадений не найдено")
+                                    .color(theme.text_muted),
+                            );
+                        });
+                        ui.add_space(SEARCH_RESULTS_VERTICAL_PADDING);
                         return;
                     }
 
-                    egui::ScrollArea::vertical()
-                        .max_height(SEARCH_RESULTS_MAX_HEIGHT)
-                        .show(ui, |ui| {
-                            for result in search_results {
-                                let author_name =
-                                    resolve_message_author_name(&result.message, server_members);
-                                egui::Frame::none()
-                                    .fill(theme.bg_quaternary)
-                                    .rounding(egui::Rounding::same(8.0))
-                                    .inner_margin(egui::Margin::symmetric(10.0, 8.0))
-                                    .show(ui, |ui| {
-                                        ui.horizontal_wrapped(|ui| {
-                                            ui.label(
-                                                egui::RichText::new(author_name)
-                                                    .strong()
-                                                    .color(theme.text_primary),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(format_message_timestamp(
-                                                    &result.message.created_at,
-                                                ))
-                                                .size(11.0)
-                                                .color(theme.text_muted),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(format!(
-                                                    "#{}",
-                                                    result.channel_name
-                                                ))
-                                                .size(11.0)
-                                                .color(theme.text_muted),
-                                            );
-                                        });
-                                        ui.add_space(4.0);
-                                        ui.label(
-                                            egui::RichText::new(message_preview_text(
-                                                &result.message,
-                                            ))
-                                            .color(theme.text_secondary),
-                                        );
-                                    });
-                                ui.add_space(8.0);
-                            }
-                        });
+                    let content_height = (search_results.len() as f32 * SEARCH_RESULT_ROW_HEIGHT)
+                        + (search_results.len().saturating_sub(1) as f32 * SEARCH_RESULT_GAP);
+                    let viewport_height = content_height.min(SEARCH_RESULTS_MAX_HEIGHT);
+                    let popup_height = viewport_height + (SEARCH_RESULTS_VERTICAL_PADDING * 2.0);
+                    let results_width = (width
+                        - SEARCH_SCROLLBAR_WIDTH
+                        - SEARCH_SCROLLBAR_GAP
+                        - SEARCH_RESULTS_RIGHT_PADDING)
+                        .max(1.0);
+                    let mut scroll_metrics = None;
+
+                    let (popup_rect, _) = ui
+                        .allocate_exact_size(egui::vec2(width, popup_height), egui::Sense::hover());
+                    let scroll_rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            popup_rect.left(),
+                            popup_rect.top() + SEARCH_RESULTS_VERTICAL_PADDING,
+                        ),
+                        egui::vec2(SEARCH_SCROLLBAR_WIDTH, viewport_height),
+                    );
+                    let results_rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            scroll_rect.right() + SEARCH_SCROLLBAR_GAP,
+                            scroll_rect.top(),
+                        ),
+                        egui::vec2(results_width, viewport_height),
+                    );
+
+                    ui.allocate_ui_at_rect(results_rect, |ui| {
+                        let output = egui::ScrollArea::vertical()
+                            .id_source("chat_search_results_popup_scroll")
+                            .vertical_scroll_offset(*search_scroll_offset)
+                            .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.set_width(results_rect.width());
+                                for (index, result) in search_results.iter().enumerate() {
+                                    search_result_row(
+                                        ui,
+                                        theme,
+                                        result,
+                                        server_members,
+                                        results_rect.width(),
+                                        on_action,
+                                    );
+                                    if index + 1 != search_results.len() {
+                                        ui.add_space(SEARCH_RESULT_GAP);
+                                    }
+                                }
+                            });
+                        *search_scroll_offset = output.state.offset.y;
+                        scroll_metrics = Some((
+                            output.content_size.y,
+                            output.inner_rect.height(),
+                            output.state.offset.y,
+                        ));
+                    });
+
+                    if let Some((content_size_y, viewport_size_y, offset_y)) = scroll_metrics {
+                        paint_left_scrollbar(
+                            ui,
+                            theme,
+                            scroll_rect,
+                            content_size_y,
+                            viewport_size_y,
+                            offset_y,
+                            search_scroll_offset,
+                            ui.id().with("chat_search_results_left_scroll"),
+                        );
+                    }
                 });
         });
+}
+
+fn search_result_row(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    result: &ChatSearchResult,
+    server_members: &[Member],
+    width: f32,
+    on_action: &mut dyn FnMut(ChatPanelAction),
+) {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(width, SEARCH_RESULT_ROW_HEIGHT),
+        egui::Sense::click(),
+    );
+    let fill = if response.hovered() {
+        theme.bg_hover
+    } else {
+        theme.bg_quaternary
+    };
+    let stroke = if response.hovered() {
+        egui::Stroke::new(1.0, theme.border_strong)
+    } else {
+        egui::Stroke::new(1.0, theme.border)
+    };
+    ui.painter()
+        .rect(rect, egui::Rounding::same(8.0), fill, stroke);
+
+    let author_name = resolve_message_author_name(&result.message, server_members);
+    let title = format!(
+        "{}  {}  #{}",
+        author_name,
+        format_message_timestamp(&result.message.created_at),
+        result.channel_name
+    );
+    ui.allocate_ui_at_rect(rect.shrink2(egui::vec2(10.0, 8.0)), |ui| {
+        ui.set_width(width - 20.0);
+        ui.add_sized(
+            [ui.available_width(), 18.0],
+            egui::Label::new(
+                egui::RichText::new(title)
+                    .strong()
+                    .color(theme.text_primary),
+            )
+            .truncate(),
+        );
+        ui.add_space(4.0);
+        ui.add_sized(
+            [ui.available_width(), 18.0],
+            egui::Label::new(
+                egui::RichText::new(message_preview_text(&result.message))
+                    .color(theme.text_secondary),
+            )
+            .truncate(),
+        );
+    });
+
+    if response.clicked() {
+        on_action(ChatPanelAction::OpenSearchResult {
+            channel_id: result.channel_id,
+            message_id: result.message.id,
+        });
+    }
+}
+
+fn paint_left_scrollbar(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    rect: egui::Rect,
+    content_height: f32,
+    viewport_height: f32,
+    offset_y: f32,
+    search_scroll_offset: &mut f32,
+    id: egui::Id,
+) {
+    ui.painter()
+        .rect_filled(rect, egui::Rounding::same(4.0), theme.bg_elevated);
+
+    if content_height <= viewport_height + 0.5 {
+        return;
+    }
+
+    let max_offset = (content_height - viewport_height).max(1.0);
+    let handle_height =
+        ((viewport_height / content_height) * rect.height()).clamp(28.0, rect.height());
+    let track_height = (rect.height() - handle_height).max(1.0);
+    let handle_top = rect.top() + (offset_y / max_offset) * track_height;
+    let handle_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left(), handle_top),
+        egui::vec2(rect.width(), handle_height),
+    );
+
+    let response = ui.interact(rect, id, egui::Sense::click_and_drag());
+    if (response.clicked() || response.dragged()) && track_height > 0.0 {
+        if let Some(pointer) = response.interact_pointer_pos() {
+            let t =
+                ((pointer.y - rect.top() - (handle_height * 0.5)) / track_height).clamp(0.0, 1.0);
+            *search_scroll_offset = t * max_offset;
+            ui.ctx().request_repaint();
+        }
+    }
+
+    let handle_fill = if response.dragged() || response.hovered() {
+        theme.accent
+    } else {
+        theme.bg_active
+    };
+    ui.painter()
+        .rect_filled(handle_rect, egui::Rounding::same(4.0), handle_fill);
 }
 
 fn message_row(
@@ -553,9 +723,20 @@ fn message_row(
     media_textures: &HashMap<i64, egui::TextureHandle>,
     media_bytes: &HashMap<i64, (Vec<u8>, String)>,
     avatar_texture: Option<&egui::TextureHandle>,
-) {
+    highlight_t: Option<f32>,
+    scroll_to_highlighted: bool,
+) -> bool {
     let author_name = resolve_message_author_name(message, server_members);
-    egui::Frame::none()
+    let row_fill = highlight_t.map_or(egui::Color32::TRANSPARENT, |t| {
+        Theme::lerp_color(
+            theme.bg_hover,
+            theme.accent,
+            (0.18 + t * 0.28).clamp(0.0, 1.0),
+        )
+    });
+
+    let frame = egui::Frame::none()
+        .fill(row_fill)
         .inner_margin(egui::Margin::symmetric(16.0, 6.0))
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
@@ -628,6 +809,11 @@ fn message_row(
                 });
             });
         });
+
+    if scroll_to_highlighted {
+        ui.scroll_to_rect(frame.response.rect, Some(egui::Align::Center));
+    }
+    scroll_to_highlighted
 }
 
 fn resolve_message_author_name(message: &Message, server_members: &[Member]) -> String {

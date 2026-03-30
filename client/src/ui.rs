@@ -441,6 +441,7 @@ impl Default for LoadState {
 
 fn clear_chat_search_state(main: &mut MainState) {
     main.chat_search_results.clear();
+    main.chat_search_scroll_offset = 0.0;
     main.chat_search_load = LoadState::Idle;
     main.chat_search_started_server = None;
     main.chat_search_started_query.clear();
@@ -702,11 +703,7 @@ pub(crate) fn process_background_loads(
 
 // ─── State (pub(crate) for app.rs) ────────────────────────────────────────────
 
-pub(crate) fn process_message_search(
-    ctx: egui::Context,
-    state: Arc<Mutex<State>>,
-    api: ApiClient,
-) {
+pub(crate) fn process_message_search(ctx: egui::Context, state: Arc<Mutex<State>>, api: ApiClient) {
     let (token, server_id, channels, query, channels_ready) = {
         let st = state.lock();
         if st.screen != Screen::Main {
@@ -740,6 +737,7 @@ pub(crate) fn process_message_search(
     if !channels_ready {
         let mut st = state.lock();
         st.main.chat_search_results.clear();
+        st.main.chat_search_scroll_offset = 0.0;
         st.main.chat_search_load = LoadState::Loading;
         st.main.chat_search_started_server = None;
         st.main.chat_search_started_query.clear();
@@ -767,6 +765,7 @@ pub(crate) fn process_message_search(
         st.main.chat_search_started_server = Some(server_id);
         st.main.chat_search_started_query = query.clone();
         st.main.chat_search_results.clear();
+        st.main.chat_search_scroll_offset = 0.0;
         st.main.chat_search_load = LoadState::Loading;
         st.main.chat_search_request_seq
     };
@@ -954,10 +953,15 @@ pub(crate) struct MainState {
     pub(crate) selected_channel: Option<i64>,
     pub(crate) chat_search_query: String,
     pub(crate) chat_search_results: Vec<chat_panel::ChatSearchResult>,
+    pub(crate) chat_search_scroll_offset: f32,
     pub(crate) chat_search_load: LoadState,
     pub(crate) chat_search_started_server: Option<i64>,
     pub(crate) chat_search_started_query: String,
     pub(crate) chat_search_request_seq: u64,
+    pub(crate) highlighted_message_channel_id: Option<i64>,
+    pub(crate) highlighted_message_id: Option<i64>,
+    pub(crate) highlighted_message_until: Option<Instant>,
+    pub(crate) highlighted_message_scroll_pending: bool,
     pub(crate) new_message: String,
     pub(crate) prev_message: String,
     pub(crate) new_server_name: String,
@@ -1043,10 +1047,15 @@ impl Clone for MainState {
             selected_channel: self.selected_channel,
             chat_search_query: self.chat_search_query.clone(),
             chat_search_results: self.chat_search_results.clone(),
+            chat_search_scroll_offset: self.chat_search_scroll_offset,
             chat_search_load: self.chat_search_load.clone(),
             chat_search_started_server: self.chat_search_started_server,
             chat_search_started_query: self.chat_search_started_query.clone(),
             chat_search_request_seq: self.chat_search_request_seq,
+            highlighted_message_channel_id: self.highlighted_message_channel_id,
+            highlighted_message_id: self.highlighted_message_id,
+            highlighted_message_until: self.highlighted_message_until,
+            highlighted_message_scroll_pending: self.highlighted_message_scroll_pending,
             new_message: self.new_message.clone(),
             prev_message: self.prev_message.clone(),
             new_server_name: self.new_server_name.clone(),
@@ -1124,10 +1133,15 @@ impl Default for MainState {
             selected_channel: None,
             chat_search_query: String::new(),
             chat_search_results: Vec::new(),
+            chat_search_scroll_offset: 0.0,
             chat_search_load: LoadState::Idle,
             chat_search_started_server: None,
             chat_search_started_query: String::new(),
             chat_search_request_seq: 0,
+            highlighted_message_channel_id: None,
+            highlighted_message_id: None,
+            highlighted_message_until: None,
+            highlighted_message_scroll_pending: false,
             new_message: String::new(),
             prev_message: String::new(),
             new_server_name: String::new(),
@@ -4146,6 +4160,21 @@ pub(crate) fn main_screen(
                     LoadState::Error(s) => Some(s.as_str()),
                     _ => None,
                 };
+                let highlighted_message_id =
+                    if state.main.highlighted_message_channel_id == state.main.selected_channel {
+                        state.main.highlighted_message_id
+                    } else {
+                        None
+                    };
+                let highlighted_message_t =
+                    state.main.highlighted_message_until.and_then(|until| {
+                        let remaining = until.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            None
+                        } else {
+                            Some((remaining.as_secs_f32() / 3.0).clamp(0.0, 1.0))
+                        }
+                    });
                 chat_panel::show(
                     ctx,
                     ui,
@@ -4156,8 +4185,12 @@ pub(crate) fn main_screen(
                         messages: &state.main.messages,
                         search_query: &mut state.main.chat_search_query,
                         search_results: &state.main.chat_search_results,
+                        search_scroll_offset: &mut state.main.chat_search_scroll_offset,
                         search_loading,
                         search_error,
+                        highlighted_message_id,
+                        highlighted_message_t,
+                        scroll_to_highlighted: &mut state.main.highlighted_message_scroll_pending,
                         new_message: &mut state.main.new_message,
                         typing_users: &typing_users,
                         pending_attachment: state.main.pending_attachment.as_ref(),
@@ -4222,6 +4255,21 @@ pub(crate) fn main_screen(
                         ChatPanelAction::ToggleMemberList => {
                             let current = state.main.show_member_panel.unwrap_or(true);
                             state.main.show_member_panel = Some(!current);
+                            ctx.request_repaint();
+                        }
+                        ChatPanelAction::OpenSearchResult {
+                            channel_id,
+                            message_id,
+                        } => {
+                            state.main.selected_channel = Some(channel_id);
+                            state.main.unread_channels.remove(&channel_id);
+                            state.main.highlighted_message_channel_id = Some(channel_id);
+                            state.main.highlighted_message_id = Some(message_id);
+                            state.main.highlighted_message_until =
+                                Some(Instant::now() + Duration::from_secs(3));
+                            state.main.highlighted_message_scroll_pending = true;
+                            state.main.chat_search_query.clear();
+                            clear_chat_search_state(&mut state.main);
                             ctx.request_repaint();
                         }
                         ChatPanelAction::StubGif => todo_actions::todo_insert_gif(),

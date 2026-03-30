@@ -892,6 +892,16 @@ impl eframe::App for AstrixApp {
         }
 
         let now = Instant::now();
+        if let Some(until) = st.main.highlighted_message_until {
+            if now >= until {
+                st.main.highlighted_message_channel_id = None;
+                st.main.highlighted_message_id = None;
+                st.main.highlighted_message_until = None;
+                st.main.highlighted_message_scroll_pending = false;
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
+        }
         st.main
             .typing_users
             .retain(|(_, _, t)| now.duration_since(*t) < Duration::from_secs(3));
