@@ -235,6 +235,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
 
                     if let Some(participants) = voice.channel_voice.get(id) {
                         for participant in participants {
+                            let is_locally_muted = voice.locally_muted.contains(&participant.user_id);
                             let row = voice_participant_row(
                                 ui,
                                 theme,
@@ -244,31 +245,30 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                                 Some(participant.user_id) == user_id
                                     && voice.mic_muted
                                     && voice.output_muted,
+                                is_locally_muted,
                             );
                             if voice.channel_id == Some(*id) && Some(participant.user_id) != user_id
                             {
-                                let locally_muted =
-                                    voice.locally_muted.contains(&participant.user_id);
                                 let receiver_denoise =
                                     voice.receiver_denoise_users.contains(&participant.user_id);
                                 row.context_menu(|ui| {
-                                    let mute_label = if locally_muted {
-                                        "Unmute locally"
+                                    let mute_label = if is_locally_muted {
+                                        "Снять локальный мут"
                                     } else {
-                                        "Mute locally"
+                                        "Локально заглушить"
                                     };
                                     if ui.button(mute_label).clicked() {
                                         (*on_action)(ChannelPanelAction::SetParticipantMuted {
                                             user_id: participant.user_id,
-                                            muted: !locally_muted,
+                                            muted: !is_locally_muted,
                                         });
                                         ui.close_menu();
                                     }
 
                                     let denoise_label = if receiver_denoise {
-                                        "Disable local denoise"
+                                        "Выключить локальное шумоподавление"
                                     } else {
-                                        "Enable local denoise"
+                                        "Включить локальное шумоподавление"
                                     };
                                     if ui.button(denoise_label).clicked() {
                                         (*on_action)(ChannelPanelAction::SetParticipantDenoise {
@@ -286,7 +286,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                                     if ui
                                         .add(
                                             egui::Slider::new(&mut volume, 0.0..=3.0)
-                                                .text("Volume")
+                                                .text("Громкость")
                                                 .custom_formatter(|value, _| {
                                                     format!("{:.0}%", value * 100.0)
                                                 }),
@@ -439,9 +439,10 @@ fn voice_participant_row(
     is_speaking: bool,
     is_self: bool,
     is_full_muted: bool,
+    is_locally_muted: bool,
 ) -> egui::Response {
     let name = if participant.username.is_empty() {
-        "Guest"
+        "Гость"
     } else {
         participant.username.as_str()
     };
@@ -456,17 +457,23 @@ fn voice_participant_row(
                     .size(13.0)
                     .color(theme.text_secondary),
             );
-            if is_full_muted {
+            if is_locally_muted {
                 ui.label(
-                    egui::RichText::new("full muted")
+                    egui::RichText::new("mute local")
                         .size(12.0)
-                        .color(theme.text_muted),
+                        .color(theme.warning),
+                );
+            } else if is_full_muted {
+                ui.label(
+                    egui::RichText::new("Полный мут")
+                        .size(12.0)
+                        .color(theme.error),
                 );
             } else if participant.mic_muted || (is_self && participant.mic_muted) {
                 ui.label(
-                    egui::RichText::new("Muted")
+                    egui::RichText::new("Микрофон выключен")
                         .size(12.0)
-                        .color(theme.text_muted),
+                        .color(theme.error),
                 );
             }
         })

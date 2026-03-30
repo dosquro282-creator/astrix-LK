@@ -832,6 +832,7 @@ pub(crate) struct MainState {
     pub(crate) voice_video_gpu_tex_pending_delete: Vec<egui::TextureId>,
     pub(crate) voice_pending_leave: bool,
     pub(crate) fullscreen_stream_user: Option<i64>,
+    pub(crate) voice_grid_focus_user: Option<i64>,
     /// Debounce: stream keys seen as non-streaming in previous frame. Remove texture only after 2 consecutive frames.
     pub(crate) stream_ended_prev_frame: HashSet<i64>,
     pub(crate) show_screen_source_picker: bool,
@@ -908,6 +909,7 @@ impl Clone for MainState {
             voice_video_gpu_tex_pending_delete: Vec::new(),
             voice_pending_leave: false,
             fullscreen_stream_user: None,
+            voice_grid_focus_user: None,
             stream_ended_prev_frame: HashSet::new(),
             show_screen_source_picker: false,
             screen_sources: Vec::new(),
@@ -981,6 +983,7 @@ impl Default for MainState {
             voice_video_gpu_tex_pending_delete: Vec::new(),
             voice_pending_leave: false,
             fullscreen_stream_user: None,
+            voice_grid_focus_user: None,
             stream_ended_prev_frame: HashSet::new(),
             show_screen_source_picker: false,
             screen_sources: Vec::new(),
@@ -1555,6 +1558,7 @@ fn apply_voice_leave(
             .push(egui_tex_id);
     }
     state.main.fullscreen_stream_user = None;
+    state.main.voice_grid_focus_user = None;
     state.main.stream_ended_prev_frame.clear();
     ctx.request_repaint();
 }
@@ -2450,6 +2454,7 @@ pub(crate) fn main_screen(
             state.main.voice_render_fps.clear();
             state.main.voice_receiver_telemetry = None;
             state.main.fullscreen_stream_user = None;
+            state.main.voice_grid_focus_user = None;
             state.main.stream_ended_prev_frame.clear();
             state.main.voice_switch_confirm = None;
             if let Some(ref token) = state.access_token {
@@ -3391,12 +3396,7 @@ pub(crate) fn main_screen(
                     set_local_output_muted(ctx, state, engine_tx.as_ref(), muted);
                 }
                 ChannelPanelAction::SetParticipantMuted { user_id, muted } => {
-                    if muted {
-                        state.main.voice.locally_muted.insert(user_id);
-                    } else {
-                        state.main.voice.locally_muted.remove(&user_id);
-                    }
-                    sync_user_volume(engine_tx, &state.main.voice, user_id);
+                    set_local_participant_muted(state, engine_tx, user_id, muted);
                     ctx.request_repaint();
                 }
                 ChannelPanelAction::SetParticipantVolume { user_id, volume } => {
@@ -3844,6 +3844,16 @@ pub(crate) fn main_screen(
                     // Adaptive grid: 1 → ~full screen, 2 → 50/50, 4 → 2x2, N → auto.
                     // Multiple video tracks per user (camera + screen): when voice_video_textures
                     // is keyed by (user_id, track_id), show multiple rounded-rect tiles per user.
+                    show_voice_grid(
+                        ui,
+                        theme,
+                        state,
+                        engine_tx,
+                        &participants,
+                        &speaking_snap,
+                        in_this_voice,
+                    );
+                    if false {
                     let n = participants.len().max(1);
                     let avail = ui.available_size_before_wrap();
                     let (n_cols, tile_w, tile_h) = match n {
@@ -4315,6 +4325,7 @@ pub(crate) fn main_screen(
                                 ui.add_space(4.0);
                             }
                         });
+                    }
                 }
             }
         });
@@ -4529,6 +4540,823 @@ pub(crate) fn main_screen(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const VOICE_GRID_TILE_ASPECT: f32 = 16.0 / 9.0;
+const VOICE_GRID_TILE_GAP: f32 = 14.0;
+const VOICE_GRID_TILE_ROUNDING: f32 = 16.0;
+const VOICE_GRID_TILE_PADDING: f32 = 12.0;
+
+#[derive(Clone, Copy)]
+struct VoiceGridLayout {
+    cols: usize,
+    rows: usize,
+    tile_size: egui::Vec2,
+}
+
+#[derive(Clone, Copy)]
+enum VoiceMuteBadge {
+    Full,
+    Local,
+    Mic,
+}
+
+fn show_voice_grid(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    state: &mut State,
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    participants: &[VoiceParticipant],
+    speaking_snap: &HashMap<i64, bool>,
+    in_this_voice: bool,
+) {
+    if let Some(focused_user) = state.main.voice_grid_focus_user {
+        if !participants.iter().any(|participant| participant.user_id == focused_user) {
+            state.main.voice_grid_focus_user = None;
+        }
+    }
+
+    let viewport = ui.available_rect_before_wrap();
+    if viewport.width() <= 1.0 || viewport.height() <= 1.0 {
+        return;
+    }
+    ui.allocate_rect(viewport, egui::Sense::hover());
+
+    if let Some(focused_user) = state.main.voice_grid_focus_user {
+        if let Some(focused_participant) = participants
+            .iter()
+            .find(|participant| participant.user_id == focused_user)
+        {
+            let others: Vec<&VoiceParticipant> = participants
+                .iter()
+                .filter(|participant| participant.user_id != focused_user)
+                .collect();
+            let strip_height = if others.is_empty() {
+                0.0
+            } else {
+                (viewport.height() * 0.22).clamp(108.0, 160.0)
+            };
+            let main_area = if strip_height > 0.0 {
+                egui::Rect::from_min_max(
+                    viewport.min,
+                    egui::pos2(
+                        viewport.right(),
+                        viewport.bottom() - strip_height - VOICE_GRID_TILE_GAP,
+                    ),
+                )
+            } else {
+                viewport
+            };
+            let main_size = fit_size_to_aspect(
+                main_area.size() - egui::vec2(VOICE_GRID_TILE_PADDING * 2.0, 8.0),
+                VOICE_GRID_TILE_ASPECT,
+            );
+            let main_rect = egui::Rect::from_center_size(main_area.center(), main_size);
+            show_voice_participant_tile(
+                ui,
+                theme,
+                state,
+                engine_tx,
+                main_rect,
+                focused_participant,
+                in_this_voice,
+                *speaking_snap
+                    .get(&focused_participant.user_id)
+                    .unwrap_or(&false),
+            );
+
+            if !others.is_empty() {
+                let strip_rect = egui::Rect::from_min_max(
+                    egui::pos2(viewport.left(), viewport.bottom() - strip_height),
+                    viewport.max,
+                );
+                let count = others.len();
+                let thumb_max_width = (strip_rect.width()
+                    - VOICE_GRID_TILE_GAP * count.saturating_sub(1) as f32)
+                    / count as f32;
+                let thumb_size = fit_size_to_aspect(
+                    egui::vec2(thumb_max_width.max(56.0), strip_rect.height() - 6.0),
+                    VOICE_GRID_TILE_ASPECT,
+                );
+                let row_width = thumb_size.x * count as f32
+                    + VOICE_GRID_TILE_GAP * count.saturating_sub(1) as f32;
+                let start_x =
+                    strip_rect.left() + ((strip_rect.width() - row_width).max(0.0) * 0.5);
+                let start_y =
+                    strip_rect.top() + ((strip_rect.height() - thumb_size.y).max(0.0) * 0.5);
+                for (idx, participant) in others.iter().enumerate() {
+                    let rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            start_x + idx as f32 * (thumb_size.x + VOICE_GRID_TILE_GAP),
+                            start_y,
+                        ),
+                        thumb_size,
+                    );
+                    show_voice_participant_tile(
+                        ui,
+                        theme,
+                        state,
+                        engine_tx,
+                        rect,
+                        participant,
+                        in_this_voice,
+                        *speaking_snap.get(&participant.user_id).unwrap_or(&false),
+                    );
+                }
+            }
+            return;
+        }
+    }
+
+    let layout = best_voice_grid_layout(participants.len(), viewport.size());
+    let total_height = layout.tile_size.y * layout.rows as f32
+        + VOICE_GRID_TILE_GAP * layout.rows.saturating_sub(1) as f32;
+    let start_y = viewport.top() + ((viewport.height() - total_height).max(0.0) * 0.5);
+
+    for row_idx in 0..layout.rows {
+        let row_start = row_idx * layout.cols;
+        let row_end = (row_start + layout.cols).min(participants.len());
+        let row_participants = &participants[row_start..row_end];
+        let row_width = layout.tile_size.x * row_participants.len() as f32
+            + VOICE_GRID_TILE_GAP * row_participants.len().saturating_sub(1) as f32;
+        let start_x = viewport.left() + ((viewport.width() - row_width).max(0.0) * 0.5);
+        let y = start_y + row_idx as f32 * (layout.tile_size.y + VOICE_GRID_TILE_GAP);
+
+        for (idx, participant) in row_participants.iter().enumerate() {
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(start_x + idx as f32 * (layout.tile_size.x + VOICE_GRID_TILE_GAP), y),
+                layout.tile_size,
+            );
+            show_voice_participant_tile(
+                ui,
+                theme,
+                state,
+                engine_tx,
+                rect,
+                participant,
+                in_this_voice,
+                *speaking_snap.get(&participant.user_id).unwrap_or(&false),
+            );
+        }
+    }
+}
+
+fn show_voice_participant_tile(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    state: &mut State,
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    rect: egui::Rect,
+    participant: &VoiceParticipant,
+    in_this_voice: bool,
+    is_speaking: bool,
+) {
+    let id = ui.make_persistent_id(("voice_grid_tile", participant.user_id));
+    let response = ui.interact(rect, id, egui::Sense::click());
+    if response.clicked_by(egui::PointerButton::Primary) {
+        if state.main.voice_grid_focus_user == Some(participant.user_id) {
+            state.main.voice_grid_focus_user = None;
+        } else {
+            state.main.voice_grid_focus_user = Some(participant.user_id);
+        }
+        ui.ctx().request_repaint();
+    }
+
+    let is_focused = state.main.voice_grid_focus_user == Some(participant.user_id);
+    let is_self = Some(participant.user_id) == state.user_id;
+    let is_full_muted = is_self && state.main.voice.mic_muted && state.main.voice.output_muted;
+    let is_locally_muted =
+        in_this_voice && state.main.voice.locally_muted.contains(&participant.user_id);
+    let can_open_context_menu = in_this_voice && Some(participant.user_id) != state.user_id;
+
+    let hover_t = ui.ctx().animate_bool(id.with("hover"), response.hovered());
+    let base_fill = if is_focused {
+        Theme::lerp_color(theme.bg_active, theme.bg_hover, 0.55)
+    } else {
+        Theme::lerp_color(theme.bg_secondary, theme.bg_hover, hover_t * 0.5)
+    };
+    let border_color = if is_speaking {
+        theme.success
+    } else if is_focused {
+        theme.accent
+    } else {
+        theme.border
+    };
+    let border_width = if is_speaking || is_focused { 2.0 } else { 1.0 };
+
+    ui.painter().rect_filled(
+        rect,
+        egui::Rounding::same(VOICE_GRID_TILE_ROUNDING),
+        base_fill,
+    );
+    ui.painter().rect_stroke(
+        rect,
+        egui::Rounding::same(VOICE_GRID_TILE_ROUNDING),
+        egui::Stroke::new(border_width, border_color),
+    );
+
+    let content_rect = rect.shrink(VOICE_GRID_TILE_PADDING);
+    let avatar_rect = content_rect;
+    let footer_height = (avatar_rect.height() * 0.23).clamp(58.0, 92.0);
+    let footer_rect = egui::Rect::from_min_max(
+        egui::pos2(avatar_rect.left(), avatar_rect.bottom() - footer_height),
+        avatar_rect.right_bottom(),
+    );
+
+    paint_voice_tile_media(
+        ui,
+        theme,
+        state,
+        engine_tx,
+        participant,
+        avatar_rect,
+        in_this_voice,
+        is_speaking,
+    );
+
+    ui.painter().rect_filled(
+        footer_rect,
+        egui::Rounding {
+            nw: 0.0,
+            ne: 0.0,
+            sw: VOICE_GRID_TILE_ROUNDING,
+            se: VOICE_GRID_TILE_ROUNDING,
+        },
+        egui::Color32::from_black_alpha(148),
+    );
+
+    let name = display_participant_name(participant);
+    let name_font_size: f32 = if is_focused { 16.0 } else { 14.0 };
+    let name_color = if is_locally_muted {
+        theme.text_muted
+    } else {
+        theme.text_primary
+    };
+    let tag_height = if rect.height() < 170.0 { 20.0 } else { 22.0 };
+    let mut right = footer_rect.right();
+    if participant.streaming {
+        let pill_rect = egui::Rect::from_min_max(
+            egui::pos2(right - 46.0, footer_rect.top()),
+            egui::pos2(right, footer_rect.top() + tag_height),
+        );
+        paint_tile_tag(ui.painter(), pill_rect, "LIVE", theme.error, theme.text_primary);
+        right = pill_rect.left() - 6.0;
+    }
+    if participant.cam_enabled {
+        let pill_rect = egui::Rect::from_min_max(
+            egui::pos2(right - 44.0, footer_rect.top()),
+            egui::pos2(right, footer_rect.top() + tag_height),
+        );
+        paint_tile_tag(
+            ui.painter(),
+            pill_rect,
+            "CAM",
+            Theme::lerp_color(theme.bg_quaternary, theme.bg_hover, 0.45),
+            theme.text_secondary,
+        );
+        right = pill_rect.left() - 6.0;
+    }
+
+    let name_rect = egui::Rect::from_min_max(
+        egui::pos2(footer_rect.left(), footer_rect.top()),
+        egui::pos2(right.max(footer_rect.left()), footer_rect.top() + tag_height),
+    );
+    let approx_char_width = (name_font_size * 0.58).max(6.0);
+    let max_chars = (name_rect.width() / approx_char_width).floor().max(6.0) as usize;
+    ui.painter().text(
+        name_rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        truncate_with_ellipsis(name, max_chars),
+        egui::FontId::proportional(name_font_size),
+        name_color,
+    );
+
+    let badge_height = if rect.height() < 180.0 { 24.0 } else { 28.0 };
+    let badge_top = (name_rect.bottom() + 8.0).min(footer_rect.bottom() - badge_height);
+    let mut badge_x = footer_rect.left();
+    if is_full_muted {
+        let badge_rect = egui::Rect::from_min_size(
+            egui::pos2(badge_x, badge_top),
+            egui::vec2(58.0, badge_height),
+        );
+        paint_voice_mute_badge(ui.painter(), badge_rect, theme, VoiceMuteBadge::Full);
+    } else {
+        if is_locally_muted {
+            let badge_rect = egui::Rect::from_min_size(
+                egui::pos2(badge_x, badge_top),
+                egui::vec2(28.0, badge_height),
+            );
+            paint_voice_mute_badge(ui.painter(), badge_rect, theme, VoiceMuteBadge::Local);
+            badge_x = badge_rect.right() + 6.0;
+        }
+        if participant.mic_muted {
+            let badge_rect = egui::Rect::from_min_size(
+                egui::pos2(badge_x, badge_top),
+                egui::vec2(28.0, badge_height),
+            );
+            paint_voice_mute_badge(ui.painter(), badge_rect, theme, VoiceMuteBadge::Mic);
+        }
+    }
+
+    if can_open_context_menu {
+        response.context_menu(|ui| {
+            show_voice_participant_context_menu(ui, state, engine_tx, participant.user_id);
+        });
+    }
+}
+
+fn paint_voice_tile_media(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    state: &mut State,
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    participant: &VoiceParticipant,
+    avatar_rect: egui::Rect,
+    in_this_voice: bool,
+    is_speaking: bool,
+) {
+    let stream_key = video_frame_key(participant.user_id, true);
+    let stream_preview_key = video_preview_frame_key(participant.user_id);
+    let camera_key = participant.user_id;
+    let has_stream_texture = state.main.voice_video_gpu_textures.contains_key(&stream_key)
+        || state.main.voice_video_textures.contains_key(&stream_key);
+    let has_stream_preview_texture =
+        state.main.voice_video_gpu_textures.contains_key(&stream_preview_key)
+            || state.main.voice_video_textures.contains_key(&stream_preview_key);
+    let has_camera_texture = state.main.voice_video_gpu_textures.contains_key(&camera_key)
+        || state.main.voice_video_textures.contains_key(&camera_key);
+    let is_stream_subscribed =
+        in_this_voice && state.main.voice.stream_subscriptions.contains(&participant.user_id);
+    let show_stream_preview = participant.streaming && in_this_voice && !is_stream_subscribed;
+    let show_stream_connecting =
+        participant.streaming && in_this_voice && is_stream_subscribed && !has_stream_texture;
+    let show_stream_controls =
+        participant.streaming && in_this_voice && is_stream_subscribed && has_stream_texture;
+    let tex_key = if participant.streaming {
+        if has_stream_texture {
+            Some(stream_key)
+        } else if has_stream_preview_texture && !is_stream_subscribed {
+            Some(stream_preview_key)
+        } else {
+            None
+        }
+    } else if has_camera_texture {
+        Some(camera_key)
+    } else {
+        None
+    };
+
+    if let Some(key) = tex_key {
+        let rendered =
+            if let Some(&(_, gl_tex_id, _, _)) = state.main.voice_video_gpu_textures.get(&key) {
+                paint_wgl_video_texture(ui, avatar_rect, gl_tex_id);
+                true
+            } else {
+                false
+            };
+        if !rendered {
+            if let Some(texture) = state.main.voice_video_textures.get(&key) {
+                ui.put(
+                    avatar_rect,
+                    egui::Image::new(texture).fit_to_exact_size(avatar_rect.size()),
+                );
+            }
+        }
+
+        if show_stream_preview {
+            ui.painter().rect_filled(
+                avatar_rect,
+                egui::Rounding::same(VOICE_GRID_TILE_ROUNDING),
+                egui::Color32::from_black_alpha(124),
+            );
+            let button_rect =
+                egui::Rect::from_center_size(avatar_rect.center(), egui::vec2(126.0, 36.0));
+            ui.allocate_ui_at_rect(button_rect, |ui| {
+                if ui.button("Смотреть").clicked() {
+                    set_stream_subscription(state, engine_tx, participant.user_id, true);
+                }
+            });
+        }
+        if show_stream_connecting {
+            ui.painter().rect_filled(
+                avatar_rect,
+                egui::Rounding::same(VOICE_GRID_TILE_ROUNDING),
+                egui::Color32::from_black_alpha(104),
+            );
+            ui.painter().text(
+                avatar_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Подключение...",
+                egui::FontId::proportional(16.0),
+                egui::Color32::WHITE,
+            );
+        }
+        if show_stream_controls {
+            let button_size = egui::vec2(30.0, 30.0);
+            let right = avatar_rect.right() - 6.0;
+            let top = avatar_rect.top() + 6.0;
+            let fullscreen_rect = egui::Rect::from_min_size(
+                egui::pos2(right - button_size.x * 2.0 - 6.0, top),
+                button_size,
+            );
+            let audio_rect = egui::Rect::from_min_size(
+                egui::pos2(right - button_size.x, top),
+                button_size,
+            );
+            ui.allocate_ui_at_rect(fullscreen_rect, |ui| {
+                if ui
+                    .button("⛶")
+                    .on_hover_text("Развернуть трансляцию")
+                    .clicked()
+                {
+                    state.main.fullscreen_stream_user = Some(participant.user_id);
+                }
+            });
+            ui.allocate_ui_at_rect(audio_rect, |ui| {
+                show_stream_audio_button(ui, state, engine_tx, participant.user_id);
+            });
+
+            let fps = state
+                .main
+                .voice_render_fps
+                .get_mut(&key)
+                .map(|tracker| tracker.update_and_get())
+                .unwrap_or(0.0);
+            if fps > 0.0 {
+                let fps_rect = egui::Rect::from_min_size(
+                    avatar_rect.left_bottom() + egui::vec2(8.0, -24.0),
+                    egui::vec2(54.0, 18.0),
+                );
+                ui.painter().rect_filled(
+                    fps_rect,
+                    egui::Rounding::same(6.0),
+                    egui::Color32::from_black_alpha(168),
+                );
+                ui.painter().text(
+                    fps_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{fps:.0} fps"),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::WHITE,
+                );
+            }
+        }
+    } else {
+        ui.painter().rect_filled(
+            avatar_rect,
+            egui::Rounding::same(VOICE_GRID_TILE_ROUNDING),
+            egui::Color32::from_rgb(80, 100, 160),
+        );
+        let letter = participant
+            .username
+            .chars()
+            .next()
+            .map(|ch| ch.to_uppercase().to_string())
+            .unwrap_or_else(|| "?".to_string());
+        let font_size = (avatar_rect.height() * 0.38).max(18.0);
+        ui.painter().text(
+            avatar_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            letter,
+            egui::FontId::proportional(font_size),
+            egui::Color32::WHITE,
+        );
+        if show_stream_preview {
+            ui.painter().rect_filled(
+                avatar_rect,
+                egui::Rounding::same(VOICE_GRID_TILE_ROUNDING),
+                egui::Color32::from_black_alpha(124),
+            );
+            let button_rect =
+                egui::Rect::from_center_size(avatar_rect.center(), egui::vec2(126.0, 36.0));
+            ui.allocate_ui_at_rect(button_rect, |ui| {
+                if ui.button("Смотреть").clicked() {
+                    set_stream_subscription(state, engine_tx, participant.user_id, true);
+                }
+            });
+        }
+        if show_stream_connecting {
+            ui.painter().rect_filled(
+                avatar_rect,
+                egui::Rounding::same(VOICE_GRID_TILE_ROUNDING),
+                egui::Color32::from_black_alpha(104),
+            );
+            ui.painter().text(
+                avatar_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Подключение...",
+                egui::FontId::proportional(16.0),
+                egui::Color32::WHITE,
+            );
+        }
+    }
+
+    if is_speaking {
+        ui.painter().rect_stroke(
+            avatar_rect.expand(2.0),
+            egui::Rounding::same(VOICE_GRID_TILE_ROUNDING + 2.0),
+            egui::Stroke::new(2.0, theme.success),
+        );
+    }
+}
+
+fn show_voice_participant_context_menu(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: i64,
+) {
+    let is_locally_muted = state.main.voice.locally_muted.contains(&user_id);
+    let mute_label = if is_locally_muted {
+        "Снять локальный мут"
+    } else {
+        "Локально заглушить"
+    };
+    if ui.button(mute_label).clicked() {
+        set_local_participant_muted(state, engine_tx, user_id, !is_locally_muted);
+        ui.close_menu();
+    }
+
+    let denoise_enabled = state.main.voice.receiver_denoise_users.contains(&user_id);
+    let denoise_label = if denoise_enabled {
+        "Выключить шумоподавление (локально)"
+    } else {
+        "Включить шумоподавление (локально)"
+    };
+    if ui.button(denoise_label).clicked() {
+        set_receiver_denoise_enabled(state, engine_tx, user_id, !denoise_enabled);
+        ui.close_menu();
+    }
+
+    ui.label("Громкость 0-300%, по умолчанию 100%");
+    let mut volume = state
+        .main
+        .voice
+        .local_volumes
+        .get(&user_id)
+        .copied()
+        .unwrap_or(1.0);
+    if ui
+        .add(
+            egui::Slider::new(&mut volume, 0.0..=3.0)
+                .custom_formatter(|value, _| format!("{:.0}%", value * 100.0))
+                .text(""),
+        )
+        .changed()
+    {
+        state.main.voice.local_volumes.insert(user_id, volume);
+        state
+            .settings
+            .voice_volume_by_user
+            .insert(user_id.to_string(), volume);
+        state.settings.save();
+        sync_user_volume(engine_tx, &state.main.voice, user_id);
+    }
+}
+
+fn display_participant_name(participant: &VoiceParticipant) -> &str {
+    if participant.username.trim().is_empty() {
+        "Гость"
+    } else {
+        participant.username.as_str()
+    }
+}
+
+fn truncate_with_ellipsis(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
+fn best_voice_grid_layout(count: usize, available: egui::Vec2) -> VoiceGridLayout {
+    let mut best = VoiceGridLayout {
+        cols: 1,
+        rows: count.max(1),
+        tile_size: fit_size_to_aspect(available, VOICE_GRID_TILE_ASPECT),
+    };
+    let mut best_score = 0.0;
+
+    for cols in 1..=count.max(1) {
+        let rows = (count.max(1) + cols - 1) / cols;
+        let max_width = (available.x - VOICE_GRID_TILE_GAP * cols.saturating_sub(1) as f32)
+            / cols as f32;
+        let max_height = (available.y - VOICE_GRID_TILE_GAP * rows.saturating_sub(1) as f32)
+            / rows as f32;
+        if max_width <= 0.0 || max_height <= 0.0 {
+            continue;
+        }
+        let tile_size =
+            fit_size_to_aspect(egui::vec2(max_width, max_height), VOICE_GRID_TILE_ASPECT);
+        let balance_penalty = (cols as isize - rows as isize).abs() as f32 * 160.0;
+        let empty_penalty = (cols * rows - count.max(1)) as f32 * 80.0;
+        let score = tile_size.x * tile_size.y - balance_penalty - empty_penalty;
+        if score > best_score {
+            best_score = score;
+            best = VoiceGridLayout {
+                cols,
+                rows,
+                tile_size,
+            };
+        }
+    }
+
+    best
+}
+
+fn fit_size_to_aspect(max_size: egui::Vec2, aspect: f32) -> egui::Vec2 {
+    let max_width = max_size.x.max(1.0);
+    let max_height = max_size.y.max(1.0);
+    let mut width = max_width;
+    let mut height = width / aspect;
+    if height > max_height {
+        height = max_height;
+        width = height * aspect;
+    }
+    egui::vec2(width.max(1.0), height.max(1.0))
+}
+
+fn paint_tile_tag(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    label: &str,
+    fill: egui::Color32,
+    text_color: egui::Color32,
+) {
+    painter.rect_filled(rect, egui::Rounding::same(rect.height() * 0.45), fill);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(11.0),
+        text_color,
+    );
+}
+
+fn paint_voice_mute_badge(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    theme: &Theme,
+    badge: VoiceMuteBadge,
+) {
+    let (fill, icon_color) = match badge {
+        VoiceMuteBadge::Full => (theme.error, theme.text_primary),
+        VoiceMuteBadge::Local => (theme.warning, theme.bg_elevated),
+        VoiceMuteBadge::Mic => (theme.error, theme.text_primary),
+    };
+    painter.rect_filled(rect, egui::Rounding::same(rect.height() * 0.5), fill);
+
+    match badge {
+        VoiceMuteBadge::Full => {
+            let mic_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 6.0, rect.top() + 4.0),
+                egui::pos2(rect.center().x + 1.0, rect.bottom() - 4.0),
+            );
+            let headphones_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.center().x - 1.0, rect.top() + 4.0),
+                egui::pos2(rect.right() - 6.0, rect.bottom() - 4.0),
+            );
+            paint_microphone_icon(painter, mic_rect, icon_color, true);
+            paint_headphones_icon(painter, headphones_rect, icon_color, true);
+        }
+        VoiceMuteBadge::Local | VoiceMuteBadge::Mic => {
+            let icon_rect = rect.shrink2(egui::vec2(4.0, 3.0));
+            paint_microphone_icon(painter, icon_rect, icon_color, true);
+        }
+    }
+}
+
+fn paint_microphone_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    color: egui::Color32,
+    crossed: bool,
+) {
+    let stroke = egui::Stroke::new((rect.width() * 0.08).max(1.6), color);
+    let body_w = rect.width() * 0.34;
+    let body_h = rect.height() * 0.42;
+    let body_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.center().x, rect.top() + rect.height() * 0.34),
+        egui::vec2(body_w, body_h),
+    );
+    painter.rect_stroke(body_rect, egui::Rounding::same(body_w * 0.5), stroke);
+    painter.line_segment(
+        [
+            egui::pos2(body_rect.center().x, body_rect.bottom()),
+            egui::pos2(body_rect.center().x, rect.bottom() - rect.height() * 0.24),
+        ],
+        stroke,
+    );
+    painter.add(egui::Shape::line(
+        vec![
+            egui::pos2(
+                rect.center().x - rect.width() * 0.18,
+                rect.bottom() - rect.height() * 0.28,
+            ),
+            egui::pos2(rect.center().x, rect.bottom() - rect.height() * 0.16),
+            egui::pos2(
+                rect.center().x + rect.width() * 0.18,
+                rect.bottom() - rect.height() * 0.28,
+            ),
+        ],
+        stroke,
+    ));
+    painter.line_segment(
+        [
+            egui::pos2(
+                rect.center().x - rect.width() * 0.16,
+                rect.bottom() - rect.height() * 0.08,
+            ),
+            egui::pos2(
+                rect.center().x + rect.width() * 0.16,
+                rect.bottom() - rect.height() * 0.08,
+            ),
+        ],
+        stroke,
+    );
+    if crossed {
+        painter.line_segment(
+            [
+                egui::pos2(
+                    rect.left() + rect.width() * 0.18,
+                    rect.bottom() - rect.height() * 0.1,
+                ),
+                egui::pos2(
+                    rect.right() - rect.width() * 0.18,
+                    rect.top() + rect.height() * 0.1,
+                ),
+            ],
+            egui::Stroke::new(stroke.width + 0.3, color),
+        );
+    }
+}
+
+fn paint_headphones_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    color: egui::Color32,
+    crossed: bool,
+) {
+    let stroke = egui::Stroke::new((rect.width() * 0.08).max(1.6), color);
+    let arc_radius = rect.width() * 0.28;
+    let center = egui::pos2(rect.center().x, rect.top() + rect.height() * 0.46);
+    let arc_points: Vec<egui::Pos2> = (0..=12)
+        .map(|step| {
+            let t = step as f32 / 12.0;
+            let angle = egui::lerp(std::f32::consts::PI..=0.0, t);
+            egui::pos2(
+                center.x + angle.cos() * arc_radius,
+                center.y - angle.sin() * arc_radius,
+            )
+        })
+        .collect();
+    painter.add(egui::Shape::line(arc_points, stroke));
+
+    let cup_h = rect.height() * 0.24;
+    let cup_w = rect.width() * 0.13;
+    let left_cup = egui::Rect::from_center_size(
+        egui::pos2(center.x - arc_radius, center.y + cup_h * 0.3),
+        egui::vec2(cup_w, cup_h),
+    );
+    let right_cup = egui::Rect::from_center_size(
+        egui::pos2(center.x + arc_radius, center.y + cup_h * 0.3),
+        egui::vec2(cup_w, cup_h),
+    );
+    painter.rect_stroke(left_cup, egui::Rounding::same(cup_w * 0.4), stroke);
+    painter.rect_stroke(right_cup, egui::Rounding::same(cup_w * 0.4), stroke);
+
+    if crossed {
+        painter.line_segment(
+            [
+                egui::pos2(
+                    rect.left() + rect.width() * 0.18,
+                    rect.bottom() - rect.height() * 0.1,
+                ),
+                egui::pos2(
+                    rect.right() - rect.width() * 0.18,
+                    rect.top() + rect.height() * 0.1,
+                ),
+            ],
+            egui::Stroke::new(stroke.width + 0.3, color),
+        );
+    }
+}
+
+fn set_local_participant_muted(
+    state: &mut State,
+    engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
+    user_id: i64,
+    muted: bool,
+) {
+    if muted {
+        state.main.voice.locally_muted.insert(user_id);
+    } else {
+        state.main.voice.locally_muted.remove(&user_id);
+    }
+    sync_user_volume(engine_tx, &state.main.voice, user_id);
+}
 
 fn effective_user_volume(voice: &VoiceState, user_id: i64) -> f32 {
     if voice.locally_muted.contains(&user_id) {

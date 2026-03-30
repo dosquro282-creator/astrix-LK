@@ -468,6 +468,9 @@ impl AstrixApp {
                             if st.main.fullscreen_stream_user == Some(uid) {
                                 st.main.fullscreen_stream_user = None;
                             }
+                            if st.main.voice_grid_focus_user == Some(uid) {
+                                st.main.voice_grid_focus_user = None;
+                            }
                             if Some(uid) == st.user_id {
                                 if st.main.voice.channel_id
                                     == channel_id.or(st.main.voice.channel_id)
