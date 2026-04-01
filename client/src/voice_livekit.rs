@@ -94,6 +94,13 @@ const MIC_GATE_RELEASE: f32 = 0.24;
 const MIC_GATE_HOLD_FRAMES: usize = 18;
 const MIC_GATE_MIN_GAIN: f32 = 0.001;
 
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn wgc_min_update_interval(target_fps: f64) -> Duration {
+    // 1 ms is more aggressive than we need for 60+ FPS presets and can add
+    // unnecessary system-wide capture/compositor load while streaming.
+    Duration::from_secs_f64((0.5 / target_fps.max(1.0)).clamp(0.004, 0.008))
+}
+
 fn extract_rtt_ms_from_stats(stats: &[livekit::webrtc::stats::RtcStats]) -> Option<f32> {
     let candidate_pair_rtt_ms = stats
         .iter()
@@ -1815,6 +1822,8 @@ async fn run_session(
                         if let Some(sid) = screen_audio_sid.take() {
                             let _ = lp.unpublish_track(&sid).await;
                         }
+                        screen_fallback_rx = None;
+                        screen_publish_opts_saved = None;
                         screen_audio_muted_flag = None;
                         screen_keyframe_requested = None;
                         // Keep last resolution/fps/bitrate visible; clear stream_fps so UI shows stream stopped.
@@ -3621,7 +3630,7 @@ fn start_screen_capture(
                 "[voice][screen] WGC MinUpdateInterval: 1000 Вµs (target {} fps)",
                 max_fps
             );
-            MinimumUpdateIntervalSettings::Custom(Duration::from_micros(1000))
+            MinimumUpdateIntervalSettings::Custom(wgc_min_update_interval(max_fps))
         } else {
             MinimumUpdateIntervalSettings::Default
         };
@@ -3675,15 +3684,14 @@ fn start_screen_capture(
         };
         // Request capture rate from WGC: Default can throttle to ~30 fps on some systems.
         // MinUpdateInterval = minimum time between frames; smaller = higher max capture rate.
-        // Use 1 ms (doc: values >= 1 ms work; < 1 ms can cap at ~50 fps) so WGC can deliver 60+ fps;
-        // our encoder thread throttles to max_fps via next_frame_at.
-        // Try micros explicitly in case crate rounds millis to 33 ms on some code paths.
+        // Keep some headroom above target FPS without waking WGC every 1 ms,
+        // which can create unnecessary system-wide load while streaming.
         let min_update_interval = if max_fps >= 55.0 {
             eprintln!(
                 "[voice][screen] WGC MinUpdateInterval: 1000 µs (target {} fps)",
                 max_fps
             );
-            MinimumUpdateIntervalSettings::Custom(Duration::from_micros(1000))
+            MinimumUpdateIntervalSettings::Custom(wgc_min_update_interval(max_fps))
         } else {
             MinimumUpdateIntervalSettings::Default
         };
@@ -3748,8 +3756,10 @@ fn start_screen_capture(
             // Phase 4.4: raise encoder thread priority — reduces jitter when CPU is loaded (e.g. gaming).
             #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
             unsafe {
-                use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST};
-                let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+                use windows::Win32::System::Threading::{
+                    GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+                };
+                let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
             }
 
             // Raise Windows timer resolution to 1 ms.

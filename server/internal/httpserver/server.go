@@ -8,6 +8,7 @@ import (
 	"astrix/server/internal/auth"
 	"astrix/server/internal/channels"
 	"astrix/server/internal/config"
+	"astrix/server/internal/invites"
 	"astrix/server/internal/media"
 	"astrix/server/internal/members"
 	"astrix/server/internal/messages"
@@ -45,8 +46,8 @@ func NewServer(cfg config.Config) *Server {
 	// Voice manager (in-memory state + WS; LiveKit handles media).
 	voiceMgr := voice.NewManager(wsHub)
 
-    // Do not auto-leave voice on transient WS disconnects.
-    // LiveKit webhook + explicit /voice/leave remain the source of truth for voice presence.
+	// Do not auto-leave voice on transient WS disconnects.
+	// LiveKit webhook + explicit /voice/leave remain the source of truth for voice presence.
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -56,6 +57,7 @@ func NewServer(cfg config.Config) *Server {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	r.Get("/invite/{token}", invites.Redirect())
 
 	auth.RegisterRoutes(r, authSvc)
 	ws.RegisterRoutes(r, wsHub, authSvc)
@@ -64,6 +66,7 @@ func NewServer(cfg config.Config) *Server {
 		r.Use(authSvc.RequireAuth)
 		r.Get("/", servers.List(st))
 		r.Post("/", servers.Create(st))
+		r.Patch("/{id}", servers.Update(st, wsHub))
 		r.Delete("/{id}", servers.Delete(st, wsHub))
 	})
 
@@ -78,7 +81,17 @@ func NewServer(cfg config.Config) *Server {
 		r.Use(authSvc.RequireAuth)
 		r.Get("/", members.List(st))
 		r.Post("/", members.Invite(st, wsHub))
+		r.Post("/kick", members.Kick(st, wsHub))
+		r.Post("/ban", members.Ban(st, wsHub))
+		r.Get("/bans", members.ListBans(st))
+		r.Delete("/ban/{user_id}", members.Unban(st))
 		r.Patch("/nickname", members.SetNickname(st, wsHub))
+	})
+
+	r.Route("/invites", func(r chi.Router) {
+		r.Get("/{token}", invites.Get(st))
+		r.With(authSvc.RequireAuth).Post("/", invites.Create(st))
+		r.With(authSvc.RequireAuth).Post("/{token}/accept", invites.Accept(st, wsHub))
 	})
 
 	r.Route("/messages", func(r chi.Router) {

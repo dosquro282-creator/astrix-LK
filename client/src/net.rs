@@ -57,6 +57,26 @@ pub struct Member {
     pub is_owner: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvitePreview {
+    pub token: String,
+    pub server_id: i64,
+    pub server_name: String,
+    #[serde(default)]
+    pub owner_id: i64,
+    #[serde(default)]
+    pub channel_id: Option<i64>,
+    #[serde(default)]
+    pub channel_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InviteAcceptResponse {
+    pub server: Server,
+    #[serde(default)]
+    pub channel_id: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AttachmentMeta {
     pub media_id: i64,
@@ -365,6 +385,25 @@ impl ApiClient {
         Ok(())
     }
 
+    pub async fn rename_server(
+        &self,
+        token: &str,
+        server_id: i64,
+        name: &str,
+    ) -> Result<Server, ApiError> {
+        let url = format!("{}/servers/{}", self.base, server_id);
+        Ok(self
+            .http
+            .patch(url)
+            .header("Authorization", Self::auth_header(token))
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Server>()
+            .await?)
+    }
+
     // ── Channels ──────────────────────────────────────────────────────────
 
     pub async fn list_channels(
@@ -474,6 +513,121 @@ impl ApiClient {
             .await?
             .error_for_status()?;
         Ok(())
+    }
+
+    pub async fn kick_member(
+        &self,
+        token: &str,
+        server_id: i64,
+        user_id: i64,
+    ) -> Result<(), ApiError> {
+        let url = format!("{}/members/kick", self.base);
+        self.http
+            .post(url)
+            .header("Authorization", Self::auth_header(token))
+            .json(&serde_json::json!({ "server_id": server_id, "user_id": user_id }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    pub async fn ban_member(
+        &self,
+        token: &str,
+        server_id: i64,
+        user_id: i64,
+    ) -> Result<(), ApiError> {
+        let url = format!("{}/members/ban", self.base);
+        self.http
+            .post(url)
+            .header("Authorization", Self::auth_header(token))
+            .json(&serde_json::json!({ "server_id": server_id, "user_id": user_id }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    pub async fn list_server_bans(
+        &self,
+        token: &str,
+        server_id: i64,
+    ) -> Result<Vec<Member>, ApiError> {
+        let url = format!("{}/members/bans?server_id={}", self.base, server_id);
+        Ok(self
+            .http
+            .get(url)
+            .header("Authorization", Self::auth_header(token))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<Member>>()
+            .await?)
+    }
+
+    pub async fn unban_member(
+        &self,
+        token: &str,
+        server_id: i64,
+        user_id: i64,
+    ) -> Result<(), ApiError> {
+        let url = format!("{}/members/ban/{}?server_id={}", self.base, user_id, server_id);
+        self.http
+            .delete(url)
+            .header("Authorization", Self::auth_header(token))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    pub async fn create_invite_link(
+        &self,
+        token: &str,
+        server_id: i64,
+        channel_id: Option<i64>,
+    ) -> Result<InvitePreview, ApiError> {
+        let url = format!("{}/invites/", self.base);
+        Ok(self
+            .http
+            .post(url)
+            .header("Authorization", Self::auth_header(token))
+            .json(&serde_json::json!({ "server_id": server_id, "channel_id": channel_id }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<InvitePreview>()
+            .await?)
+    }
+
+    pub async fn get_invite_preview(&self, token: &str) -> Result<InvitePreview, ApiError> {
+        let url = format!("{}/invites/{}", self.base, token);
+        Ok(self
+            .http
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<InvitePreview>()
+            .await?)
+    }
+
+    pub async fn accept_invite(
+        &self,
+        token: &str,
+        invite_token: &str,
+    ) -> Result<InviteAcceptResponse, ApiError> {
+        let url = format!("{}/invites/{}/accept", self.base, invite_token);
+        Ok(self
+            .http
+            .post(url)
+            .header("Authorization", Self::auth_header(token))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<InviteAcceptResponse>()
+            .await?)
     }
 
     // ── Messages ──────────────────────────────────────────────────────────

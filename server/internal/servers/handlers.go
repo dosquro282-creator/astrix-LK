@@ -12,6 +12,15 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+func serverJSON(srv store.ServerRow) map[string]interface{} {
+	return map[string]interface{}{
+		"id":        srv.ID,
+		"server_id": srv.ID,
+		"name":      srv.Name,
+		"owner_id":  srv.OwnerID,
+	}
+}
+
 func Create(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := r.Context().Value(auth.UserIDKey).(int64)
@@ -36,11 +45,7 @@ func Create(st *store.Store) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":       srv.ID,
-			"name":     srv.Name,
-			"owner_id": srv.OwnerID,
-		})
+		_ = json.NewEncoder(w).Encode(serverJSON(srv))
 	}
 }
 
@@ -80,6 +85,51 @@ func Delete(st *store.Store, hub *ws.Hub) http.HandlerFunc {
 			})
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func Update(st *store.Store, hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := r.Context().Value(auth.UserIDKey).(int64)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		serverID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+		if err != nil || serverID <= 0 {
+			http.Error(w, "invalid server id", http.StatusBadRequest)
+			return
+		}
+
+		ownerID, err := st.GetServerOwner(r.Context(), serverID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if ownerID != userID {
+			http.Error(w, "only server owner can update server", http.StatusForbidden)
+			return
+		}
+
+		var body struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		srv, err := st.RenameServer(r.Context(), serverID, body.Name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		payload := serverJSON(srv)
+		hub.BroadcastToServerMembersAnywhere(r.Context(), serverID, "server.updated", payload)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
 	}
 }
 

@@ -13,6 +13,8 @@ const MEMBER_AVATAR_RADIUS: f32 = 14.0;
 #[derive(Debug, Clone)]
 pub enum MemberPanelAction {
     OpenMemberProfile(i64),
+    KickMember(i64),
+    BanMember(i64),
 }
 
 #[derive(Clone)]
@@ -30,6 +32,8 @@ pub struct MemberPanelParams<'a> {
     pub online_count: usize,
     pub speaking: &'a HashMap<i64, bool>,
     pub avatar_textures: &'a HashMap<i64, egui::TextureHandle>,
+    pub current_user_id: Option<i64>,
+    pub can_moderate: bool,
     pub on_action: &'a mut dyn FnMut(MemberPanelAction),
 }
 
@@ -40,6 +44,8 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: MemberPanelParams<'_
         online_count,
         speaking: _,
         avatar_textures,
+        current_user_id,
+        can_moderate,
         on_action,
     } = params;
 
@@ -83,6 +89,32 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: MemberPanelParams<'_
                 if response.clicked() {
                     (*on_action)(MemberPanelAction::OpenMemberProfile(member.user_id));
                 }
+                if can_moderate && Some(member.user_id) != current_user_id {
+                    response.context_menu(|ui| {
+                        if ui
+                            .add(
+                                egui::Button::new("Выгнать с сервера")
+                                    .fill(theme.error)
+                                    .stroke(egui::Stroke::NONE),
+                            )
+                            .clicked()
+                        {
+                            (*on_action)(MemberPanelAction::KickMember(member.user_id));
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new("Забанить на сервере")
+                                    .fill(theme.error)
+                                    .stroke(egui::Stroke::NONE),
+                            )
+                            .clicked()
+                        {
+                            (*on_action)(MemberPanelAction::BanMember(member.user_id));
+                            ui.close_menu();
+                        }
+                    });
+                }
             }
 
             ui.add_space(10.0);
@@ -98,6 +130,32 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: MemberPanelParams<'_
                 );
                 if response.clicked() {
                     (*on_action)(MemberPanelAction::OpenMemberProfile(member.user_id));
+                }
+                if can_moderate && Some(member.user_id) != current_user_id {
+                    response.context_menu(|ui| {
+                        if ui
+                            .add(
+                                egui::Button::new("Выгнать с сервера")
+                                    .fill(theme.error)
+                                    .stroke(egui::Stroke::NONE),
+                            )
+                            .clicked()
+                        {
+                            (*on_action)(MemberPanelAction::KickMember(member.user_id));
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new("Забанить на сервере")
+                                    .fill(theme.error)
+                                    .stroke(egui::Stroke::NONE),
+                            )
+                            .clicked()
+                        {
+                            (*on_action)(MemberPanelAction::BanMember(member.user_id));
+                            ui.close_menu();
+                        }
+                    });
                 }
             }
         });

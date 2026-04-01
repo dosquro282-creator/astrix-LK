@@ -67,8 +67,9 @@ use crate::crypto::ChannelKey;
 use crate::guild_panel::{self, GuildPanelParams};
 use crate::member_panel::{self, MemberPanelAction, MemberPanelParams, MemberSnapshot};
 use crate::net::{
-    new_event_queue, ws_task, ApiClient, AttachmentMeta, Channel, LoginRequest, Member, Message,
-    RegisterRequest, Server, VoiceParticipant, WsClientMsg, WsEventQueue,
+    new_event_queue, ws_task, ApiClient, ApiError, AttachmentMeta, Channel, InvitePreview,
+    LoginRequest, Member, Message, RegisterRequest, Server, VoiceParticipant, WsClientMsg,
+    WsEventQueue,
 };
 use crate::telemetry::PipelineTelemetry;
 use crate::theme::Theme;
@@ -441,6 +442,7 @@ impl Default for LoadState {
 
 fn clear_chat_search_state(main: &mut MainState) {
     main.chat_search_results.clear();
+    main.chat_search_popup_open = false;
     main.chat_search_scroll_offset = 0.0;
     main.chat_search_load = LoadState::Idle;
     main.chat_search_started_server = None;
@@ -633,6 +635,15 @@ pub(crate) fn process_background_loads(
                 if let Some(me) = st.main.server_members.iter().find(|m| m.user_id == uid) {
                     st.main.my_display_name = me.display_name.clone();
                 }
+            }
+            if st.main.selected_channel.is_none() {
+                st.main.selected_channel = st
+                    .main
+                    .channels
+                    .iter()
+                    .find(|channel| channel.r#type == "text")
+                    .or_else(|| st.main.channels.first())
+                    .map(|channel| channel.id);
             }
             st.main.channels_load = LoadState::Loaded;
             ctx_c.request_repaint();
@@ -828,7 +839,7 @@ pub(crate) fn process_message_search(ctx: egui::Context, state: Arc<Mutex<State>
             }));
         }
 
-        results.sort_by(|left, right| right.message.created_at.cmp(&left.message.created_at));
+        results.sort_by(|left, right| left.message.created_at.cmp(&right.message.created_at));
 
         let mut st = state_c.lock();
         if st.main.chat_search_request_seq != request_seq
@@ -943,6 +954,18 @@ impl Default for SettingsSection {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerSettingsSection {
+    General,
+    BanList,
+}
+
+impl Default for ServerSettingsSection {
+    fn default() -> Self {
+        Self::General
+    }
+}
+
 pub(crate) struct MainState {
     pub(crate) servers: Vec<Server>,
     pub(crate) channels: Vec<Channel>,
@@ -952,6 +975,7 @@ pub(crate) struct MainState {
     pub(crate) selected_server: Option<i64>,
     pub(crate) selected_channel: Option<i64>,
     pub(crate) chat_search_query: String,
+    pub(crate) chat_search_popup_open: bool,
     pub(crate) chat_search_results: Vec<chat_panel::ChatSearchResult>,
     pub(crate) chat_search_scroll_offset: f32,
     pub(crate) chat_search_load: LoadState,
@@ -977,13 +1001,16 @@ pub(crate) struct MainState {
     pub(crate) show_create_channel_dialog: bool,
     pub(crate) show_invite_dialog: bool,
     pub(crate) show_settings_dialog: bool,
+    pub(crate) show_server_settings_dialog: bool,
     pub(crate) settings_section: SettingsSection,
+    pub(crate) server_settings_section: ServerSettingsSection,
     pub(crate) new_channel_name: String,
     pub(crate) new_channel_is_voice: bool,
     pub(crate) current_channel_key: Option<ChannelKey>,
     pub(crate) server_to_delete: Option<i64>,
     pub(crate) invite_user_id_input: String,
     pub(crate) invite_msg: Option<String>,
+    pub(crate) invite_link: Option<String>,
     pub(crate) ws_connected_server: Option<i64>,
     pub(crate) ws_viewing_channel: Option<i64>,
     pub(crate) typing_users: Vec<(i64, String, Instant)>,
@@ -993,6 +1020,14 @@ pub(crate) struct MainState {
     pub(crate) settings_nickname_input: String,
     pub(crate) settings_avatar_path: Option<PathBuf>,
     pub(crate) settings_msg: Option<String>,
+    pub(crate) server_settings_name_input: String,
+    pub(crate) server_settings_msg: Option<String>,
+    pub(crate) server_bans: Vec<Member>,
+    pub(crate) server_bans_load: LoadState,
+    pub(crate) pending_invite_token: Option<String>,
+    pub(crate) pending_invite_preview: Option<InvitePreview>,
+    pub(crate) pending_invite_status: LoadState,
+    pub(crate) pending_invite_msg: Option<String>,
     pub(crate) channel_rename: Option<(i64, String)>,
     pub(crate) pending_attachment: Option<AttachmentMeta>,
     pub(crate) pending_attachment_bytes: Option<(Vec<u8>, String)>,
@@ -1046,6 +1081,7 @@ impl Clone for MainState {
             selected_server: self.selected_server,
             selected_channel: self.selected_channel,
             chat_search_query: self.chat_search_query.clone(),
+            chat_search_popup_open: self.chat_search_popup_open,
             chat_search_results: self.chat_search_results.clone(),
             chat_search_scroll_offset: self.chat_search_scroll_offset,
             chat_search_load: self.chat_search_load.clone(),
@@ -1071,13 +1107,16 @@ impl Clone for MainState {
             show_create_channel_dialog: self.show_create_channel_dialog,
             show_invite_dialog: self.show_invite_dialog,
             show_settings_dialog: self.show_settings_dialog,
+            show_server_settings_dialog: self.show_server_settings_dialog,
             settings_section: self.settings_section,
+            server_settings_section: self.server_settings_section,
             new_channel_name: self.new_channel_name.clone(),
             new_channel_is_voice: self.new_channel_is_voice,
             current_channel_key: self.current_channel_key.clone(),
             server_to_delete: self.server_to_delete,
             invite_user_id_input: self.invite_user_id_input.clone(),
             invite_msg: self.invite_msg.clone(),
+            invite_link: self.invite_link.clone(),
             ws_connected_server: self.ws_connected_server,
             ws_viewing_channel: self.ws_viewing_channel,
             typing_users: self.typing_users.clone(),
@@ -1087,6 +1126,14 @@ impl Clone for MainState {
             settings_nickname_input: self.settings_nickname_input.clone(),
             settings_avatar_path: self.settings_avatar_path.clone(),
             settings_msg: self.settings_msg.clone(),
+            server_settings_name_input: self.server_settings_name_input.clone(),
+            server_settings_msg: self.server_settings_msg.clone(),
+            server_bans: self.server_bans.clone(),
+            server_bans_load: self.server_bans_load.clone(),
+            pending_invite_token: self.pending_invite_token.clone(),
+            pending_invite_preview: self.pending_invite_preview.clone(),
+            pending_invite_status: self.pending_invite_status.clone(),
+            pending_invite_msg: self.pending_invite_msg.clone(),
             channel_rename: self.channel_rename.clone(),
             pending_attachment: self.pending_attachment.clone(),
             pending_attachment_bytes: self.pending_attachment_bytes.clone(),
@@ -1132,6 +1179,7 @@ impl Default for MainState {
             selected_server: None,
             selected_channel: None,
             chat_search_query: String::new(),
+            chat_search_popup_open: false,
             chat_search_results: Vec::new(),
             chat_search_scroll_offset: 0.0,
             chat_search_load: LoadState::Idle,
@@ -1157,13 +1205,16 @@ impl Default for MainState {
             show_create_channel_dialog: false,
             show_invite_dialog: false,
             show_settings_dialog: false,
+            show_server_settings_dialog: false,
             settings_section: SettingsSection::default(),
+            server_settings_section: ServerSettingsSection::default(),
             new_channel_name: String::new(),
             new_channel_is_voice: false,
             current_channel_key: None,
             server_to_delete: None,
             invite_user_id_input: String::new(),
             invite_msg: None,
+            invite_link: None,
             ws_connected_server: None,
             ws_viewing_channel: None,
             typing_users: Vec::new(),
@@ -1173,6 +1224,14 @@ impl Default for MainState {
             settings_nickname_input: String::new(),
             settings_avatar_path: None,
             settings_msg: None,
+            server_settings_name_input: String::new(),
+            server_settings_msg: None,
+            server_bans: Vec::new(),
+            server_bans_load: LoadState::Idle,
+            pending_invite_token: None,
+            pending_invite_preview: None,
+            pending_invite_status: LoadState::Idle,
+            pending_invite_msg: None,
             channel_rename: None,
             pending_attachment: None,
             pending_attachment_bytes: None,
@@ -1783,6 +1842,70 @@ fn sync_voice_presence(state: &State, api: &ApiClient) {
 
 fn current_voice_deafened(voice: &VoiceState) -> bool {
     voice.mic_muted && voice.output_muted
+}
+
+fn selected_server_owner_id(state: &State) -> Option<i64> {
+    state
+        .main
+        .servers
+        .iter()
+        .find(|server| Some(server.id) == state.main.selected_server)
+        .map(|server| server.owner_id)
+}
+
+fn can_manage_server_member(state: &State, target_user_id: i64) -> bool {
+    let Some(current_user_id) = state.user_id else {
+        return false;
+    };
+    let Some(owner_id) = selected_server_owner_id(state) else {
+        return false;
+    };
+    current_user_id == owner_id && target_user_id != current_user_id && target_user_id != owner_id
+}
+
+fn open_server_settings(state: &mut State) {
+    state.main.show_server_settings_dialog = true;
+    state.main.server_settings_section = ServerSettingsSection::General;
+    state.main.server_settings_msg = None;
+    state.main.server_bans_load = LoadState::Idle;
+    state.main.server_bans.clear();
+    state.main.server_settings_name_input = state
+        .main
+        .servers
+        .iter()
+        .find(|server| Some(server.id) == state.main.selected_server)
+        .map(|server| server.name.clone())
+        .unwrap_or_default();
+}
+
+fn kick_server_member(
+    ctx: &egui::Context,
+    state: &mut State,
+    api: &ApiClient,
+    target_user_id: i64,
+) {
+    if !can_manage_server_member(state, target_user_id) {
+        return;
+    }
+    if let (Some(server_id), Some(ref token)) = (state.main.selected_server, &state.access_token) {
+        let _ = block_on(api.kick_member(token, server_id, target_user_id));
+        ctx.request_repaint();
+    }
+}
+
+fn ban_server_member(
+    ctx: &egui::Context,
+    state: &mut State,
+    api: &ApiClient,
+    target_user_id: i64,
+) {
+    if !can_manage_server_member(state, target_user_id) {
+        return;
+    }
+    if let (Some(server_id), Some(ref token)) = (state.main.selected_server, &state.access_token) {
+        let _ = block_on(api.ban_member(token, server_id, target_user_id));
+        ctx.request_repaint();
+    }
 }
 
 fn update_local_camera_flag(state: &mut State, user_id: Option<i64>, enabled: bool) {
@@ -2944,6 +3067,7 @@ pub(crate) fn main_screen(
     // ── Dialog: invite user ───────────────────────────────────────────────
     if state.main.show_invite_dialog {
         let mut should_invite = false;
+        let mut should_create_link = false;
         let mut should_close = false;
         let srv_label: String = state
             .main
@@ -2977,6 +3101,20 @@ pub(crate) fn main_screen(
                         .desired_width(220.0),
                 );
                 ui.add_space(8.0);
+                if ui.button("Создать ссылку-приглашение").clicked() {
+                    should_create_link = true;
+                }
+                if let Some(ref invite_link) = state.main.invite_link {
+                    ui.add_space(6.0);
+                    ui.label("Ссылка:");
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(invite_link).monospace().small());
+                        if ui.button("Копировать").clicked() {
+                            ctx.output_mut(|o| o.copied_text = invite_link.clone());
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
                 ui.horizontal(|ui| {
                     if ui.button("Пригласить").clicked() {
                         should_invite = true;
@@ -3002,9 +3140,19 @@ pub(crate) fn main_screen(
                             state.main.invite_msg = Some("Пользователь добавлен!".to_string());
                             state.main.invite_user_id_input.clear();
                         }
-                        Err(_) => {
+                        Err(ApiError::Status(403)) => {
+                            state.main.invite_msg = Some("Пользователь забанен".to_string());
+                        }
+                        Err(ApiError::Status(404)) => {
                             state.main.invite_msg =
-                                Some("Ошибка: не найден или уже в сервере.".to_string());
+                                Some("Ошибка: пользователь не найден.".to_string());
+                        }
+                        Err(ApiError::Status(409)) => {
+                            state.main.invite_msg =
+                                Some("Пользователь уже находится на сервере.".to_string());
+                        }
+                        Err(_) => {
+                            state.main.invite_msg = Some("Ошибка приглашения.".to_string());
                         }
                     }
                     ctx.request_repaint();
@@ -3013,10 +3161,350 @@ pub(crate) fn main_screen(
                 state.main.invite_msg = Some("Введите корректный числовой ID.".to_string());
             }
         }
+        if should_create_link {
+            if let (Some(server_id), Some(ref token)) =
+                (state.main.selected_server, &state.access_token)
+            {
+                let token = token.clone();
+                let channel_id = state.main.selected_channel;
+                match block_on(api.create_invite_link(&token, server_id, channel_id)) {
+                    Ok(invite) => {
+                        state.main.invite_link =
+                            Some(format!("{}/invite/{}", api.base, invite.token));
+                        state.main.invite_msg = Some("Ссылка-приглашение создана.".to_string());
+                    }
+                    Err(e) => {
+                        state.main.invite_msg = Some(format!("Ошибка создания ссылки: {e}"));
+                    }
+                }
+                ctx.request_repaint();
+            }
+        }
         if should_close {
             state.main.show_invite_dialog = false;
             state.main.invite_user_id_input.clear();
             state.main.invite_msg = None;
+            state.main.invite_link = None;
+        }
+    }
+
+    if state.main.pending_invite_token.is_some() {
+        if state.main.pending_invite_preview.is_none()
+            && matches!(state.main.pending_invite_status, LoadState::Idle)
+        {
+            if let Some(token) = state.main.pending_invite_token.clone() {
+                state.main.pending_invite_status = LoadState::Loading;
+                match block_on(api.get_invite_preview(&token)) {
+                    Ok(preview) => {
+                        state.main.pending_invite_preview = Some(preview);
+                        state.main.pending_invite_status = LoadState::Loaded;
+                        state.main.pending_invite_msg = None;
+                    }
+                    Err(ApiError::Status(404)) => {
+                        state.main.pending_invite_status =
+                            LoadState::Error("Приглашение не найдено".to_string());
+                    }
+                    Err(e) => {
+                        state.main.pending_invite_status =
+                            LoadState::Error(format!("Ошибка приглашения: {e}"));
+                    }
+                }
+            }
+        }
+
+        let mut should_accept = false;
+        let mut should_decline = false;
+        let server_name = state
+            .main
+            .pending_invite_preview
+            .as_ref()
+            .map(|invite| invite.server_name.clone())
+            .unwrap_or_else(|| "Приглашение".to_string());
+
+        egui::Window::new("Приглашение в сервер")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.heading(server_name);
+                if let Some(invite) = state.main.pending_invite_preview.as_ref() {
+                    if let Some(channel_name) = invite.channel_name.as_ref() {
+                        ui.label(
+                            egui::RichText::new(format!("Канал: {channel_name}"))
+                                .small()
+                                .weak(),
+                        );
+                    }
+                }
+                ui.add_space(8.0);
+                match &state.main.pending_invite_status {
+                    LoadState::Loading => {
+                        ui.label("Загружаем приглашение...");
+                    }
+                    LoadState::Error(error) => {
+                        ui.label(error);
+                    }
+                    _ => {
+                        ui.horizontal(|ui| {
+                            if ui.button("Принять").clicked() {
+                                should_accept = true;
+                            }
+                            if ui.button("Отклонить").clicked() {
+                                should_decline = true;
+                            }
+                        });
+                    }
+                }
+                if let Some(ref msg) = state.main.pending_invite_msg {
+                    ui.add_space(6.0);
+                    ui.label(msg);
+                }
+            });
+
+        if should_accept {
+            if let (Some(ref token), Some(invite_token)) = (
+                state.access_token.as_ref(),
+                state.main.pending_invite_token.clone(),
+            ) {
+                let token = token.clone();
+                match block_on(api.accept_invite(&token, &invite_token)) {
+                    Ok(response) => {
+                        if !state
+                            .main
+                            .servers
+                            .iter()
+                            .any(|server| server.id == response.server.id)
+                        {
+                            state.main.servers.push(response.server.clone());
+                        }
+                        state.main.selected_server = Some(response.server.id);
+                        state.main.selected_channel = None;
+                        state.main.channels_load_for = None;
+                        state.main.channels_load = LoadState::Idle;
+                        state.main.retry_channels = true;
+                        state.main.pending_invite_token = None;
+                        state.main.pending_invite_preview = None;
+                        state.main.pending_invite_status = LoadState::Idle;
+                        state.main.pending_invite_msg = None;
+                    }
+                    Err(ApiError::Status(403)) => {
+                        state.main.pending_invite_msg = Some("Пользователь забанен".to_string());
+                    }
+                    Err(e) => {
+                        state.main.pending_invite_msg =
+                            Some(format!("Ошибка принятия приглашения: {e}"));
+                    }
+                }
+            } else {
+                state.main.pending_invite_msg =
+                    Some("Сначала войдите в аккаунт, затем примите приглашение.".to_string());
+            }
+        }
+
+        if should_decline {
+            state.main.pending_invite_token = None;
+            state.main.pending_invite_preview = None;
+            state.main.pending_invite_status = LoadState::Idle;
+            state.main.pending_invite_msg = None;
+        }
+    }
+
+    if state.main.show_server_settings_dialog {
+        let mut should_close = false;
+        let mut do_save_name = false;
+        let mut should_reload_bans = false;
+        let can_manage_server = selected_server_owner_id(state) == state.user_id;
+
+        egui::Window::new("Настройки сервера")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .fixed_size(egui::vec2(760.0, 460.0))
+            .show(ctx, |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(170.0);
+                        if ui
+                            .selectable_label(
+                                state.main.server_settings_section == ServerSettingsSection::General,
+                                "Основные",
+                            )
+                            .clicked()
+                        {
+                            state.main.server_settings_section = ServerSettingsSection::General;
+                        }
+                        if ui
+                            .selectable_label(
+                                state.main.server_settings_section == ServerSettingsSection::BanList,
+                                "Список банов",
+                            )
+                            .clicked()
+                        {
+                            state.main.server_settings_section = ServerSettingsSection::BanList;
+                            if matches!(state.main.server_bans_load, LoadState::Idle) {
+                                should_reload_bans = true;
+                            }
+                        }
+                    });
+
+                    ui.separator();
+                    ui.add_space(12.0);
+
+                    ui.vertical(|ui| match state.main.server_settings_section {
+                        ServerSettingsSection::General => {
+                            ui.heading("Основные");
+                            ui.add_space(8.0);
+                            ui.label("Название сервера");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut state.main.server_settings_name_input)
+                                    .desired_width(340.0),
+                            );
+                            ui.add_space(10.0);
+                            if ui
+                                .add_enabled(can_manage_server, egui::Button::new("Сохранить"))
+                                .clicked()
+                            {
+                                do_save_name = true;
+                            }
+                        }
+                        ServerSettingsSection::BanList => {
+                            ui.heading("Список банов");
+                            ui.add_space(8.0);
+                            match &state.main.server_bans_load {
+                                LoadState::Loading => {
+                                    ui.label("Загружаем список банов...");
+                                }
+                                LoadState::Error(error) => {
+                                    ui.label(error);
+                                    if ui.button("Повторить").clicked() {
+                                        should_reload_bans = true;
+                                    }
+                                }
+                                _ => {
+                                    let bans_snapshot = state.main.server_bans.clone();
+                                    egui::ScrollArea::vertical()
+                                        .max_height(320.0)
+                                        .show(ui, |ui| {
+                                            for banned in &bans_snapshot {
+                                                let label = if banned.display_name.trim().is_empty() {
+                                                    banned.username.clone()
+                                                } else {
+                                                    format!(
+                                                        "{} ({})",
+                                                        banned.display_name, banned.username
+                                                    )
+                                                };
+                                                let response = ui.selectable_label(false, label);
+                                                if can_manage_server {
+                                                    response.context_menu(|ui| {
+                                                        if ui
+                                                            .add(
+                                                                egui::Button::new("Разбанить")
+                                                                    .fill(theme.success)
+                                                                    .stroke(egui::Stroke::NONE),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            if let (
+                                                                Some(server_id),
+                                                                Some(ref token),
+                                                            ) = (
+                                                                state.main.selected_server,
+                                                                &state.access_token,
+                                                            ) {
+                                                                let token = token.clone();
+                                                                if block_on(api.unban_member(
+                                                                    &token,
+                                                                    server_id,
+                                                                    banned.user_id,
+                                                                ))
+                                                                .is_ok()
+                                                                {
+                                                                    state.main.server_bans.retain(
+                                                                        |member| {
+                                                                            member.user_id
+                                                                                != banned.user_id
+                                                                        },
+                                                                    );
+                                                                }
+                                                            }
+                                                            ui.close_menu();
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                        });
+                                }
+                            }
+                        }
+                    });
+                });
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if let Some(ref msg) = state.main.server_settings_msg {
+                        ui.label(msg);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Закрыть").clicked() {
+                            should_close = true;
+                        }
+                    });
+                });
+            });
+
+        if should_reload_bans {
+            if let (Some(server_id), Some(ref token)) = (state.main.selected_server, &state.access_token)
+            {
+                state.main.server_bans_load = LoadState::Loading;
+                let token = token.clone();
+                match block_on(api.list_server_bans(&token, server_id)) {
+                    Ok(bans) => {
+                        state.main.server_bans = bans;
+                        state.main.server_bans_load = LoadState::Loaded;
+                    }
+                    Err(e) => {
+                        state.main.server_bans_load =
+                            LoadState::Error(format!("Ошибка загрузки банов: {e}"));
+                    }
+                }
+            }
+        }
+
+        if do_save_name {
+            let name = state.main.server_settings_name_input.trim().to_string();
+            if !name.is_empty() {
+                if let (Some(server_id), Some(ref token)) =
+                    (state.main.selected_server, &state.access_token)
+                {
+                    let token = token.clone();
+                    match block_on(api.rename_server(&token, server_id, &name)) {
+                        Ok(server) => {
+                            if let Some(existing) = state
+                                .main
+                                .servers
+                                .iter_mut()
+                                .find(|item| item.id == server.id)
+                            {
+                                existing.name = server.name.clone();
+                            }
+                            state.main.server_settings_msg =
+                                Some("Название сервера обновлено.".to_string());
+                        }
+                        Err(e) => {
+                            state.main.server_settings_msg =
+                                Some(format!("Ошибка сохранения: {e}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        if should_close {
+            state.main.show_server_settings_dialog = false;
+            state.main.server_settings_msg = None;
         }
     }
 
@@ -3810,6 +4298,7 @@ pub(crate) fn main_screen(
                 ChannelPanelAction::SelectChannel(id) => {
                     state.main.selected_channel = Some(id);
                     state.main.unread_channels.remove(&id);
+                    state.main.chat_search_popup_open = false;
                 }
                 ChannelPanelAction::JoinVoice {
                     channel_id,
@@ -3885,16 +4374,13 @@ pub(crate) fn main_screen(
                 ChannelPanelAction::Invite => {
                     state.main.show_invite_dialog = true;
                     state.main.invite_msg = None;
+                    state.main.invite_link = None;
                 }
                 ChannelPanelAction::ChannelSettings(id, name) => {
                     state.main.channel_rename = Some((id, name));
                 }
-                ChannelPanelAction::OpenSettings => {
-                    state.main.show_settings_dialog = true;
-                    state.main.settings_section = SettingsSection::Account;
-                    state.main.settings_nickname_input = state.main.my_display_name.clone();
-                    state.main.settings_avatar_path = None;
-                    state.main.settings_msg = None;
+                ChannelPanelAction::OpenServerSettings => {
+                    open_server_settings(state);
                 }
                 ChannelPanelAction::Logout => {
                     should_logout = true;
@@ -4081,6 +4567,7 @@ pub(crate) fn main_screen(
 
         let speaking_snap = state.main.voice.speaking.lock().clone();
         let mut member_actions: Vec<MemberPanelAction> = Vec::new();
+        let can_moderate_members = state.user_id == Some(server_owner_id);
 
         egui::SidePanel::right("panel_members")
             .frame(egui::Frame::none().fill(theme.bg_secondary))
@@ -4097,6 +4584,8 @@ pub(crate) fn main_screen(
                         online_count,
                         speaking: &speaking_snap,
                         avatar_textures,
+                        current_user_id: state.user_id,
+                        can_moderate: can_moderate_members,
                         on_action: &mut |action| member_actions.push(action),
                     },
                 );
@@ -4106,6 +4595,12 @@ pub(crate) fn main_screen(
             match action {
                 MemberPanelAction::OpenMemberProfile(user_id) => {
                     todo_actions::todo_open_member_profile(user_id);
+                }
+                MemberPanelAction::KickMember(user_id) => {
+                    kick_server_member(ctx, state, api, user_id);
+                }
+                MemberPanelAction::BanMember(user_id) => {
+                    ban_server_member(ctx, state, api, user_id);
                 }
             }
         }
@@ -4175,6 +4670,7 @@ pub(crate) fn main_screen(
                             Some((remaining.as_secs_f32() / 3.0).clamp(0.0, 1.0))
                         }
                     });
+                let can_moderate_members = selected_server_owner_id(state) == state.user_id;
                 chat_panel::show(
                     ctx,
                     ui,
@@ -4184,6 +4680,7 @@ pub(crate) fn main_screen(
                         channel_description: None,
                         messages: &state.main.messages,
                         search_query: &mut state.main.chat_search_query,
+                        search_popup_open: &mut state.main.chat_search_popup_open,
                         search_results: &state.main.chat_search_results,
                         search_scroll_offset: &mut state.main.chat_search_scroll_offset,
                         search_loading,
@@ -4195,6 +4692,7 @@ pub(crate) fn main_screen(
                         typing_users: &typing_users,
                         pending_attachment: state.main.pending_attachment.as_ref(),
                         current_user_id: state.user_id,
+                        can_moderate_members,
                         server_members: &state.main.server_members,
                         media_textures,
                         media_bytes,
@@ -4206,6 +4704,10 @@ pub(crate) fn main_screen(
                 );
 
                 for act in chat_actions {
+                    let should_close_search_popup = !matches!(&act, ChatPanelAction::Search);
+                    if should_close_search_popup {
+                        state.main.chat_search_popup_open = false;
+                    }
                     match act {
                         ChatPanelAction::SendMessage => {
                             let text = state.main.new_message.trim().to_string();
@@ -4261,6 +4763,7 @@ pub(crate) fn main_screen(
                             channel_id,
                             message_id,
                         } => {
+                            let same_channel = state.main.selected_channel == Some(channel_id);
                             state.main.selected_channel = Some(channel_id);
                             state.main.unread_channels.remove(&channel_id);
                             state.main.highlighted_message_channel_id = Some(channel_id);
@@ -4268,9 +4771,16 @@ pub(crate) fn main_screen(
                             state.main.highlighted_message_until =
                                 Some(Instant::now() + Duration::from_secs(3));
                             state.main.highlighted_message_scroll_pending = true;
-                            state.main.chat_search_query.clear();
-                            clear_chat_search_state(&mut state.main);
+                            if same_channel {
+                                state.main.retry_messages = true;
+                            }
                             ctx.request_repaint();
+                        }
+                        ChatPanelAction::KickMember(user_id) => {
+                            kick_server_member(ctx, state, api, user_id);
+                        }
+                        ChatPanelAction::BanMember(user_id) => {
+                            ban_server_member(ctx, state, api, user_id);
                         }
                         ChatPanelAction::StubGif => todo_actions::todo_insert_gif(),
                         ChatPanelAction::StubEmoji => todo_actions::todo_open_emoji_picker(),
@@ -4355,6 +4865,7 @@ pub(crate) fn main_screen(
                         ui,
                         theme,
                         state,
+                        api,
                         engine_tx,
                         &participants,
                         &speaking_snap,
@@ -5108,6 +5619,7 @@ fn show_voice_grid(
     ui: &mut egui::Ui,
     theme: &Theme,
     state: &mut State,
+    api: &ApiClient,
     engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
     participants: &[VoiceParticipant],
     speaking_snap: &HashMap<i64, bool>,
@@ -5162,6 +5674,7 @@ fn show_voice_grid(
                 ui,
                 theme,
                 state,
+                api,
                 engine_tx,
                 main_rect,
                 focused_participant,
@@ -5201,6 +5714,7 @@ fn show_voice_grid(
                         ui,
                         theme,
                         state,
+                        api,
                         engine_tx,
                         rect,
                         participant,
@@ -5239,6 +5753,7 @@ fn show_voice_grid(
                 ui,
                 theme,
                 state,
+                api,
                 engine_tx,
                 rect,
                 participant,
@@ -5307,6 +5822,7 @@ fn show_voice_participant_tile(
     ui: &mut egui::Ui,
     theme: &Theme,
     state: &mut State,
+    api: &ApiClient,
     engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
     rect: egui::Rect,
     participant: &VoiceParticipant,
@@ -5474,7 +5990,7 @@ fn show_voice_participant_tile(
 
     if can_open_context_menu {
         response.context_menu(|ui| {
-            show_voice_participant_context_menu(ui, state, engine_tx, participant.user_id);
+            show_voice_participant_context_menu(ui, theme, state, api, engine_tx, participant.user_id);
         });
     }
 }
@@ -5689,7 +6205,9 @@ fn paint_voice_tile_media(
 
 fn show_voice_participant_context_menu(
     ui: &mut egui::Ui,
+    theme: &Theme,
     state: &mut State,
+    api: &ApiClient,
     engine_tx: &Option<tokio::sync::mpsc::UnboundedSender<VoiceCmd>>,
     user_id: i64,
 ) {
@@ -5738,6 +6256,32 @@ fn show_voice_participant_context_menu(
             .insert(user_id.to_string(), volume);
         state.settings.save();
         sync_user_volume(engine_tx, &state.main.voice, user_id);
+    }
+
+    if can_manage_server_member(state, user_id) {
+        ui.separator();
+        if ui
+            .add(
+                egui::Button::new("Выгнать с сервера")
+                    .fill(theme.error)
+                    .stroke(egui::Stroke::NONE),
+            )
+            .clicked()
+        {
+            kick_server_member(ui.ctx(), state, api, user_id);
+            ui.close_menu();
+        }
+        if ui
+            .add(
+                egui::Button::new("Забанить на сервере")
+                    .fill(theme.error)
+                    .stroke(egui::Stroke::NONE),
+            )
+            .clicked()
+        {
+            ban_server_member(ui.ctx(), state, api, user_id);
+            ui.close_menu();
+        }
     }
 }
 

@@ -1,8 +1,12 @@
 use astrix_client::app;
+use astrix_client::deep_links;
 use eframe::egui;
 
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
+    deep_links::register_protocol_handler();
+    let invite_token = deep_links::extract_invite_token_from_args();
+
     // ASTRIX_VSYNC=0 disables vertical sync, allowing render FPS above monitor refresh rate.
     // Default: vsync OFF for streaming (avoids capping render FPS at 60-72 Hz).
     // ASTRIX_VSYNC=1 re-enables vsync (lower CPU/GPU usage, prevents tearing).
@@ -21,6 +25,6 @@ async fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Astrix",
         native_options,
-        Box::new(|cc| Ok(Box::new(app::AstrixApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(app::AstrixApp::new(cc, invite_token.clone())))),
     )
 }

@@ -9,18 +9,22 @@ use crate::net::{AttachmentMeta, Member, Message};
 use crate::theme::Theme;
 
 const CHANNEL_HEADER_HEIGHT: f32 = 48.0;
+const HEADER_SIDE_PADDING: f32 = 10.0;
+const HEADER_ZONE_GAP: f32 = 10.0;
 const TOOLBAR_ICON_SIZE: f32 = 24.0;
 const COMPOSER_BUTTON_SIZE: f32 = 32.0;
 const SEARCH_WIDTH: f32 = 360.0;
+const SEARCH_FIELD_HORIZONTAL_PADDING: f32 = 10.0;
 const SEARCH_SCROLLBAR_WIDTH: f32 = 10.0;
 const SEARCH_SCROLLBAR_GAP: f32 = 8.0;
 const SEARCH_RESULT_ROW_HEIGHT: f32 = 66.0;
 const SEARCH_RESULT_GAP: f32 = 8.0;
 const SEARCH_RESULTS_MAX_HEIGHT: f32 = 600.0;
-const SEARCH_RESULTS_RIGHT_PADDING: f32 = 10.0;
+const SEARCH_RESULTS_RIGHT_PADDING: f32 = 0.0;
 const SEARCH_RESULTS_VERTICAL_PADDING: f32 = 10.0;
 const MESSAGE_INPUT_BASE_HEIGHT: f32 = 48.0;
 const MESSAGE_INPUT_MAX_HEIGHT: f32 = 156.0;
+const COMPOSER_SIDE_MARGIN: f32 = 5.0;
 
 #[derive(Debug, Clone)]
 pub struct ChatSearchResult {
@@ -42,6 +46,8 @@ pub enum ChatPanelAction {
     Inbox,
     Help,
     OpenSearchResult { channel_id: i64, message_id: i64 },
+    KickMember(i64),
+    BanMember(i64),
     StubGif,
     StubEmoji,
     StubStickers,
@@ -54,6 +60,7 @@ pub struct ChatPanelParams<'a> {
     pub channel_description: Option<&'a str>,
     pub messages: &'a [Message],
     pub search_query: &'a mut String,
+    pub search_popup_open: &'a mut bool,
     pub search_results: &'a [ChatSearchResult],
     pub search_scroll_offset: &'a mut f32,
     pub search_loading: bool,
@@ -65,6 +72,7 @@ pub struct ChatPanelParams<'a> {
     pub typing_users: &'a [(i64, String)],
     pub pending_attachment: Option<&'a AttachmentMeta>,
     pub current_user_id: Option<i64>,
+    pub can_moderate_members: bool,
     pub server_members: &'a [Member],
     pub media_textures: &'a HashMap<i64, egui::TextureHandle>,
     pub media_bytes: &'a HashMap<i64, (Vec<u8>, String)>,
@@ -81,6 +89,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
         channel_description,
         messages,
         search_query,
+        search_popup_open,
         search_results,
         search_scroll_offset,
         search_loading,
@@ -92,6 +101,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
         typing_users,
         pending_attachment,
         current_user_id,
+        can_moderate_members,
         server_members,
         media_textures,
         media_bytes,
@@ -119,6 +129,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
     };
     let composer_height = composer_row_height + typing_height + attachment_height;
     let mut search_anchor_rect = None;
+    let mut search_popup_rect = None;
 
     egui::TopBottomPanel::top("chat_header")
         .exact_height(CHANNEL_HEADER_HEIGHT)
@@ -132,30 +143,74 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                 egui::Stroke::new(1.0, theme.border),
             );
 
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.add_space(10.0);
-                ui.label(
-                    egui::RichText::new("#")
-                        .size(18.0)
-                        .strong()
-                        .color(theme.text_muted),
-                );
-                ui.label(
-                    egui::RichText::new(channel_name.trim_start_matches("# "))
-                        .size(16.0)
-                        .strong()
-                        .color(theme.text_primary),
-                );
-                if let Some(description) = channel_description.filter(|value| !value.is_empty()) {
-                    ui.add_space(8.0);
+            let header_rect = rect.shrink2(egui::vec2(HEADER_SIDE_PADDING, 0.0));
+            let button_spacing = ui.spacing().item_spacing.x;
+            let button_zone_width = (TOOLBAR_ICON_SIZE * 3.0) + (button_spacing * 2.0);
+            let max_search_outer_width = SEARCH_WIDTH + (SEARCH_FIELD_HORIZONTAL_PADDING * 2.0);
+            let available_search_width =
+                (header_rect.width() - ((button_zone_width + HEADER_ZONE_GAP) * 2.0)).max(1.0);
+            let search_outer_width = available_search_width.min(max_search_outer_width);
+            let side_zone_width = ((header_rect.width() - search_outer_width) * 0.5).max(0.0);
+            let left_rect = egui::Rect::from_min_size(
+                header_rect.min,
+                egui::vec2(side_zone_width, header_rect.height()),
+            );
+            let search_rect = egui::Rect::from_min_size(
+                egui::pos2(left_rect.right(), header_rect.top()),
+                egui::vec2(search_outer_width, header_rect.height()),
+            );
+            let right_rect = egui::Rect::from_min_max(
+                egui::pos2(search_rect.right(), header_rect.top()),
+                header_rect.max,
+            );
+            let search_field_rect = egui::Rect::from_center_size(
+                search_rect.center(),
+                egui::vec2(search_outer_width, TOOLBAR_ICON_SIZE + 10.0),
+            );
+
+            ui.allocate_ui_at_rect(left_rect, |ui| {
+                ui.set_clip_rect(left_rect);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new(description)
-                            .size(12.0)
+                        egui::RichText::new("#")
+                            .size(18.0)
+                            .strong()
                             .color(theme.text_muted),
                     );
-                }
+                    ui.label(
+                        egui::RichText::new(channel_name.trim_start_matches("# "))
+                            .size(16.0)
+                            .strong()
+                            .color(theme.text_primary),
+                    );
+                    if let Some(description) = channel_description.filter(|value| !value.is_empty())
+                    {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(description)
+                                .size(12.0)
+                                .color(theme.text_muted),
+                        );
+                    }
+                });
+            });
 
+            ui.allocate_ui_at_rect(search_field_rect, |ui| {
+                let search = search_field(ui, theme, search_query, search_outer_width);
+                search_anchor_rect = Some(search.rect);
+                if search.clear_clicked {
+                    search_query.clear();
+                    *search_popup_open = false;
+                } else if search.text_response.changed()
+                    || search.text_response.clicked()
+                    || search.text_response.gained_focus()
+                    || search.text_response.has_focus()
+                {
+                    *search_popup_open = true;
+                }
+            });
+
+            ui.allocate_ui_at_rect(right_rect, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if toolbar_icon_button(ui, theme, "M", "Toggle members").clicked() {
                         (*on_action)(ChatPanelAction::ToggleMemberList);
@@ -166,15 +221,13 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                     if toolbar_icon_button(ui, theme, "N", "Notifications").clicked() {
                         (*on_action)(ChatPanelAction::Notifications);
                     }
-                    let search = search_field(ui, theme, search_query);
-                    search_anchor_rect = Some(search.rect);
                 });
             });
         });
 
-    if !search_query.trim().is_empty() {
+    if !search_query.trim().is_empty() && *search_popup_open {
         if let Some(anchor_rect) = search_anchor_rect {
-            show_search_results_popup(
+            search_popup_rect = show_search_results_popup(
                 ctx,
                 theme,
                 chat_rect,
@@ -184,8 +237,29 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                 search_scroll_offset,
                 search_loading,
                 search_error,
+                avatar_textures,
                 on_action,
             );
+        }
+    }
+
+    if *search_popup_open && !search_query.trim().is_empty() {
+        if let Some(pointer_pos) = ctx.input(|input| {
+            if input.pointer.any_pressed() {
+                input.pointer.interact_pos()
+            } else {
+                None
+            }
+        }) {
+            let inside_search = search_anchor_rect
+                .map(|rect| rect.contains(pointer_pos))
+                .unwrap_or(false);
+            let inside_popup = search_popup_rect
+                .map(|rect| rect.contains(pointer_pos))
+                .unwrap_or(false);
+            if !inside_search && !inside_popup {
+                *search_popup_open = false;
+            }
         }
     }
 
@@ -201,11 +275,15 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                 egui::Stroke::new(1.0, theme.border),
             );
 
+            let content_rect = rect.shrink2(egui::vec2(COMPOSER_SIDE_MARGIN, 0.0));
             let composer_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.left(), rect.bottom() - composer_row_height),
-                egui::vec2(rect.width(), composer_row_height),
+                egui::pos2(
+                    content_rect.left(),
+                    content_rect.bottom() - composer_row_height,
+                ),
+                egui::vec2(content_rect.width(), composer_row_height),
             );
-            let meta_rect = egui::Rect::from_min_max(rect.min, composer_rect.min);
+            let meta_rect = egui::Rect::from_min_max(content_rect.min, composer_rect.min);
 
             if meta_rect.height() > 0.0 {
                 ui.allocate_ui_at_rect(meta_rect, |ui| {
@@ -278,6 +356,10 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
 
                             let side_buttons_width = COMPOSER_BUTTON_SIZE * 3.0 + 18.0;
                             let input_w = (ui.available_width() - side_buttons_width).max(120.0);
+                            let _composer_placeholder = format!(
+                                "РќР°РїРёСЃР°С‚СЊ РІ #{}",
+                                channel_name.trim_start_matches("# ")
+                            );
                             let response = ui.add_sized(
                                 [input_w, input_height],
                                 egui::TextEdit::multiline(new_message)
@@ -285,12 +367,26 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                                     .lock_focus(true)
                                     .margin(egui::Margin::symmetric(4.0, 0.0))
                                     .horizontal_align(egui::Align::Min)
-                                    .vertical_align(egui::Align::Center)
-                                    .hint_text(format!(
-                                        "Написать в #{}",
-                                        channel_name.trim_start_matches("# ")
-                                    )),
+                                    .vertical_align(egui::Align::Center),
+                                /*
+                                    "Написать в #{}",
+                                */
                             );
+                            let composer_placeholder =
+                                format!("Написать в #{}", channel_name.trim_start_matches("# "));
+                            if new_message.is_empty() && !response.has_focus() {
+                                let placeholder_rect = response.rect.shrink2(egui::vec2(8.0, 0.0));
+                                ui.painter().with_clip_rect(placeholder_rect).text(
+                                    egui::pos2(
+                                        placeholder_rect.left(),
+                                        placeholder_rect.center().y,
+                                    ),
+                                    egui::Align2::LEFT_CENTER,
+                                    composer_placeholder,
+                                    egui::FontId::proportional(15.0),
+                                    theme.text_muted,
+                                );
+                            }
 
                             button_with_vertical_offset(ui, button_offset, |ui| {
                                 if composer_button(ui, theme, "GIF", "Insert GIF").clicked() {
@@ -325,7 +421,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
     egui::ScrollArea::vertical()
         .id_source("chat_messages_scroll")
         .auto_shrink([false, false])
-        .stick_to_bottom(true)
+        .stick_to_bottom(!*scroll_to_highlighted)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.add_space(10.0);
@@ -378,9 +474,11 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                     message,
                     current_user_id,
                     server_members,
+                    can_moderate_members,
                     media_textures,
                     media_bytes,
                     avatar_textures.get(&message.author_id),
+                    on_action,
                     if is_highlighted {
                         highlighted_message_t
                     } else {
@@ -412,20 +510,73 @@ fn toolbar_icon_button(
     .on_hover_text(tooltip)
 }
 
-fn search_field(ui: &mut egui::Ui, theme: &Theme, search_query: &mut String) -> egui::Response {
-    egui::Frame::none()
+struct SearchFieldResponse {
+    rect: egui::Rect,
+    text_response: egui::Response,
+    clear_clicked: bool,
+}
+
+fn search_field(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    search_query: &mut String,
+    outer_width: f32,
+) -> SearchFieldResponse {
+    let inner_width = (outer_width - (SEARCH_FIELD_HORIZONTAL_PADDING * 2.0)).max(1.0);
+    let frame = egui::Frame::none()
         .fill(theme.bg_quaternary)
         .rounding(egui::Rounding::same(6.0))
-        .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+        .inner_margin(egui::Margin::symmetric(
+            SEARCH_FIELD_HORIZONTAL_PADDING,
+            5.0,
+        ))
         .show(ui, |ui| {
-            ui.add_sized(
-                [SEARCH_WIDTH, TOOLBAR_ICON_SIZE],
-                egui::TextEdit::singleline(search_query)
-                    .hint_text("Поиск по серверу")
-                    .desired_width(SEARCH_WIDTH),
-            )
-        })
-        .inner
+            ui.horizontal(|ui| {
+                let clear_width = if search_query.is_empty() {
+                    0.0
+                } else {
+                    TOOLBAR_ICON_SIZE
+                };
+                let spacing = if search_query.is_empty() { 0.0 } else { 4.0 };
+                let text_width = (inner_width - clear_width - spacing).max(1.0);
+                let text_response = ui.add_sized(
+                    [text_width, TOOLBAR_ICON_SIZE],
+                    egui::TextEdit::singleline(search_query)
+                        .hint_text("Поиск по серверу")
+                        .horizontal_align(egui::Align::Min)
+                        .vertical_align(egui::Align::Center)
+                        .desired_width(text_width),
+                );
+                let clear_clicked = if search_query.is_empty() {
+                    false
+                } else {
+                    if spacing > 0.0 {
+                        ui.add_space(spacing);
+                    }
+                    ui.add_sized(
+                        [TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE],
+                        egui::Button::new(
+                            egui::RichText::new("×")
+                                .size(15.0)
+                                .color(theme.text_secondary),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text("Очистить поиск")
+                    .clicked()
+                };
+
+                SearchFieldResponse {
+                    rect: ui.min_rect(),
+                    text_response,
+                    clear_clicked,
+                }
+            })
+            .inner
+        });
+    let mut response = frame.inner;
+    response.rect = frame.response.rect;
+    response
 }
 
 fn composer_button(ui: &mut egui::Ui, theme: &Theme, label: &str, tooltip: &str) -> egui::Response {
@@ -474,16 +625,18 @@ fn show_search_results_popup(
     search_scroll_offset: &mut f32,
     search_loading: bool,
     search_error: Option<&str>,
+    avatar_textures: &HashMap<i64, egui::TextureHandle>,
     on_action: &mut dyn FnMut(ChatPanelAction),
-) {
+) -> Option<egui::Rect> {
     let width = chat_rect.width().max(1.0);
     let y = anchor_rect.bottom() + 6.0;
+    let mut popup_rect = None;
 
     egui::Area::new(egui::Id::new("chat_search_results_popup"))
         .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2(chat_rect.left(), y))
         .show(ctx, |ui| {
-            egui::Frame::none()
+            let frame = egui::Frame::none()
                 .fill(theme.bg_secondary)
                 .rounding(egui::Rounding::same(10.0))
                 .stroke(egui::Stroke::new(1.0, theme.border))
@@ -545,19 +698,19 @@ fn show_search_results_popup(
 
                     let (popup_rect, _) = ui
                         .allocate_exact_size(egui::vec2(width, popup_height), egui::Sense::hover());
-                    let scroll_rect = egui::Rect::from_min_size(
+                    let results_rect = egui::Rect::from_min_size(
                         egui::pos2(
                             popup_rect.left(),
                             popup_rect.top() + SEARCH_RESULTS_VERTICAL_PADDING,
                         ),
-                        egui::vec2(SEARCH_SCROLLBAR_WIDTH, viewport_height),
-                    );
-                    let results_rect = egui::Rect::from_min_size(
-                        egui::pos2(
-                            scroll_rect.right() + SEARCH_SCROLLBAR_GAP,
-                            scroll_rect.top(),
-                        ),
                         egui::vec2(results_width, viewport_height),
+                    );
+                    let scroll_rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            results_rect.right() + SEARCH_SCROLLBAR_GAP,
+                            results_rect.top(),
+                        ),
+                        egui::vec2(SEARCH_SCROLLBAR_WIDTH, viewport_height),
                     );
 
                     ui.allocate_ui_at_rect(results_rect, |ui| {
@@ -574,6 +727,7 @@ fn show_search_results_popup(
                                         theme,
                                         result,
                                         server_members,
+                                        avatar_textures,
                                         results_rect.width(),
                                         on_action,
                                     );
@@ -603,7 +757,9 @@ fn show_search_results_popup(
                         );
                     }
                 });
+            popup_rect = Some(frame.response.rect);
         });
+    popup_rect
 }
 
 fn search_result_row(
@@ -611,13 +767,17 @@ fn search_result_row(
     theme: &Theme,
     result: &ChatSearchResult,
     server_members: &[Member],
+    avatar_textures: &HashMap<i64, egui::TextureHandle>,
     width: f32,
     on_action: &mut dyn FnMut(ChatPanelAction),
 ) {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(width, SEARCH_RESULT_ROW_HEIGHT),
-        egui::Sense::click(),
+    let response = ui.add_sized(
+        [width, SEARCH_RESULT_ROW_HEIGHT],
+        egui::Button::new("")
+            .frame(false)
+            .sense(egui::Sense::click()),
     );
+    let rect = response.rect;
     let fill = if response.hovered() {
         theme.bg_hover
     } else {
@@ -632,33 +792,52 @@ fn search_result_row(
         .rect(rect, egui::Rounding::same(8.0), fill, stroke);
 
     let author_name = resolve_message_author_name(&result.message, server_members);
+    let avatar_texture = avatar_textures.get(&result.message.author_id);
     let title = format!(
         "{}  {}  #{}",
         author_name,
         format_message_timestamp(&result.message.created_at),
         result.channel_name
     );
-    ui.allocate_ui_at_rect(rect.shrink2(egui::vec2(10.0, 8.0)), |ui| {
-        ui.set_width(width - 20.0);
-        ui.add_sized(
-            [ui.available_width(), 18.0],
-            egui::Label::new(
-                egui::RichText::new(title)
-                    .strong()
-                    .color(theme.text_primary),
-            )
-            .truncate(),
-        );
-        ui.add_space(4.0);
-        ui.add_sized(
-            [ui.available_width(), 18.0],
-            egui::Label::new(
-                egui::RichText::new(message_preview_text(&result.message))
-                    .color(theme.text_secondary),
-            )
-            .truncate(),
+    let preview = message_preview_text(&result.message);
+    let content_rect = rect.shrink2(egui::vec2(10.0, 8.0));
+    let avatar_radius = 18.0;
+    let avatar_rect = egui::Rect::from_min_size(
+        egui::pos2(content_rect.left(), content_rect.top()),
+        egui::vec2(avatar_radius * 2.0, avatar_radius * 2.0),
+    );
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(avatar_rect.right() + 10.0, content_rect.top()),
+        content_rect.max,
+    );
+
+    ui.allocate_ui_at_rect(avatar_rect, |ui| {
+        crate::components::avatar::avatar(
+            ui,
+            theme,
+            &author_name,
+            avatar_radius,
+            false,
+            avatar_texture,
         );
     });
+    paint_search_result_text(
+        ui,
+        text_rect,
+        &title,
+        egui::FontId::proportional(14.0),
+        theme.text_primary,
+    );
+    paint_search_result_text(
+        ui,
+        egui::Rect::from_min_max(
+            egui::pos2(text_rect.left(), text_rect.top() + 22.0),
+            text_rect.max,
+        ),
+        &preview,
+        egui::FontId::proportional(14.0),
+        theme.text_secondary,
+    );
 
     if response.clicked() {
         on_action(ChatPanelAction::OpenSearchResult {
@@ -666,6 +845,21 @@ fn search_result_row(
             message_id: result.message.id,
         });
     }
+}
+
+fn paint_search_result_text(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    text: &str,
+    font_id: egui::FontId,
+    color: egui::Color32,
+) {
+    let galley = ui
+        .painter()
+        .layout(text.to_owned(), font_id, color, f32::INFINITY);
+    ui.painter()
+        .with_clip_rect(rect)
+        .galley(rect.left_top(), galley, color);
 }
 
 fn paint_left_scrollbar(
@@ -720,9 +914,11 @@ fn message_row(
     message: &Message,
     current_user_id: Option<i64>,
     server_members: &[Member],
+    can_moderate_members: bool,
     media_textures: &HashMap<i64, egui::TextureHandle>,
     media_bytes: &HashMap<i64, (Vec<u8>, String)>,
     avatar_texture: Option<&egui::TextureHandle>,
+    on_action: &mut dyn FnMut(ChatPanelAction),
     highlight_t: Option<f32>,
     scroll_to_highlighted: bool,
 ) -> bool {
@@ -735,7 +931,7 @@ fn message_row(
         )
     });
 
-    let frame = egui::Frame::none()
+    let response = egui::Frame::none()
         .fill(row_fill)
         .inner_margin(egui::Margin::symmetric(16.0, 6.0))
         .show(ui, |ui| {
@@ -808,10 +1004,39 @@ fn message_row(
                     }
                 });
             });
+        })
+        .response;
+
+    if can_moderate_members && Some(message.author_id) != current_user_id {
+        response.context_menu(|ui| {
+            if ui
+                .add(
+                    egui::Button::new("Выгнать с сервера")
+                        .fill(theme.error)
+                        .stroke(egui::Stroke::NONE),
+                )
+                .clicked()
+            {
+                (*on_action)(ChatPanelAction::KickMember(message.author_id));
+                ui.close_menu();
+            }
+            if ui
+                .add(
+                    egui::Button::new("Забанить на сервере")
+                        .fill(theme.error)
+                        .stroke(egui::Stroke::NONE),
+                )
+                .clicked()
+            {
+                (*on_action)(ChatPanelAction::BanMember(message.author_id));
+                ui.close_menu();
+            }
         });
+    }
 
     if scroll_to_highlighted {
-        ui.scroll_to_rect(frame.response.rect, Some(egui::Align::Center));
+        response.scroll_to_me(Some(egui::Align::Center));
+        ui.ctx().request_repaint();
     }
     scroll_to_highlighted
 }

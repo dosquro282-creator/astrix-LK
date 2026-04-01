@@ -122,6 +122,22 @@ func (s *Store) runMigrations(ctx context.Context) error {
 			updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (user_id, channel_id)
 		);`,
+		`CREATE TABLE IF NOT EXISTS server_bans (
+			server_id    INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+			user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			banned_by    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			display_name TEXT NOT NULL DEFAULT '',
+			created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (server_id, user_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS server_invites (
+			token      TEXT PRIMARY KEY,
+			server_id  INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+			channel_id INTEGER REFERENCES channels(id) ON DELETE SET NULL,
+			inviter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`,
+		`ALTER TABLE server_bans ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';`,
 	}
 
 	for _, q := range queries {

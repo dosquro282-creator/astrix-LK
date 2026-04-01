@@ -54,7 +54,7 @@ pub struct AstrixApp {
 }
 
 impl AstrixApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>, invite_token: Option<String>) -> Self {
         let settings = ui::Settings::load();
         let api = ApiClient::new(Some(settings.api_base.clone()));
         let mut auth_state = ui::AuthState::default();
@@ -71,6 +71,7 @@ impl AstrixApp {
             ..Default::default()
         };
         state.main.voice.input_sensitivity = settings.input_sensitivity;
+        state.main.pending_invite_token = invite_token;
         Self {
             theme: Theme::default(),
             app_state: AppState::default(),
@@ -553,6 +554,10 @@ impl AstrixApp {
                         let server_id = payload.get("server_id").and_then(|v| v.as_i64());
                         if let Some(sid) = server_id {
                             st.main.servers.retain(|s| s.id != sid);
+                            if st.main.ws_connected_server == Some(sid) {
+                                st.main.ws_connected_server = None;
+                                self.ws_tx = None;
+                            }
                             if st.main.selected_server == Some(sid) {
                                 st.main.selected_server = None;
                                 st.main.channels.clear();
@@ -600,6 +605,11 @@ impl AstrixApp {
                         if let Ok(srv) = serde_json::from_value::<Server>(payload.clone()) {
                             if !st.main.servers.iter().any(|s| s.id == srv.id) {
                                 st.main.servers.push(srv);
+                                if st.main.selected_server.is_none() {
+                                    st.main.selected_server = Some(
+                                        st.main.servers.last().map(|server| server.id).unwrap_or(0),
+                                    );
+                                }
                             }
                         } else {
                             let server_id = payload
@@ -621,6 +631,9 @@ impl AstrixApp {
                                         name,
                                         owner_id,
                                     });
+                                    if st.main.selected_server.is_none() {
+                                        st.main.selected_server = Some(sid);
+                                    }
                                 }
                             }
                         }

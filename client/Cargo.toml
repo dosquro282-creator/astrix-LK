@@ -57,6 +57,9 @@ wgc-capture = ["dep:windows-capture", "dep:windows", "dep:windows-core", "dep:we
 [build-dependencies]
 cxx-build = "1.0"
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 # FramePool with 3 buffers (crate default is 1; with 1, pool overflows if on_frame_arrived doesn't take frame immediately).
 # Phase 1: livekit-rs fork for NativeEncodedVideoSource (zero-copy MFT H.264 pipeline)
 [patch.crates-io]

@@ -28,7 +28,7 @@ pub enum ChannelPanelAction {
     CreateChannel,
     Invite,
     ChannelSettings(i64, String),
-    OpenSettings,
+    OpenServerSettings,
     Logout,
     RetryChannels,
 }
@@ -109,7 +109,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
             let left_padding = 10.0;
             let right_padding = 10.0;
             let button_gap = 4.0;
-            let buttons_width = HEADER_BUTTON_SIZE.x * 2.0 + button_gap;
+            let buttons_width = HEADER_BUTTON_SIZE.x * 3.0 + button_gap * 2.0;
             let buttons_rect = egui::Rect::from_min_size(
                 egui::pos2(
                     rect.right() - right_padding - buttons_width,
@@ -144,6 +144,9 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                     }
                     if header_button(ui, theme, "@", "Invite").clicked() {
                         (*on_action)(ChannelPanelAction::Invite);
+                    }
+                    if header_button(ui, theme, "⚙", "Настройки сервера").clicked() {
+                        (*on_action)(ChannelPanelAction::OpenServerSettings);
                     }
                 });
             });
