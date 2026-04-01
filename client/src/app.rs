@@ -70,7 +70,7 @@ impl AstrixApp {
             dark_mode: true,
             ..Default::default()
         };
-        state.main.voice.input_sensitivity = settings.input_sensitivity;
+        ui::apply_persisted_media_preferences(&mut state);
         state.main.pending_invite_token = invite_token;
         Self {
             theme: Theme::default(),
@@ -994,7 +994,7 @@ impl eframe::App for AstrixApp {
             st.access_token = None;
             st.user_id = None;
             st.main = ui::MainState::default();
-            st.main.voice.input_sensitivity = st.settings.input_sensitivity;
+            ui::apply_persisted_media_preferences(&mut st);
             st.screen = ui::Screen::Auth;
             ctx.request_repaint();
         }

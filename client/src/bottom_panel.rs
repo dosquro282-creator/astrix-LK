@@ -23,6 +23,10 @@ const PRESET_BUTTON_WIDTH: f32 = 82.0;
 const STREAM_AUDIO_BUTTON_WIDTH: f32 = 32.0;
 const DISCONNECT_BUTTON_WIDTH: f32 = 38.0;
 const LATENCY_LABEL_GAP: f32 = 8.0;
+const SCREEN_SHARE_TOOLTIP_START: &str =
+    "\u{41d}\u{430}\u{447}\u{430}\u{442}\u{44c} \u{442}\u{440}\u{430}\u{43d}\u{441}\u{43b}\u{44f}\u{446}\u{438}\u{44e}";
+const SCREEN_SHARE_TOOLTIP_STOP: &str =
+    "\u{41e}\u{441}\u{442}\u{430}\u{43d}\u{43e}\u{432}\u{438}\u{442}\u{44c} \u{442}\u{440}\u{430}\u{43d}\u{441}\u{43b}\u{44f}\u{446}\u{438}\u{44e}";
 
 pub fn panel_height(in_voice_channel: bool) -> f32 {
     if in_voice_channel {
@@ -250,9 +254,9 @@ fn voice_controls_row(
                 }),
         )
         .on_hover_text(if voice.screen_on {
-            "Остановить трансляцию"
+            SCREEN_SHARE_TOOLTIP_STOP
         } else {
-            "Начать трансляцию"
+            SCREEN_SHARE_TOOLTIP_START
         });
     paint_stream_icon(ui.painter(), stream_response.rect, theme.text_primary);
     if stream_response.clicked() {

@@ -430,12 +430,20 @@ pub fn enumerate_stream_windows() -> Vec<StreamWindowInfo> {
         })
         .collect();
     windows.sort_by(|a, b| {
-        a.app_name
-            .cmp(&b.app_name)
-            .then_with(|| a.title.cmp(&b.title))
+        a.title
+            .trim()
+            .cmp(b.title.trim())
+            .then_with(|| a.app_name.cmp(&b.app_name))
             .then_with(|| a.window_id.cmp(&b.window_id))
     });
     windows
+}
+
+#[derive(Clone, Debug)]
+pub struct StreamSourcePreviewImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
 }
 
 fn find_stream_window(window_id: u32, process_id: u32) -> Option<Window> {
@@ -472,6 +480,22 @@ fn capture_source_image(source: &StreamSourceTarget) -> Option<image::RgbaImage>
             .capture_image()
             .ok(),
     }
+}
+
+pub fn capture_stream_source_preview(
+    source: &StreamSourceTarget,
+    max_dimension: u32,
+) -> Option<StreamSourcePreviewImage> {
+    let image = capture_source_image(source)?;
+    let max_dimension = max_dimension.max(1);
+    let preview = DynamicImage::ImageRgba8(image)
+        .thumbnail(max_dimension, max_dimension)
+        .to_rgba8();
+    Some(StreamSourcePreviewImage {
+        width: preview.width(),
+        height: preview.height(),
+        rgba: preview.into_raw(),
+    })
 }
 
 fn encode_stream_preview(source: &StreamSourceTarget) -> Option<Vec<u8>> {
@@ -3684,7 +3708,7 @@ fn start_screen_capture(
         let settings = Settings::new(
             WgcWindow::from_raw_hwnd(window_id as usize as *mut std::ffi::c_void),
             CursorCaptureSettings::Default,
-            DrawBorderSettings::Default,
+            DrawBorderSettings::WithoutBorder,
             SecondaryWindowSettings::Default,
             min_update_interval,
             DirtyRegionSettings::Default,
@@ -3745,7 +3769,7 @@ fn start_screen_capture(
         let settings = Settings::new(
             monitor,
             CursorCaptureSettings::Default,
-            DrawBorderSettings::Default,
+            DrawBorderSettings::WithoutBorder,
             SecondaryWindowSettings::Default,
             min_update_interval,
             DirtyRegionSettings::Default,

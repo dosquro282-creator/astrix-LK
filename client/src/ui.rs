@@ -3,6 +3,7 @@ use std::fmt;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, TryRecvError};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
@@ -130,8 +131,14 @@ pub(crate) struct Settings {
     pub(crate) denoise_max_db_df_thresh: f32,
     #[serde(default = "default_denoise_reduce_mask")]
     pub(crate) denoise_reduce_mask: String,
+    #[serde(default = "default_input_volume")]
+    pub(crate) input_volume: f32,
     #[serde(default = "default_input_sensitivity")]
     pub(crate) input_sensitivity: f32,
+    #[serde(default = "default_output_volume")]
+    pub(crate) output_volume: f32,
+    #[serde(default)]
+    pub(crate) screen_preset: crate::voice::ScreenPreset,
     /// Путь декодирования входящего видео: "cpu" (OpenH264) или "mft" (Media Foundation).
     #[serde(default)]
     pub(crate) decode_path: String,
@@ -178,8 +185,24 @@ fn default_input_sensitivity() -> f32 {
     0.55
 }
 
+fn default_input_volume() -> f32 {
+    1.0
+}
+
+fn normalize_input_volume(value: f32) -> f32 {
+    value.clamp(0.0, 2.0)
+}
+
 fn normalize_input_sensitivity(value: f32) -> f32 {
     value.clamp(0.0, 1.0)
+}
+
+fn default_output_volume() -> f32 {
+    1.0
+}
+
+fn normalize_output_volume(value: f32) -> f32 {
+    value.clamp(0.0, 4.0)
 }
 
 impl Default for Settings {
@@ -202,7 +225,10 @@ impl Default for Settings {
             denoise_max_db_erb_thresh: default_denoise_max_db_erb_thresh(),
             denoise_max_db_df_thresh: default_denoise_max_db_df_thresh(),
             denoise_reduce_mask: default_denoise_reduce_mask(),
+            input_volume: default_input_volume(),
             input_sensitivity: default_input_sensitivity(),
+            output_volume: default_output_volume(),
+            screen_preset: crate::voice::ScreenPreset::default(),
             decode_path: String::new(),
             video_decoder_gamma: 0.0,
             video_decoder_gamma_migrated_v2: true,
@@ -263,9 +289,19 @@ impl Settings {
             s.denoise_reduce_mask = default_denoise_reduce_mask();
             should_save = true;
         }
+        let normalized_input_volume = normalize_input_volume(s.input_volume);
+        if (s.input_volume - normalized_input_volume).abs() > f32::EPSILON {
+            s.input_volume = normalized_input_volume;
+            should_save = true;
+        }
         let normalized_input_sensitivity = normalize_input_sensitivity(s.input_sensitivity);
         if (s.input_sensitivity - normalized_input_sensitivity).abs() > f32::EPSILON {
             s.input_sensitivity = normalized_input_sensitivity;
+            should_save = true;
+        }
+        let normalized_output_volume = normalize_output_volume(s.output_volume);
+        if (s.output_volume - normalized_output_volume).abs() > f32::EPSILON {
+            s.output_volume = normalized_output_volume;
             should_save = true;
         }
         if s.migrate_saved_accounts() {
@@ -930,6 +966,52 @@ pub(crate) struct ScreenSourceEntry {
     pub(crate) target: StreamSourceTarget,
 }
 
+pub(crate) struct ScreenSourcePreviewFrame {
+    target: StreamSourceTarget,
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+const SCREEN_SOURCE_TILE_ASPECT: f32 = 16.0 / 9.0;
+const SCREEN_SOURCE_TILE_MAX_COLUMNS: usize = 3;
+const SCREEN_SOURCE_TILE_GAP: f32 = 12.0;
+const SCREEN_SOURCE_TILE_LABEL_HEIGHT: f32 = 42.0;
+const SCREEN_SOURCE_PREVIEW_MAX_DIM: u32 = 640;
+const SCREEN_SOURCE_PREVIEW_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const SCREEN_SOURCE_PICKER_HORIZONTAL_MARGIN: f32 = 100.0;
+const SCREEN_SOURCE_PICKER_VERTICAL_MARGIN: f32 = 50.0;
+const SCREEN_SOURCE_LABEL_SCREEN: &str = "\u{42d}\u{43a}\u{440}\u{430}\u{43d}";
+const SCREEN_SOURCE_LABEL_PRIMARY: &str = "\u{43e}\u{441}\u{43d}\u{43e}\u{432}\u{43d}\u{43e}\u{439}";
+const SCREEN_SOURCE_LABEL_UNNAMED_WINDOW: &str =
+    "\u{41e}\u{43a}\u{43d}\u{43e} \u{431}\u{435}\u{437} \u{43d}\u{430}\u{437}\u{432}\u{430}\u{43d}\u{438}\u{44f}";
+const SCREEN_SOURCE_LABEL_LOADING_PREVIEW: &str =
+    "\u{417}\u{430}\u{433}\u{440}\u{443}\u{436}\u{430}\u{435}\u{43c}\n\u{43f}\u{440}\u{435}\u{432}\u{44c}\u{44e}...";
+const SCREEN_SOURCE_LABEL_PREVIEW_UNAVAILABLE: &str =
+    "\u{41f}\u{440}\u{435}\u{432}\u{44c}\u{44e}\n\u{43d}\u{435}\u{434}\u{43e}\u{441}\u{442}\u{443}\u{43f}\u{43d}\u{43e}";
+const SCREEN_SOURCE_PICKER_TITLE: &str =
+    "\u{412}\u{44b}\u{431}\u{43e}\u{440} \u{438}\u{441}\u{442}\u{43e}\u{447}\u{43d}\u{438}\u{43a}\u{430} \u{442}\u{440}\u{430}\u{43d}\u{441}\u{43b}\u{44f}\u{446}\u{438}\u{438}";
+const SCREEN_SOURCE_TAB_APPLICATIONS: &str =
+    "\u{41f}\u{440}\u{438}\u{43b}\u{43e}\u{436}\u{435}\u{43d}\u{438}\u{44f}";
+const SCREEN_SOURCE_TAB_ENTIRE_SCREEN: &str =
+    "\u{412}\u{435}\u{441}\u{44c} \u{44d}\u{43a}\u{440}\u{430}\u{43d}";
+const SCREEN_SOURCE_LABEL_NO_WINDOWS: &str =
+    "\u{41f}\u{43e}\u{434}\u{445}\u{43e}\u{434}\u{44f}\u{449}\u{438}\u{435} \u{43e}\u{43a}\u{43d}\u{430} \u{43d}\u{435} \u{43d}\u{430}\u{439}\u{434}\u{435}\u{43d}\u{44b}.";
+const SCREEN_SOURCE_LABEL_NO_SCREENS: &str =
+    "\u{42d}\u{43a}\u{440}\u{430}\u{43d}\u{44b} \u{43d}\u{435} \u{43e}\u{431}\u{43d}\u{430}\u{440}\u{443}\u{436}\u{435}\u{43d}\u{44b}.";
+const SCREEN_SOURCE_PICKER_HELP_TEXT: &str =
+    "\u{412}\u{44b}\u{431}\u{43e}\u{440} \u{438}\u{441}\u{442}\u{43e}\u{447}\u{43d}\u{438}\u{43a}\u{430} \u{43d}\u{435} \u{437}\u{430}\u{43f}\u{443}\u{441}\u{43a}\u{430}\u{435}\u{442} \u{441}\u{442}\u{440}\u{438}\u{43c}. \u{414}\u{43b}\u{44f} \u{437}\u{430}\u{43f}\u{443}\u{441}\u{43a}\u{430} \u{438}\u{441}\u{43f}\u{43e}\u{43b}\u{44c}\u{437}\u{443}\u{439}\u{442}\u{435} \u{43a}\u{43d}\u{43e}\u{43f}\u{43a}\u{443} \"\u{41d}\u{430}\u{447}\u{430}\u{442}\u{44c} \u{442}\u{440}\u{430}\u{43d}\u{441}\u{43b}\u{44f}\u{446}\u{438}\u{44e}\".";
+const SCREEN_SOURCE_ACTION_BUTTON_LABEL: &str =
+    "\u{414}\u{435}\u{43c}\u{43e}\u{43d}\u{441}\u{442}\u{440}\u{438}\u{440}\u{43e}\u{432}\u{430}\u{442}\u{44c} \u{44d}\u{43a}\u{440}\u{430}\u{43d}";
+const SCREEN_SOURCE_ACTION_BUTTON_LABEL_SHORT: &str =
+    "\u{41f}\u{43e}\u{43a}\u{430}\u{437}\u{430}\u{442}\u{44c} \u{44d}\u{43a}\u{440}\u{430}\u{43d}";
+const SCREEN_SOURCE_ACTION_BUTTON_LABEL_COMPACT: &str =
+    "\u{41f}\u{43e}\u{43a}\u{430}\u{437}\u{430}\u{442}\u{44c}";
+const SCREEN_SOURCE_ACTION_BUTTON_LABEL_MINIMAL: &str =
+    "\u{421}\u{442}\u{430}\u{440}\u{442}";
+const SCREEN_SOURCE_CANCEL_LABEL: &str =
+    "\u{41e}\u{442}\u{43c}\u{435}\u{43d}\u{430}";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScreenSourceTab {
     Applications,
@@ -1056,6 +1138,12 @@ pub(crate) struct MainState {
     pub(crate) selected_stream_source: Option<ScreenSourceEntry>,
     pub(crate) start_stream_after_source_pick: bool,
     pub(crate) screen_source_tab: ScreenSourceTab,
+    pub(crate) screen_source_preview_textures:
+        HashMap<StreamSourceTarget, egui::TextureHandle>,
+    pub(crate) screen_source_preview_rx: Option<mpsc::Receiver<Vec<ScreenSourcePreviewFrame>>>,
+    pub(crate) screen_source_preview_inflight: bool,
+    pub(crate) screen_source_preview_requested_tab: Option<ScreenSourceTab>,
+    pub(crate) screen_source_preview_last_refresh: Option<Instant>,
     pub(crate) screen_preset: crate::voice::ScreenPreset,
     pub(crate) voice_stats: Option<Arc<Mutex<VoiceSessionStats>>>,
     pub(crate) voice_latency_history: VecDeque<VoiceLatencySample>,
@@ -1156,6 +1244,11 @@ impl Clone for MainState {
             selected_stream_source: self.selected_stream_source.clone(),
             start_stream_after_source_pick: false,
             screen_source_tab: self.screen_source_tab,
+            screen_source_preview_textures: HashMap::new(),
+            screen_source_preview_rx: None,
+            screen_source_preview_inflight: false,
+            screen_source_preview_requested_tab: None,
+            screen_source_preview_last_refresh: None,
             screen_preset: self.screen_preset,
             voice_stats: self.voice_stats.clone(), // Arc clone
             voice_latency_history: self.voice_latency_history.clone(),
@@ -1254,6 +1347,11 @@ impl Default for MainState {
             selected_stream_source: None,
             start_stream_after_source_pick: false,
             screen_source_tab: ScreenSourceTab::default(),
+            screen_source_preview_textures: HashMap::new(),
+            screen_source_preview_rx: None,
+            screen_source_preview_inflight: false,
+            screen_source_preview_requested_tab: None,
+            screen_source_preview_last_refresh: None,
             screen_preset: crate::voice::ScreenPreset::default(),
             voice_stats: None,
             voice_latency_history: VecDeque::new(),
@@ -1286,6 +1384,14 @@ pub(crate) struct State {
 }
 
 // ─── Auth screen ─────────────────────────────────────────────────────────────
+
+pub(crate) fn apply_persisted_media_preferences(state: &mut State) {
+    state.main.voice.input_volume = normalize_input_volume(state.settings.input_volume);
+    state.main.voice.input_sensitivity =
+        normalize_input_sensitivity(state.settings.input_sensitivity);
+    state.main.voice.output_volume = normalize_output_volume(state.settings.output_volume);
+    state.main.screen_preset = state.settings.screen_preset;
+}
 
 pub(crate) fn auth_screen(ctx: &egui::Context, state: &mut State, api: &ApiClient) {
     let mut error = None;
@@ -1553,6 +1659,61 @@ fn letter_circle(
     resp
 }
 
+fn show_modal_backdrop(ctx: &egui::Context, id: impl std::hash::Hash, rect: egui::Rect) {
+    egui::Area::new(egui::Id::new(id))
+        .order(egui::Order::Middle)
+        .movable(false)
+        .fixed_pos(rect.min)
+        .show(ctx, |ui| {
+            let (rect, response) =
+                ui.allocate_exact_size(rect.size(), egui::Sense::click_and_drag());
+            response.surrender_focus();
+            ui.painter().rect_filled(
+                rect,
+                egui::Rounding::ZERO,
+                egui::Color32::from_black_alpha(170),
+            );
+        });
+}
+
+fn window_inner_size_for_outer(ctx: &egui::Context, outer_size: egui::Vec2, frame: &egui::Frame) -> egui::Vec2 {
+    let window_margin = frame.inner_margin;
+    let window_border_padding = frame.stroke.width / 2.0;
+    let mut window_inner_margin = window_margin;
+    window_inner_margin += window_border_padding;
+    let title_bar_height = egui::TextStyle::Heading
+        .resolve(ctx.style().as_ref())
+        .size
+        .max(ctx.style().spacing.interact_size.y)
+        + window_margin.top
+        + window_margin.bottom;
+    let window_chrome =
+        frame.outer_margin.sum() + window_inner_margin.sum() + egui::vec2(0.0, title_bar_height);
+    egui::vec2(
+        (outer_size.x - window_chrome.x).max(0.0),
+        (outer_size.y - window_chrome.y).max(0.0),
+    )
+}
+
+fn inset_modal_rect(
+    rect: egui::Rect,
+    horizontal_margin: f32,
+    vertical_margin: f32,
+    bottom_reserved: f32,
+) -> egui::Rect {
+    let bottom_reserved = bottom_reserved.min((rect.height() - 1.0).max(0.0));
+    let horizontal_margin = horizontal_margin.min(((rect.width() - 1.0) * 0.5).max(0.0));
+    let available_height = (rect.height() - bottom_reserved).max(1.0);
+    let vertical_margin = vertical_margin.min(((available_height - 1.0) * 0.5).max(0.0));
+    egui::Rect::from_min_max(
+        egui::pos2(rect.left() + horizontal_margin, rect.top() + vertical_margin),
+        egui::pos2(
+            rect.right() - horizontal_margin,
+            rect.bottom() - bottom_reserved - vertical_margin,
+        ),
+    )
+}
+
 /// Выполняет подключение к голосовому каналу (API + запуск движка). Вызывается из обработчика channel_panel.
 fn apply_voice_join(
     ctx: &egui::Context,
@@ -1807,7 +1968,7 @@ fn apply_voice_leave(
     stop_voice_engine(engine_tx, engine_done);
     reset_voice_connection_metrics(state);
     state.main.voice = VoiceState::default();
-    state.main.voice.input_sensitivity = state.settings.input_sensitivity;
+    apply_persisted_media_preferences(state);
     state.main.show_screen_source_picker = false;
     state.main.start_stream_after_source_pick = false;
     state.main.voice_video_textures.clear();
@@ -1987,6 +2148,7 @@ fn update_local_deafened_flag(state: &mut State, user_id: Option<i64>, deafened:
     }
 }
 
+#[allow(dead_code)]
 fn populate_screen_share_sources(state: &mut State) {
     let monitors = crate::voice_livekit::enumerate_unique_screens();
     state.main.screen_sources = monitors
@@ -2031,6 +2193,166 @@ fn populate_screen_share_sources(state: &mut State) {
             }
         })
         .collect();
+}
+
+fn refresh_screen_share_sources(state: &mut State) {
+    let monitors = crate::voice_livekit::enumerate_unique_screens();
+    state.main.screen_sources = monitors
+        .iter()
+        .enumerate()
+        .map(|(i, monitor)| ScreenSourceEntry {
+            label: if monitor.is_primary() {
+                format!("{SCREEN_SOURCE_LABEL_SCREEN} {} ({SCREEN_SOURCE_LABEL_PRIMARY})", i + 1)
+            } else {
+                format!("{SCREEN_SOURCE_LABEL_SCREEN} {}", i + 1)
+            },
+            target: StreamSourceTarget::Monitor { index: i },
+        })
+        .collect();
+    state.main.window_sources = crate::voice_livekit::enumerate_stream_windows()
+        .into_iter()
+        .map(|window| ScreenSourceEntry {
+            label: screen_share_window_label(&window.title),
+            target: StreamSourceTarget::Window {
+                window_id: window.window_id,
+                process_id: window.process_id,
+            },
+        })
+        .collect();
+    retain_screen_source_preview_textures(state);
+}
+
+fn screen_share_window_label(title: &str) -> String {
+    let title = title.trim();
+    if title.is_empty() {
+        SCREEN_SOURCE_LABEL_UNNAMED_WINDOW.to_string()
+    } else {
+        title.to_string()
+    }
+}
+
+fn screen_source_texture_name(target: &StreamSourceTarget) -> String {
+    match target {
+        StreamSourceTarget::Monitor { index } => {
+            format!("screen_source_preview_monitor_{index}")
+        }
+        StreamSourceTarget::Window {
+            window_id,
+            process_id,
+        } => format!("screen_source_preview_window_{window_id}_{process_id}"),
+    }
+}
+
+fn retain_screen_source_preview_textures(state: &mut State) {
+    let valid_targets: HashSet<_> = state
+        .main
+        .screen_sources
+        .iter()
+        .chain(state.main.window_sources.iter())
+        .map(|source| source.target.clone())
+        .collect();
+    state
+        .main
+        .screen_source_preview_textures
+        .retain(|target, _| valid_targets.contains(target));
+}
+
+fn invalidate_screen_source_previews(state: &mut State) {
+    state.main.screen_source_preview_rx = None;
+    state.main.screen_source_preview_inflight = false;
+    state.main.screen_source_preview_requested_tab = None;
+    state.main.screen_source_preview_last_refresh = None;
+}
+
+fn queue_screen_source_preview_refresh(ctx: &egui::Context, state: &mut State) {
+    if state.main.screen_source_preview_inflight {
+        return;
+    }
+
+    let tab = state.main.screen_source_tab;
+    let sources = match tab {
+        ScreenSourceTab::Applications => state.main.window_sources.clone(),
+        ScreenSourceTab::EntireScreen => state.main.screen_sources.clone(),
+    };
+    if sources.is_empty() {
+        state.main.screen_source_preview_requested_tab = Some(tab);
+        state.main.screen_source_preview_last_refresh = Some(Instant::now());
+        return;
+    }
+
+    let (tx, rx) = mpsc::channel();
+    let ctx_clone = ctx.clone();
+    state.main.screen_source_preview_rx = Some(rx);
+    state.main.screen_source_preview_inflight = true;
+    state.main.screen_source_preview_requested_tab = Some(tab);
+
+    std::thread::Builder::new()
+        .name("screen-source-preview".into())
+        .spawn(move || {
+            let previews: Vec<ScreenSourcePreviewFrame> = sources
+                .into_iter()
+                .filter_map(|source| {
+                    let target = source.target.clone();
+                    crate::voice_livekit::capture_stream_source_preview(
+                        &target,
+                        SCREEN_SOURCE_PREVIEW_MAX_DIM,
+                    )
+                    .map(|preview| ScreenSourcePreviewFrame {
+                        target,
+                        width: preview.width,
+                        height: preview.height,
+                        rgba: preview.rgba,
+                    })
+                })
+                .collect();
+            let _ = tx.send(previews);
+            ctx_clone.request_repaint();
+        })
+        .ok();
+}
+
+fn poll_screen_source_preview_updates(ctx: &egui::Context, state: &mut State) {
+    let result = match state.main.screen_source_preview_rx.as_ref() {
+        Some(rx) => match rx.try_recv() {
+            Ok(previews) => Some(Ok(previews)),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(Err(())),
+        },
+        None => None,
+    };
+
+    match result {
+        Some(Ok(previews)) => {
+            state.main.screen_source_preview_rx = None;
+            state.main.screen_source_preview_inflight = false;
+            state.main.screen_source_preview_last_refresh = Some(Instant::now());
+
+            for preview in previews {
+                let size = [preview.width as usize, preview.height as usize];
+                let image = egui::ColorImage::from_rgba_unmultiplied(size, &preview.rgba);
+                let texture_name = screen_source_texture_name(&preview.target);
+                match state.main.screen_source_preview_textures.get_mut(&preview.target) {
+                    Some(texture) => {
+                        texture.set(image, egui::TextureOptions::LINEAR);
+                    }
+                    None => {
+                        let texture =
+                            ctx.load_texture(&texture_name, image, egui::TextureOptions::LINEAR);
+                        state
+                            .main
+                            .screen_source_preview_textures
+                            .insert(preview.target, texture);
+                    }
+                }
+            }
+        }
+        Some(Err(())) => {
+            state.main.screen_source_preview_rx = None;
+            state.main.screen_source_preview_inflight = false;
+            state.main.screen_source_preview_last_refresh = Some(Instant::now());
+        }
+        None => {}
+    }
 }
 
 fn set_local_camera_enabled(
@@ -2132,15 +2454,190 @@ fn set_local_deafened(
 }
 
 fn open_screen_share_picker(ctx: &egui::Context, state: &mut State, start_after_pick: bool) {
-    populate_screen_share_sources(state);
+    refresh_screen_share_sources(state);
     state.main.start_stream_after_source_pick = start_after_pick;
     state.main.screen_source_tab = if state.main.window_sources.is_empty() {
         ScreenSourceTab::EntireScreen
     } else {
         ScreenSourceTab::Applications
     };
+    invalidate_screen_source_previews(state);
     state.main.show_screen_source_picker = true;
+    queue_screen_source_preview_refresh(ctx, state);
     ctx.request_repaint();
+}
+
+fn show_screen_source_tile_grid(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    sources: &[ScreenSourceEntry],
+    preview_textures: &HashMap<StreamSourceTarget, egui::TextureHandle>,
+    selected_source: &Option<ScreenSourceEntry>,
+    previews_loading: bool,
+) -> Option<ScreenSourceEntry> {
+    let available_width = ui.available_width().max(1.0);
+    let columns = sources.len().max(1).min(SCREEN_SOURCE_TILE_MAX_COLUMNS);
+    let total_gap = SCREEN_SOURCE_TILE_GAP * columns.saturating_sub(1) as f32;
+    let tile_width = ((available_width - total_gap) / columns as f32).max(1.0);
+    let mut picked_source = None;
+
+    for row in sources.chunks(columns) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = SCREEN_SOURCE_TILE_GAP;
+            for source in row {
+                if show_screen_source_tile(
+                    ui,
+                    theme,
+                    source,
+                    preview_textures,
+                    selected_source,
+                    previews_loading,
+                    tile_width,
+                ) {
+                    picked_source = Some(source.clone());
+                }
+            }
+        });
+        ui.add_space(SCREEN_SOURCE_TILE_GAP);
+    }
+
+    picked_source
+}
+
+fn screen_source_action_button_style(ui: &egui::Ui, button_width: f32) -> (&'static str, f32) {
+    let max_text_width = (button_width - 20.0).max(1.0);
+    for (label, font_size) in [
+        (SCREEN_SOURCE_ACTION_BUTTON_LABEL, 15.0),
+        (SCREEN_SOURCE_ACTION_BUTTON_LABEL_SHORT, 14.0),
+        (SCREEN_SOURCE_ACTION_BUTTON_LABEL_COMPACT, 13.0),
+        (SCREEN_SOURCE_ACTION_BUTTON_LABEL_MINIMAL, 12.0),
+    ] {
+        let galley = ui.painter().layout(
+            label.to_owned(),
+            egui::FontId::proportional(font_size),
+            egui::Color32::WHITE,
+            f32::INFINITY,
+        );
+        if galley.size().x <= max_text_width {
+            return (label, font_size);
+        }
+    }
+
+    (SCREEN_SOURCE_ACTION_BUTTON_LABEL_MINIMAL, 12.0)
+}
+
+fn show_screen_source_tile(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    source: &ScreenSourceEntry,
+    preview_textures: &HashMap<StreamSourceTarget, egui::TextureHandle>,
+    selected_source: &Option<ScreenSourceEntry>,
+    previews_loading: bool,
+    tile_width: f32,
+) -> bool {
+    let tile_height = tile_width / SCREEN_SOURCE_TILE_ASPECT;
+    let tile_size = egui::vec2(tile_width, tile_height + SCREEN_SOURCE_TILE_LABEL_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(tile_size, egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let preview_rect = egui::Rect::from_min_size(rect.min, egui::vec2(tile_width, tile_height));
+    let label_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), preview_rect.bottom() + 6.0),
+        rect.max,
+    );
+    let rounding = egui::Rounding::same(12.0);
+    let is_selected = selected_source
+        .as_ref()
+        .map(|entry| entry.target == source.target)
+        .unwrap_or(false);
+    let hovered = ui
+        .ctx()
+        .pointer_hover_pos()
+        .map(|pos| rect.contains(pos))
+        .unwrap_or(false);
+
+    ui.painter()
+        .rect_filled(preview_rect, rounding, theme.bg_tertiary);
+
+    if let Some(texture) = preview_textures.get(&source.target) {
+        let tex_size = texture.size_vec2();
+        if tex_size.x > 0.0 && tex_size.y > 0.0 {
+            let scale = (preview_rect.width() / tex_size.x).min(preview_rect.height() / tex_size.y);
+            let image_size = tex_size * scale;
+            let image_rect = egui::Rect::from_center_size(preview_rect.center(), image_size);
+            ui.put(
+                image_rect,
+                egui::Image::new(texture).fit_to_exact_size(image_size),
+            );
+        }
+    } else {
+        let placeholder = if previews_loading {
+            SCREEN_SOURCE_LABEL_LOADING_PREVIEW
+        } else {
+            SCREEN_SOURCE_LABEL_PREVIEW_UNAVAILABLE
+        };
+        ui.painter().text(
+            preview_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            placeholder,
+            egui::FontId::proportional(15.0),
+            theme.text_muted,
+        );
+    }
+
+    let stroke = if is_selected {
+        egui::Stroke::new(2.0, theme.accent)
+    } else if hovered {
+        egui::Stroke::new(1.0, theme.border_strong)
+    } else {
+        egui::Stroke::new(1.0, theme.border)
+    };
+    ui.painter().rect_stroke(preview_rect, rounding, stroke);
+
+    if hovered {
+        ui.painter().rect_filled(
+            preview_rect,
+            rounding,
+            egui::Color32::from_black_alpha(92),
+        );
+        let button_width = (preview_rect.width() - 24.0)
+            .min(220.0)
+            .max(48.0)
+            .min((preview_rect.width() - 8.0).max(1.0));
+        let button_height = if button_width < 112.0 { 34.0 } else { 38.0 };
+        let button_size = egui::vec2(button_width, button_height);
+        let button_rect = egui::Rect::from_center_size(preview_rect.center(), button_size);
+        ui.painter()
+            .rect_filled(button_rect, egui::Rounding::same(10.0), theme.accent);
+        if button_rect.width() >= 40.0 {
+            let (button_label, button_font_size) =
+                screen_source_action_button_style(ui, button_rect.width());
+            ui.painter().text(
+                button_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                button_label,
+                egui::FontId::proportional(button_font_size),
+                theme.text_primary,
+            );
+        }
+    }
+
+    ui.allocate_ui_at_rect(label_rect, |ui| {
+        ui.with_layout(
+            egui::Layout::top_down_justified(egui::Align::Center),
+            |ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&source.label)
+                            .strong()
+                            .color(theme.text_primary),
+                    )
+                    .wrap(),
+                );
+            },
+        );
+    });
+
+    response.clicked()
 }
 
 fn start_screen_share_from_source(
@@ -2871,7 +3368,7 @@ pub(crate) fn main_screen(
             stop_voice_engine(engine_tx, engine_done);
             reset_voice_connection_metrics(state);
             state.main.voice = VoiceState::default();
-            state.main.voice.input_sensitivity = state.settings.input_sensitivity;
+            apply_persisted_media_preferences(state);
             state.main.voice_video_textures.clear();
             state.main.voice_render_fps.clear();
             state.main.voice_receiver_telemetry = None;
@@ -3318,20 +3815,7 @@ pub(crate) fn main_screen(
         let mut should_reload_bans = false;
         let can_manage_server = selected_server_owner_id(state) == state.user_id;
 
-        egui::Area::new(egui::Id::new("server_settings_backdrop"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(settings_overlay_rect.min)
-            .show(ctx, |ui| {
-                let (rect, _response) = ui.allocate_exact_size(
-                    settings_overlay_rect.size(),
-                    egui::Sense::click_and_drag(),
-                );
-                ui.painter().rect_filled(
-                    rect,
-                    egui::Rounding::ZERO,
-                    egui::Color32::from_black_alpha(170),
-                );
-            });
+        show_modal_backdrop(ctx, "server_settings_backdrop", settings_overlay_rect);
 
         egui::Window::new("Настройки сервера")
             .order(egui::Order::Foreground)
@@ -3574,20 +4058,7 @@ pub(crate) fn main_screen(
         let mut new_input_vol: Option<f32> = None;
         let mut new_input_sensitivity: Option<f32> = None;
         let mut new_output_vol: Option<f32> = None;
-        egui::Area::new(egui::Id::new("settings_backdrop"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(settings_overlay_rect.min)
-            .show(ctx, |ui| {
-                let (rect, _response) = ui.allocate_exact_size(
-                    settings_overlay_rect.size(),
-                    egui::Sense::click_and_drag(),
-                );
-                ui.painter().rect_filled(
-                    rect,
-                    egui::Rounding::ZERO,
-                    egui::Color32::from_black_alpha(170),
-                );
-            });
+        show_modal_backdrop(ctx, "settings_backdrop", settings_overlay_rect);
         egui::Window::new("Настройки")
             .order(egui::Order::Foreground)
             .open(&mut settings_open)
@@ -3729,6 +4200,9 @@ pub(crate) fn main_screen(
                     .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                     .show_value(true);
                 if ui.add(slider_in).changed() {
+                    iv = normalize_input_volume(iv);
+                    state.settings.input_volume = iv;
+                    state.settings.save();
                     new_input_vol = Some(iv);
                 }
                 ui.add_space(4.0);
@@ -3758,6 +4232,9 @@ pub(crate) fn main_screen(
                     .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                     .show_value(true);
                 if ui.add(slider_out).changed() {
+                    ov = normalize_output_volume(ov);
+                    state.settings.output_volume = ov;
+                    state.settings.save();
                     new_output_vol = Some(ov);
                 }
                 ui.add_space(6.0);
@@ -4580,6 +5057,8 @@ pub(crate) fn main_screen(
                 }
                 BottomPanelAction::SetScreenPreset(preset) => {
                     state.main.screen_preset = preset;
+                    state.settings.screen_preset = preset;
+                    state.settings.save();
                     ctx.request_repaint();
                 }
                 BottomPanelAction::LeaveVoice => {
@@ -5442,81 +5921,132 @@ pub(crate) fn main_screen(
 
     // Screen source picker dialog (before starting stream).
     if state.main.show_screen_source_picker {
+        poll_screen_source_preview_updates(ctx, state);
+        let preview_refresh_needed = state.main.screen_source_preview_requested_tab
+            != Some(state.main.screen_source_tab)
+            || state
+                .main
+                .screen_source_preview_last_refresh
+                .map(|last| last.elapsed() >= SCREEN_SOURCE_PREVIEW_REFRESH_INTERVAL)
+                .unwrap_or(true);
+        if preview_refresh_needed && !state.main.screen_source_preview_inflight {
+            queue_screen_source_preview_refresh(ctx, state);
+        }
+        ctx.request_repaint_after(Duration::from_millis(250));
         let mut close_picker = false;
         let mut picked_source: Option<ScreenSourceEntry> = None;
+        let mut tab_changed = false;
         let start_after_pick = state.main.start_stream_after_source_pick;
         let screen_sources = state.main.screen_sources.clone();
         let window_sources = state.main.window_sources.clone();
         let selected_source = state.main.selected_stream_source.clone();
-        egui::Window::new("Выбор источника трансляции")
+        let preview_textures = state.main.screen_source_preview_textures.clone();
+        let picker_overlay_rect = ctx.screen_rect();
+        let picker_bottom_reserved = if server_selected {
+            left_user_panel_height
+        } else {
+            0.0
+        };
+        let picker_outer_rect = inset_modal_rect(
+            picker_overlay_rect,
+            SCREEN_SOURCE_PICKER_HORIZONTAL_MARGIN,
+            SCREEN_SOURCE_PICKER_VERTICAL_MARGIN,
+            picker_bottom_reserved,
+        );
+        let picker_window_frame = egui::Frame::window(ctx.style().as_ref())
+            .fill(theme.bg_tertiary)
+            .stroke(egui::Stroke::new(1.0, theme.border_strong))
+            .shadow(ctx.style().visuals.window_shadow);
+        let picker_inner_size =
+            window_inner_size_for_outer(ctx, picker_outer_rect.size(), &picker_window_frame);
+
+        show_modal_backdrop(ctx, "screen_source_picker_backdrop", picker_overlay_rect);
+
+        egui::Window::new(SCREEN_SOURCE_PICKER_TITLE)
             .collapsible(false)
-            .resizable(true)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .resizable(false)
+            .frame(picker_window_frame)
+            .fixed_pos(picker_outer_rect.min)
+            .fixed_size(picker_inner_size)
+            .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                ui.heading("Выбор источника трансляции");
+                ui.heading(SCREEN_SOURCE_PICKER_TITLE);
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui
                         .selectable_label(
                             state.main.screen_source_tab == ScreenSourceTab::Applications,
-                            "Приложения",
+                            SCREEN_SOURCE_TAB_APPLICATIONS,
                         )
                         .clicked()
                     {
                         state.main.screen_source_tab = ScreenSourceTab::Applications;
+                        tab_changed = true;
                     }
                     if ui
                         .selectable_label(
                             state.main.screen_source_tab == ScreenSourceTab::EntireScreen,
-                            "Весь экран",
+                            SCREEN_SOURCE_TAB_ENTIRE_SCREEN,
                         )
                         .clicked()
                     {
                         state.main.screen_source_tab = ScreenSourceTab::EntireScreen;
+                        tab_changed = true;
                     }
                 });
+                if tab_changed {
+                    invalidate_screen_source_previews(state);
+                }
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
+                let footer_reserved_height = if start_after_pick { 44.0 } else { 84.0 };
+                let grid_max_height = (ui.available_height() - footer_reserved_height).max(120.0);
                 match state.main.screen_source_tab {
                     ScreenSourceTab::Applications => {
                         if window_sources.is_empty() {
-                            ui.label("Подходящие окна не найдены.");
+                            ui.label(SCREEN_SOURCE_LABEL_NO_WINDOWS);
                         } else {
                             egui::ScrollArea::vertical()
-                                .max_height(260.0)
+                                .max_height(grid_max_height)
                                 .show(ui, |ui| {
-                                    for source in &window_sources {
-                                        let is_selected = selected_source
-                                            .as_ref()
-                                            .map(|entry| entry.target == source.target)
-                                            .unwrap_or(false);
-                                        if ui.selectable_label(is_selected, &source.label).clicked() {
-                                            picked_source = Some(source.clone());
-                                            close_picker = true;
-                                        }
-                                        ui.add_space(4.0);
+                                    let previews_loading = state.main.screen_source_preview_inflight
+                                        && state.main.screen_source_preview_requested_tab
+                                            == Some(ScreenSourceTab::Applications);
+                                    if let Some(source) = show_screen_source_tile_grid(
+                                        ui,
+                                        theme,
+                                        &window_sources,
+                                        &preview_textures,
+                                        &selected_source,
+                                        previews_loading,
+                                    ) {
+                                        picked_source = Some(source);
+                                        close_picker = true;
                                     }
                                 });
                         }
                     }
                     ScreenSourceTab::EntireScreen => {
                         if screen_sources.is_empty() {
-                            ui.label("Экраны не обнаружены.");
+                            ui.label(SCREEN_SOURCE_LABEL_NO_SCREENS);
                         } else {
                             egui::ScrollArea::vertical()
-                                .max_height(260.0)
+                                .max_height(grid_max_height)
                                 .show(ui, |ui| {
-                                    for source in &screen_sources {
-                                        let is_selected = selected_source
-                                            .as_ref()
-                                            .map(|entry| entry.target == source.target)
-                                            .unwrap_or(false);
-                                        if ui.selectable_label(is_selected, &source.label).clicked() {
-                                            picked_source = Some(source.clone());
-                                            close_picker = true;
-                                        }
-                                        ui.add_space(4.0);
+                                    let previews_loading = state.main.screen_source_preview_inflight
+                                        && state.main.screen_source_preview_requested_tab
+                                            == Some(ScreenSourceTab::EntireScreen);
+                                    if let Some(source) = show_screen_source_tile_grid(
+                                        ui,
+                                        theme,
+                                        &screen_sources,
+                                        &preview_textures,
+                                        &selected_source,
+                                        previews_loading,
+                                    ) {
+                                        picked_source = Some(source);
+                                        close_picker = true;
                                     }
                                 });
                         }
@@ -5524,10 +6054,10 @@ pub(crate) fn main_screen(
                 }
                 ui.add_space(8.0);
                 if !start_after_pick {
-                    ui.label("Выбор источника не запускает стрим. Для запуска используйте кнопку \"Начать трансляцию\".");
+                    ui.label(SCREEN_SOURCE_PICKER_HELP_TEXT);
                     ui.add_space(8.0);
                 }
-                if ui.button("Отмена").clicked() {
+                if ui.button(SCREEN_SOURCE_CANCEL_LABEL).clicked() {
                     close_picker = true;
                 }
             });
@@ -5548,6 +6078,10 @@ pub(crate) fn main_screen(
         if close_picker {
             state.main.show_screen_source_picker = false;
             state.main.start_stream_after_source_pick = false;
+            state.main.screen_source_preview_rx = None;
+            state.main.screen_source_preview_inflight = false;
+        } else if tab_changed {
+            queue_screen_source_preview_refresh(ctx, state);
         }
     }
 

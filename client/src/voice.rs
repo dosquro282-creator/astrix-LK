@@ -59,7 +59,7 @@ pub struct StreamWindowInfo {
 // ─── Screen share quality presets ─────────────────────────────────────────────
 
 /// Quality preset for screen sharing. Encodes resolution and framerate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ScreenPreset {
     P720F30,
     P720F60,
