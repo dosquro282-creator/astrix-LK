@@ -346,6 +346,9 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                         ui.horizontal_top(|ui| {
                             let button_offset =
                                 ((input_height - COMPOSER_BUTTON_SIZE) * 0.5).max(0.0);
+                            let composer_gap = ui.spacing().item_spacing.x;
+                            let right_reserved_width =
+                                COMPOSER_BUTTON_SIZE * 3.0 + composer_gap * 3.0;
                             button_with_vertical_offset(ui, button_offset, |ui| {
                                 if composer_button_sized(ui, theme, "+", "Attach file", 21.0)
                                     .clicked()
@@ -353,9 +356,13 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChatPanelParams<'_>)
                                     (*on_action)(ChatPanelAction::AttachRequest);
                                 }
                             });
-
-                            let side_buttons_width = COMPOSER_BUTTON_SIZE * 3.0 + 18.0;
-                            let input_w = (ui.available_width() - side_buttons_width).max(120.0);
+                            let left_extra_space =
+                                (right_reserved_width - COMPOSER_BUTTON_SIZE - composer_gap)
+                                    .max(0.0);
+                            if left_extra_space > 0.0 {
+                                ui.add_space(left_extra_space);
+                            }
+                            let input_w = (ui.available_width() - right_reserved_width).max(120.0);
                             let _composer_placeholder = format!(
                                 "РќР°РїРёСЃР°С‚СЊ РІ #{}",
                                 channel_name.trim_start_matches("# ")

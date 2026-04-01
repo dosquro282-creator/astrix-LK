@@ -35,8 +35,8 @@ type ClientMsg struct {
 
 // BroadcastReq is an internal request to the Hub's run loop.
 type BroadcastReq struct {
-	ServerID      int64       // if > 0 && ChannelID == 0 → broadcast to all on server
-	ChannelID     int64       // if > 0 → broadcast to clients viewing this channel
+	ServerID      int64 // if > 0 && ChannelID == 0 → broadcast to all on server
+	ChannelID     int64 // if > 0 → broadcast to clients viewing this channel
 	EventType     string
 	Payload       interface{}
 	ExcludeUserID int64 // do not send to this user (0 = send to all)
@@ -145,16 +145,46 @@ func (h *Hub) ViewersOfChannel(channelID int64) []int64 {
 	return ids
 }
 
-// OnlineUsersForServer returns unique user_ids of connected clients on a server.
-func (h *Hub) OnlineUsersForServer(serverID int64) []int64 {
+func (h *Hub) onlineUserSetSnapshot() map[int64]struct{} {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	seen := make(map[int64]bool)
-	var ids []int64
+
+	online := make(map[int64]struct{})
 	for c := range h.clients {
-		if c.serverID == serverID && !seen[c.userID] {
-			seen[c.userID] = true
-			ids = append(ids, c.userID)
+		online[c.userID] = struct{}{}
+	}
+	return online
+}
+
+func (h *Hub) isUserOnlineAnywhereLocked(userID int64) bool {
+	for c := range h.clients {
+		if c.userID == userID {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Hub) broadcastPresenceToUserServers(ctx context.Context, userID int64, username string, online bool) {
+	h.BroadcastToUserServers(ctx, userID, "presence.update", map[string]interface{}{
+		"user_id":  userID,
+		"username": username,
+		"online":   online,
+	})
+}
+
+// OnlineUsersForServer returns user_ids of members of the server who are
+// currently connected anywhere in the app.
+func (h *Hub) OnlineUsersForServer(serverID int64) []int64 {
+	online := h.onlineUserSetSnapshot()
+	members, err := h.store.ListMembersForServer(context.Background(), serverID)
+	if err != nil {
+		return nil
+	}
+	var ids []int64
+	for _, member := range members {
+		if _, ok := online[member.UserID]; ok {
+			ids = append(ids, member.UserID)
 		}
 	}
 	return ids
@@ -165,19 +195,11 @@ func (h *Hub) Run() {
 		select {
 		case c := <-h.register:
 			h.mu.Lock()
+			wasOnline := h.isUserOnlineAnywhereLocked(c.userID)
 			h.clients[c] = true
 			h.mu.Unlock()
-			// Announce presence to others
-			p, _ := json.Marshal(map[string]interface{}{
-				"user_id":  c.userID,
-				"username": c.username,
-				"online":   true,
-			})
-			h.broadcastCh <- BroadcastReq{
-				ServerID:      c.serverID,
-				EventType:     "presence.update",
-				Payload:       json.RawMessage(p),
-				ExcludeUserID: c.userID,
+			if !wasOnline {
+				go h.broadcastPresenceToUserServers(context.Background(), c.userID, c.username, true)
 			}
 			// Send current online list to the newly connected client
 			go func(cl *Client) {
@@ -196,24 +218,19 @@ func (h *Hub) Run() {
 
 		case c := <-h.unregister:
 			h.mu.Lock()
+			stillOnline := false
 			if _, ok := h.clients[c]; ok {
 				delete(h.clients, c)
 				close(c.send)
+				stillOnline = h.isUserOnlineAnywhereLocked(c.userID)
 			}
 			h.mu.Unlock()
 			// Notify voice layer so it can clean up the participant's room.
 			if h.OnDisconnect != nil {
 				go h.OnDisconnect(c.serverID, c.userID)
 			}
-			p, _ := json.Marshal(map[string]interface{}{
-				"user_id":  c.userID,
-				"username": c.username,
-				"online":   false,
-			})
-			h.broadcastCh <- BroadcastReq{
-				ServerID:  c.serverID,
-				EventType: "presence.update",
-				Payload:   json.RawMessage(p),
+			if !stillOnline {
+				go h.broadcastPresenceToUserServers(context.Background(), c.userID, c.username, false)
 			}
 
 		case req := <-h.broadcastCh:

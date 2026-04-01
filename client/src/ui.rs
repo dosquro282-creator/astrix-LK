@@ -1893,12 +1893,7 @@ fn kick_server_member(
     }
 }
 
-fn ban_server_member(
-    ctx: &egui::Context,
-    state: &mut State,
-    api: &ApiClient,
-    target_user_id: i64,
-) {
+fn ban_server_member(ctx: &egui::Context, state: &mut State, api: &ApiClient, target_user_id: i64) {
     if !can_manage_server_member(state, target_user_id) {
         return;
     }
@@ -2816,6 +2811,13 @@ pub(crate) fn main_screen(
     let settings_content_width = (settings_window_size.x - settings_menu_width - 40.0).max(180.0);
     let settings_group_width = (settings_content_width - 20.0).max(160.0);
     let settings_input_width = (settings_group_width - 32.0).max(160.0);
+    let server_settings_window_size = egui::vec2(
+        settings_window_size.x.min(760.0).max(560.0),
+        settings_window_size.y.min(460.0).max(360.0),
+    );
+    let server_settings_window_rect =
+        egui::Rect::from_center_size(settings_overlay_rect.center(), server_settings_window_size);
+    let server_settings_scroll_max_height = (server_settings_window_size.y - 150.0).max(120.0);
 
     // ── Dialog: voice server switch confirmation ──────────────────────────
     if let Some((target_ch, target_srv)) = state.main.voice_switch_confirm {
@@ -3311,22 +3313,42 @@ pub(crate) fn main_screen(
 
     if state.main.show_server_settings_dialog {
         let mut should_close = false;
+        let mut server_settings_open = true;
         let mut do_save_name = false;
         let mut should_reload_bans = false;
         let can_manage_server = selected_server_owner_id(state) == state.user_id;
 
+        egui::Area::new(egui::Id::new("server_settings_backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(settings_overlay_rect.min)
+            .show(ctx, |ui| {
+                let (rect, _response) = ui.allocate_exact_size(
+                    settings_overlay_rect.size(),
+                    egui::Sense::click_and_drag(),
+                );
+                ui.painter().rect_filled(
+                    rect,
+                    egui::Rounding::ZERO,
+                    egui::Color32::from_black_alpha(170),
+                );
+            });
+
         egui::Window::new("Настройки сервера")
+            .order(egui::Order::Foreground)
+            .open(&mut server_settings_open)
             .collapsible(false)
             .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .fixed_size(egui::vec2(760.0, 460.0))
+            .vscroll(true)
+            .fixed_pos(server_settings_window_rect.min)
+            .fixed_size(server_settings_window_size)
             .show(ctx, |ui| {
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
                         ui.set_width(170.0);
                         if ui
                             .selectable_label(
-                                state.main.server_settings_section == ServerSettingsSection::General,
+                                state.main.server_settings_section
+                                    == ServerSettingsSection::General,
                                 "Основные",
                             )
                             .clicked()
@@ -3335,13 +3357,16 @@ pub(crate) fn main_screen(
                         }
                         if ui
                             .selectable_label(
-                                state.main.server_settings_section == ServerSettingsSection::BanList,
+                                state.main.server_settings_section
+                                    == ServerSettingsSection::BanList,
                                 "Список банов",
                             )
                             .clicked()
                         {
                             state.main.server_settings_section = ServerSettingsSection::BanList;
-                            if matches!(state.main.server_bans_load, LoadState::Idle) {
+                            if can_manage_server
+                                && matches!(state.main.server_bans_load, LoadState::Idle)
+                            {
                                 should_reload_bans = true;
                             }
                         }
@@ -3356,8 +3381,10 @@ pub(crate) fn main_screen(
                             ui.add_space(8.0);
                             ui.label("Название сервера");
                             ui.add(
-                                egui::TextEdit::singleline(&mut state.main.server_settings_name_input)
-                                    .desired_width(340.0),
+                                egui::TextEdit::singleline(
+                                    &mut state.main.server_settings_name_input,
+                                )
+                                .desired_width(340.0),
                             );
                             ui.add_space(10.0);
                             if ui
@@ -3370,70 +3397,92 @@ pub(crate) fn main_screen(
                         ServerSettingsSection::BanList => {
                             ui.heading("Список банов");
                             ui.add_space(8.0);
-                            match &state.main.server_bans_load {
-                                LoadState::Loading => {
-                                    ui.label("Загружаем список банов...");
-                                }
-                                LoadState::Error(error) => {
-                                    ui.label(error);
-                                    if ui.button("Повторить").clicked() {
-                                        should_reload_bans = true;
+                            if !can_manage_server {
+                                ui.label(
+                                    "Только владелец сервера может просматривать список банов.",
+                                );
+                            } else {
+                                match &state.main.server_bans_load {
+                                    LoadState::Loading => {
+                                        ui.label("Загружаем список банов...");
                                     }
-                                }
-                                _ => {
-                                    let bans_snapshot = state.main.server_bans.clone();
-                                    egui::ScrollArea::vertical()
-                                        .max_height(320.0)
-                                        .show(ui, |ui| {
-                                            for banned in &bans_snapshot {
-                                                let label = if banned.display_name.trim().is_empty() {
-                                                    banned.username.clone()
-                                                } else {
-                                                    format!(
-                                                        "{} ({})",
-                                                        banned.display_name, banned.username
-                                                    )
-                                                };
-                                                let response = ui.selectable_label(false, label);
-                                                if can_manage_server {
-                                                    response.context_menu(|ui| {
-                                                        if ui
-                                                            .add(
-                                                                egui::Button::new("Разбанить")
-                                                                    .fill(theme.success)
-                                                                    .stroke(egui::Stroke::NONE),
-                                                            )
-                                                            .clicked()
+                                    LoadState::Error(error) => {
+                                        ui.label(error);
+                                        if ui.button("Повторить").clicked() {
+                                            should_reload_bans = true;
+                                        }
+                                    }
+                                    _ => {
+                                        let bans_snapshot = state.main.server_bans.clone();
+                                        if bans_snapshot.is_empty() {
+                                            ui.label("Забаненных пользователей пока нет.");
+                                        } else {
+                                            egui::ScrollArea::vertical()
+                                                .max_height(server_settings_scroll_max_height)
+                                                .show(ui, |ui| {
+                                                    for banned in &bans_snapshot {
+                                                        let label = if banned
+                                                            .display_name
+                                                            .trim()
+                                                            .is_empty()
                                                         {
-                                                            if let (
-                                                                Some(server_id),
-                                                                Some(ref token),
-                                                            ) = (
-                                                                state.main.selected_server,
-                                                                &state.access_token,
-                                                            ) {
-                                                                let token = token.clone();
-                                                                if block_on(api.unban_member(
-                                                                    &token,
-                                                                    server_id,
-                                                                    banned.user_id,
-                                                                ))
-                                                                .is_ok()
+                                                            banned.username.clone()
+                                                        } else {
+                                                            format!(
+                                                                "{} ({})",
+                                                                banned.display_name,
+                                                                banned.username
+                                                            )
+                                                        };
+                                                        let response =
+                                                            ui.selectable_label(false, label);
+                                                        if can_manage_server {
+                                                            response.context_menu(|ui| {
+                                                                if ui
+                                                                    .add(
+                                                                        egui::Button::new(
+                                                                            "Разбанить",
+                                                                        )
+                                                                        .fill(theme.success)
+                                                                        .stroke(egui::Stroke::NONE),
+                                                                    )
+                                                                    .clicked()
                                                                 {
-                                                                    state.main.server_bans.retain(
-                                                                        |member| {
-                                                                            member.user_id
-                                                                                != banned.user_id
-                                                                        },
-                                                                    );
+                                                                    if let (
+                                                                        Some(server_id),
+                                                                        Some(ref token),
+                                                                    ) = (
+                                                                        state.main.selected_server,
+                                                                        &state.access_token,
+                                                                    ) {
+                                                                        let token = token.clone();
+                                                                        if block_on(
+                                                                            api.unban_member(
+                                                                                &token,
+                                                                                server_id,
+                                                                                banned.user_id,
+                                                                            ),
+                                                                        )
+                                                                        .is_ok()
+                                                                        {
+                                                                            state
+                                                                                .main
+                                                                                .server_bans
+                                                                                .retain(|member| {
+                                                                                    member.user_id
+                                                                                        != banned
+                                                                                            .user_id
+                                                                                });
+                                                                        }
+                                                                    }
+                                                                    ui.close_menu();
                                                                 }
-                                                            }
-                                                            ui.close_menu();
+                                                            });
                                                         }
-                                                    });
-                                                }
-                                            }
-                                        });
+                                                    }
+                                                });
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3455,8 +3504,16 @@ pub(crate) fn main_screen(
                 });
             });
 
+        if !server_settings_open {
+            should_close = true;
+        }
+
         if should_reload_bans {
-            if let (Some(server_id), Some(ref token)) = (state.main.selected_server, &state.access_token)
+            if !can_manage_server {
+                state.main.server_bans.clear();
+                state.main.server_bans_load = LoadState::Idle;
+            } else if let (Some(server_id), Some(ref token)) =
+                (state.main.selected_server, &state.access_token)
             {
                 state.main.server_bans_load = LoadState::Loading;
                 let token = token.clone();
@@ -5990,7 +6047,14 @@ fn show_voice_participant_tile(
 
     if can_open_context_menu {
         response.context_menu(|ui| {
-            show_voice_participant_context_menu(ui, theme, state, api, engine_tx, participant.user_id);
+            show_voice_participant_context_menu(
+                ui,
+                theme,
+                state,
+                api,
+                engine_tx,
+                participant.user_id,
+            );
         });
     }
 }

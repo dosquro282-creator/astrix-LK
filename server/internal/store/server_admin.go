@@ -13,9 +13,9 @@ var (
 )
 
 type ServerBanRow struct {
-	UserID      int64
-	Username    string
-	DisplayName string
+	UserID      int64  `json:"user_id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
 }
 
 func (s *Store) GetServer(ctx context.Context, serverID int64) (ServerRow, error) {
