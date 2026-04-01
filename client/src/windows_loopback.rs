@@ -47,7 +47,7 @@ const SAMPLE_RATE: u32 = 48_000;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 const SAMPLES_PER_10MS: usize = 480;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-const PROCESS_LOOPBACK_CAPTURE_SAMPLE_RATE: u32 = 44_100;
+const PROCESS_LOOPBACK_CAPTURE_SAMPLE_RATE: u32 = SAMPLE_RATE;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 const PROCESS_LOOPBACK_CAPTURE_CHANNELS: u16 = 2;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]

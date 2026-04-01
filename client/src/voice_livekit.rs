@@ -70,10 +70,12 @@ const STREAM_PREVIEW_MAX_DIM: u32 = 640;
 const STREAM_PREVIEW_JPEG_QUALITY: u8 = 55;
 const LOCAL_AUDIO_QUEUE_MS: u32 = 40;
 const SCREEN_AUDIO_QUEUE_MS: u32 = 500;
+const REMOTE_MIX_QUEUE_MAX_FRAMES: usize = 6;
 const SCREEN_AUDIO_SIGNAL_THRESHOLD: i16 = 32;
 const MIC_RING_CAPTURE_MAX_FRAMES: usize = 12;
 const MIC_RING_TRIM_TRIGGER_FRAMES: usize = 6;
 const MIC_RING_TARGET_FRAMES: usize = 3;
+const SPEAKER_UNDERRUN_FADE_SAMPLES: usize = 96;
 const LOCAL_SPEAKING_RMS_THRESHOLD: f32 = 0.0035;
 const LOCAL_SPEAKING_PEAK_THRESHOLD: f32 = 0.0120;
 const LOCAL_SPEAKING_HOLD_FRAMES: usize = 18;
@@ -328,6 +330,26 @@ struct MixerRoute {
 enum MixerFrameMsg {
     Frame(MixerRoute, Vec<i16>),
     Remove(MixerRoute),
+}
+
+#[derive(Default)]
+struct MixerRouteState {
+    pending_samples: VecDeque<i16>,
+    ready_chunks: VecDeque<Vec<i16>>,
+}
+
+fn enqueue_mixer_samples(state: &mut MixerRouteState, samples: Vec<i16>) {
+    if samples.is_empty() {
+        return;
+    }
+    state.pending_samples.extend(samples);
+    while state.pending_samples.len() >= SAMPLES_PER_10MS {
+        let chunk: Vec<i16> = state.pending_samples.drain(..SAMPLES_PER_10MS).collect();
+        if state.ready_chunks.len() >= REMOTE_MIX_QUEUE_MAX_FRAMES {
+            state.ready_chunks.pop_front();
+        }
+        state.ready_chunks.push_back(chunk);
+    }
 }
 
 fn track_source_label(source: TrackSource) -> &'static str {
@@ -2035,19 +2057,19 @@ async fn run_remote_audio_mixer(
 ) {
     let output_10ms_len = (output_sample_rate / 100).max(1) as usize;
     let need_resample = output_10ms_len != SAMPLES_PER_10MS;
-    let mut latest: HashMap<MixerRoute, Vec<i16>> = HashMap::new();
+    let mut routes: HashMap<MixerRoute, MixerRouteState> = HashMap::new();
     loop {
         tokio::select! {
             msg = rx.recv() => {
                 match msg {
                     None => break,
                     Some(MixerFrameMsg::Frame(route, samples)) => {
-                        if samples.len() >= SAMPLES_PER_10MS {
-                            latest.insert(route, samples);
+                        if !samples.is_empty() {
+                            enqueue_mixer_samples(routes.entry(route).or_default(), samples);
                         }
                     }
                     Some(MixerFrameMsg::Remove(route)) => {
-                        latest.remove(&route);
+                        routes.remove(&route);
                     }
                 }
             }
@@ -2056,23 +2078,38 @@ async fn run_remote_audio_mixer(
                 let stream_map = stream_volumes.lock().clone();
                 let out_vol = *output_volume.lock();
                 let muted = output_muted.load(Ordering::Relaxed);
-                let mixed: Vec<i16> = if muted || latest.is_empty() {
+                let mut had_audio = false;
+                let mixed: Vec<i16> = if routes.is_empty() {
                     vec![0i16; SAMPLES_PER_10MS]
                 } else {
                     let mut out = vec![0i32; SAMPLES_PER_10MS];
-                    for (route, samples) in &latest {
+                    for (route, state) in &mut routes {
+                        let Some(samples) = state.ready_chunks.pop_front() else {
+                            continue;
+                        };
+                        had_audio = true;
+                        if muted {
+                            continue;
+                        }
                         let gain = if route.stream {
                             stream_map.get(&route.user_id).copied().unwrap_or(1.0)
                         } else {
                             voice_map.get(&route.user_id).copied().unwrap_or(1.0)
                         } * out_vol;
+                        if gain.abs() <= f32::EPSILON {
+                            continue;
+                        }
                         for (i, &s) in samples.iter().take(SAMPLES_PER_10MS).enumerate() {
                             out[i] += (s as f32 * gain) as i32;
                         }
                     }
-                    out.into_iter()
-                        .map(|s| s.clamp(-32768, 32767) as i16)
-                        .collect()
+                    if !had_audio || muted {
+                        vec![0i16; SAMPLES_PER_10MS]
+                    } else {
+                        out.into_iter()
+                            .map(|s| s.clamp(-32768, 32767) as i16)
+                            .collect()
+                    }
                 };
                 let to_push: Vec<i16> = if need_resample {
                     resample_linear(&mixed, output_10ms_len)
@@ -2110,6 +2147,7 @@ fn run_speaker_output(
     let err_fn = |e| eprintln!("[voice][livekit] speaker error: {}", e);
     let buf = Arc::clone(&output_buffer);
     let mut last_sample = 0.0f32;
+    let mut underrun_fade_remaining = 0usize;
     let stream = device
         .build_output_stream(
             &config,
@@ -2119,13 +2157,22 @@ fn run_speaker_output(
                 for i in 0..frames {
                     let s = if let Some(sample) = guard.pop_front() {
                         last_sample = sample as f32 / 32768.0;
+                        underrun_fade_remaining = 0;
                         last_sample
-                    } else {
-                        last_sample *= 0.85;
-                        if last_sample.abs() < 0.0005 {
+                    } else if underrun_fade_remaining > 0 {
+                        let fade =
+                            underrun_fade_remaining as f32 / SPEAKER_UNDERRUN_FADE_SAMPLES as f32;
+                        let out = last_sample * fade;
+                        underrun_fade_remaining -= 1;
+                        if underrun_fade_remaining == 0 {
                             last_sample = 0.0;
                         }
+                        out
+                    } else if last_sample.abs() >= 0.0005 {
+                        underrun_fade_remaining = SPEAKER_UNDERRUN_FADE_SAMPLES;
                         last_sample
+                    } else {
+                        0.0
                     };
                     for c in 0..channels {
                         data[i * channels + c] = s;
