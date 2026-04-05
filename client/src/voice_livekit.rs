@@ -1264,6 +1264,18 @@ struct DxgiPushTraceStats {
     convert_ctx_wait_us_total: u64,
     convert_submit_us_total: u64,
     convert_copy_us_total: u64,
+    convert_srv_us_total: u64,
+    convert_cb_us_total: u64,
+    convert_bind_us_total: u64,
+    convert_bind_state_us_total: u64,
+    convert_bind_shader_us_total: u64,
+    convert_bind_cb_us_total: u64,
+    convert_bind_sampler_us_total: u64,
+    convert_bind_srv_us_total: u64,
+    convert_bind_uav_us_total: u64,
+    convert_dispatch_us_total: u64,
+    convert_unbind_us_total: u64,
+    convert_query_us_total: u64,
     convert_blt_us_total: u64,
     flush_ok: u64,
     flush_fail: u64,
@@ -1337,13 +1349,25 @@ impl DxgiPushTraceStats {
             mode,
         );
         eprintln!(
-            "[voice][screen][push][timing] convert={}/{} avg={}us ctx_avg={}us gpu_avg={}us copy_avg={}us blt_avg={}us bp_skip={} flush={}/{} avg={}us ctx_avg={}us call_avg={}us ready=imm:{} wait:{} timeout:{} avg={}us submit={}/{} avg={}us map_avg={}us pic_avg={}us collect=some:{} none:{} err:{} frames={:.1} avg={}us encode={}/{} avg={}us send_calls={:.1} avg_send={}us",
+            "[voice][screen][push][timing] convert={}/{} avg={}us ctx_avg={}us gpu_avg={}us copy_avg={}us srv_avg={}us cb_avg={}us bind_avg={}us state_avg={}us shader_avg={}us cb_bind_avg={}us sampler_avg={}us srv_bind_avg={}us uav_bind_avg={}us dispatch_avg={}us unbind_avg={}us query_avg={}us blt_avg={}us bp_skip={} flush={}/{} avg={}us ctx_avg={}us call_avg={}us ready=imm:{} wait:{} timeout:{} avg={}us submit={}/{} avg={}us map_avg={}us pic_avg={}us collect=some:{} none:{} err:{} frames={:.1} avg={}us encode={}/{} avg={}us send_calls={:.1} avg_send={}us",
             self.convert_ok,
             self.convert_fail,
             Self::avg_us(self.convert_us_total, self.convert_ok),
             Self::avg_us(self.convert_ctx_wait_us_total, self.convert_ok),
             Self::avg_us(self.convert_submit_us_total, self.convert_ok),
             Self::avg_us(self.convert_copy_us_total, self.convert_ok),
+            Self::avg_us(self.convert_srv_us_total, self.convert_ok),
+            Self::avg_us(self.convert_cb_us_total, self.convert_ok),
+            Self::avg_us(self.convert_bind_us_total, self.convert_ok),
+            Self::avg_us(self.convert_bind_state_us_total, self.convert_ok),
+            Self::avg_us(self.convert_bind_shader_us_total, self.convert_ok),
+            Self::avg_us(self.convert_bind_cb_us_total, self.convert_ok),
+            Self::avg_us(self.convert_bind_sampler_us_total, self.convert_ok),
+            Self::avg_us(self.convert_bind_srv_us_total, self.convert_ok),
+            Self::avg_us(self.convert_bind_uav_us_total, self.convert_ok),
+            Self::avg_us(self.convert_dispatch_us_total, self.convert_ok),
+            Self::avg_us(self.convert_unbind_us_total, self.convert_ok),
+            Self::avg_us(self.convert_query_us_total, self.convert_ok),
             Self::avg_us(self.convert_blt_us_total, self.convert_ok),
             self.convert_skip_backpressure,
             self.flush_ok,
@@ -3774,6 +3798,18 @@ fn start_screen_capture(
         convert_ctx_wait_us: u64,
         convert_submit_us: u64,
         convert_copy_us: u64,
+        convert_srv_us: u64,
+        convert_cb_us: u64,
+        convert_bind_us: u64,
+        convert_bind_state_us: u64,
+        convert_bind_shader_us: u64,
+        convert_bind_cb_us: u64,
+        convert_bind_sampler_us: u64,
+        convert_bind_srv_us: u64,
+        convert_bind_uav_us: u64,
+        convert_dispatch_us: u64,
+        convert_unbind_us: u64,
+        convert_query_us: u64,
         convert_blt_us: u64,
         flush_us: u64,
         flush_ctx_wait_us: u64,
@@ -3844,6 +3880,18 @@ fn start_screen_capture(
                         convert_ctx_wait_us: convert.ctx_wait_us,
                         convert_submit_us: convert.submit_us,
                         convert_copy_us: convert.copy_us,
+                        convert_srv_us: convert.srv_us,
+                        convert_cb_us: convert.cb_us,
+                        convert_bind_us: convert.bind_us,
+                        convert_bind_state_us: convert.bind_state_us,
+                        convert_bind_shader_us: convert.bind_shader_us,
+                        convert_bind_cb_us: convert.bind_cb_us,
+                        convert_bind_sampler_us: convert.bind_sampler_us,
+                        convert_bind_srv_us: convert.bind_srv_us,
+                        convert_bind_uav_us: convert.bind_uav_us,
+                        convert_dispatch_us: convert.dispatch_us,
+                        convert_unbind_us: convert.unbind_us,
+                        convert_query_us: convert.query_us,
                         convert_blt_us: convert.blt_us,
                         flush_us: flush.ctx_wait_us.saturating_add(flush.call_us),
                         flush_ctx_wait_us: flush.ctx_wait_us,
@@ -5943,6 +5991,54 @@ fn start_screen_capture(
                                                 push_trace_stats
                                                     .convert_copy_us_total
                                                     .saturating_add(frame.convert_copy_us);
+                                            push_trace_stats.convert_srv_us_total =
+                                                push_trace_stats
+                                                    .convert_srv_us_total
+                                                    .saturating_add(frame.convert_srv_us);
+                                            push_trace_stats.convert_cb_us_total =
+                                                push_trace_stats
+                                                    .convert_cb_us_total
+                                                    .saturating_add(frame.convert_cb_us);
+                                            push_trace_stats.convert_bind_us_total =
+                                                push_trace_stats
+                                                    .convert_bind_us_total
+                                                    .saturating_add(frame.convert_bind_us);
+                                            push_trace_stats.convert_bind_state_us_total =
+                                                push_trace_stats
+                                                    .convert_bind_state_us_total
+                                                    .saturating_add(frame.convert_bind_state_us);
+                                            push_trace_stats.convert_bind_shader_us_total =
+                                                push_trace_stats
+                                                    .convert_bind_shader_us_total
+                                                    .saturating_add(frame.convert_bind_shader_us);
+                                            push_trace_stats.convert_bind_cb_us_total =
+                                                push_trace_stats
+                                                    .convert_bind_cb_us_total
+                                                    .saturating_add(frame.convert_bind_cb_us);
+                                            push_trace_stats.convert_bind_sampler_us_total =
+                                                push_trace_stats
+                                                    .convert_bind_sampler_us_total
+                                                    .saturating_add(frame.convert_bind_sampler_us);
+                                            push_trace_stats.convert_bind_srv_us_total =
+                                                push_trace_stats
+                                                    .convert_bind_srv_us_total
+                                                    .saturating_add(frame.convert_bind_srv_us);
+                                            push_trace_stats.convert_bind_uav_us_total =
+                                                push_trace_stats
+                                                    .convert_bind_uav_us_total
+                                                    .saturating_add(frame.convert_bind_uav_us);
+                                            push_trace_stats.convert_dispatch_us_total =
+                                                push_trace_stats
+                                                    .convert_dispatch_us_total
+                                                    .saturating_add(frame.convert_dispatch_us);
+                                            push_trace_stats.convert_unbind_us_total =
+                                                push_trace_stats
+                                                    .convert_unbind_us_total
+                                                    .saturating_add(frame.convert_unbind_us);
+                                            push_trace_stats.convert_query_us_total =
+                                                push_trace_stats
+                                                    .convert_query_us_total
+                                                    .saturating_add(frame.convert_query_us);
                                             push_trace_stats.convert_blt_us_total =
                                                 push_trace_stats
                                                     .convert_blt_us_total
@@ -6005,6 +6101,54 @@ fn start_screen_capture(
                                                     push_trace_stats
                                                         .convert_copy_us_total
                                                         .saturating_add(convert_timing.copy_us);
+                                                push_trace_stats.convert_srv_us_total =
+                                                    push_trace_stats
+                                                        .convert_srv_us_total
+                                                        .saturating_add(convert_timing.srv_us);
+                                                push_trace_stats.convert_cb_us_total =
+                                                    push_trace_stats
+                                                        .convert_cb_us_total
+                                                        .saturating_add(convert_timing.cb_us);
+                                                push_trace_stats.convert_bind_us_total =
+                                                    push_trace_stats
+                                                        .convert_bind_us_total
+                                                        .saturating_add(convert_timing.bind_us);
+                                                push_trace_stats.convert_bind_state_us_total =
+                                                    push_trace_stats
+                                                        .convert_bind_state_us_total
+                                                        .saturating_add(convert_timing.bind_state_us);
+                                                push_trace_stats.convert_bind_shader_us_total =
+                                                    push_trace_stats
+                                                        .convert_bind_shader_us_total
+                                                        .saturating_add(convert_timing.bind_shader_us);
+                                                push_trace_stats.convert_bind_cb_us_total =
+                                                    push_trace_stats
+                                                        .convert_bind_cb_us_total
+                                                        .saturating_add(convert_timing.bind_cb_us);
+                                                push_trace_stats.convert_bind_sampler_us_total =
+                                                    push_trace_stats
+                                                        .convert_bind_sampler_us_total
+                                                        .saturating_add(convert_timing.bind_sampler_us);
+                                                push_trace_stats.convert_bind_srv_us_total =
+                                                    push_trace_stats
+                                                        .convert_bind_srv_us_total
+                                                        .saturating_add(convert_timing.bind_srv_us);
+                                                push_trace_stats.convert_bind_uav_us_total =
+                                                    push_trace_stats
+                                                        .convert_bind_uav_us_total
+                                                        .saturating_add(convert_timing.bind_uav_us);
+                                                push_trace_stats.convert_dispatch_us_total =
+                                                    push_trace_stats
+                                                        .convert_dispatch_us_total
+                                                        .saturating_add(convert_timing.dispatch_us);
+                                                push_trace_stats.convert_unbind_us_total =
+                                                    push_trace_stats
+                                                        .convert_unbind_us_total
+                                                        .saturating_add(convert_timing.unbind_us);
+                                                push_trace_stats.convert_query_us_total =
+                                                    push_trace_stats
+                                                        .convert_query_us_total
+                                                        .saturating_add(convert_timing.query_us);
                                                 push_trace_stats.convert_blt_us_total =
                                                     push_trace_stats
                                                         .convert_blt_us_total
@@ -6153,6 +6297,54 @@ fn start_screen_capture(
                                             push_trace_stats
                                                 .convert_copy_us_total
                                                 .saturating_add(convert_submit_us);
+                                        push_trace_stats.convert_srv_us_total =
+                                            push_trace_stats
+                                                .convert_srv_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_cb_us_total =
+                                            push_trace_stats
+                                                .convert_cb_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_bind_us_total =
+                                            push_trace_stats
+                                                .convert_bind_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_bind_state_us_total =
+                                            push_trace_stats
+                                                .convert_bind_state_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_bind_shader_us_total =
+                                            push_trace_stats
+                                                .convert_bind_shader_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_bind_cb_us_total =
+                                            push_trace_stats
+                                                .convert_bind_cb_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_bind_sampler_us_total =
+                                            push_trace_stats
+                                                .convert_bind_sampler_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_bind_srv_us_total =
+                                            push_trace_stats
+                                                .convert_bind_srv_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_bind_uav_us_total =
+                                            push_trace_stats
+                                                .convert_bind_uav_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_dispatch_us_total =
+                                            push_trace_stats
+                                                .convert_dispatch_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_unbind_us_total =
+                                            push_trace_stats
+                                                .convert_unbind_us_total
+                                                .saturating_add(0);
+                                        push_trace_stats.convert_query_us_total =
+                                            push_trace_stats
+                                                .convert_query_us_total
+                                                .saturating_add(0);
                                         if trace_this_tick {
                                             eprintln!(
                                                 "[voice][screen][push][tick {}] direct RGB copy ok src_slot={} ring_slot={} us={}",
@@ -6191,6 +6383,54 @@ fn start_screen_capture(
                                             push_trace_stats
                                                 .convert_copy_us_total
                                                 .saturating_add(convert_timing.copy_us);
+                                        push_trace_stats.convert_srv_us_total =
+                                            push_trace_stats
+                                                .convert_srv_us_total
+                                                .saturating_add(convert_timing.srv_us);
+                                        push_trace_stats.convert_cb_us_total =
+                                            push_trace_stats
+                                                .convert_cb_us_total
+                                                .saturating_add(convert_timing.cb_us);
+                                        push_trace_stats.convert_bind_us_total =
+                                            push_trace_stats
+                                                .convert_bind_us_total
+                                                .saturating_add(convert_timing.bind_us);
+                                        push_trace_stats.convert_bind_state_us_total =
+                                            push_trace_stats
+                                                .convert_bind_state_us_total
+                                                .saturating_add(convert_timing.bind_state_us);
+                                        push_trace_stats.convert_bind_shader_us_total =
+                                            push_trace_stats
+                                                .convert_bind_shader_us_total
+                                                .saturating_add(convert_timing.bind_shader_us);
+                                        push_trace_stats.convert_bind_cb_us_total =
+                                            push_trace_stats
+                                                .convert_bind_cb_us_total
+                                                .saturating_add(convert_timing.bind_cb_us);
+                                        push_trace_stats.convert_bind_sampler_us_total =
+                                            push_trace_stats
+                                                .convert_bind_sampler_us_total
+                                                .saturating_add(convert_timing.bind_sampler_us);
+                                        push_trace_stats.convert_bind_srv_us_total =
+                                            push_trace_stats
+                                                .convert_bind_srv_us_total
+                                                .saturating_add(convert_timing.bind_srv_us);
+                                        push_trace_stats.convert_bind_uav_us_total =
+                                            push_trace_stats
+                                                .convert_bind_uav_us_total
+                                                .saturating_add(convert_timing.bind_uav_us);
+                                        push_trace_stats.convert_dispatch_us_total =
+                                            push_trace_stats
+                                                .convert_dispatch_us_total
+                                                .saturating_add(convert_timing.dispatch_us);
+                                        push_trace_stats.convert_unbind_us_total =
+                                            push_trace_stats
+                                                .convert_unbind_us_total
+                                                .saturating_add(convert_timing.unbind_us);
+                                        push_trace_stats.convert_query_us_total =
+                                            push_trace_stats
+                                                .convert_query_us_total
+                                                .saturating_add(convert_timing.query_us);
                                         push_trace_stats.convert_blt_us_total =
                                             push_trace_stats
                                                 .convert_blt_us_total
