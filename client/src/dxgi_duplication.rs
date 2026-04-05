@@ -2,11 +2,13 @@
 
 use thiserror::Error;
 use windows::core::Interface;
+use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1,
     IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_INVALID_CALL,
-    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
+    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_MOVE_RECT,
+    DXGI_OUTPUT_DESC,
 };
 use xcap::Monitor;
 
@@ -67,7 +69,10 @@ pub struct DxgiDuplicationCapture {
 pub struct AcquiredDesktopFrame {
     duplication: IDXGIOutputDuplication,
     resource: Option<IDXGIResource>,
+    released: bool,
     pub info: DXGI_OUTDUPL_FRAME_INFO,
+    pub dirty_rects: Vec<RECT>,
+    pub move_rects: Vec<DXGI_OUTDUPL_MOVE_RECT>,
 }
 
 impl AcquiredDesktopFrame {
@@ -78,11 +83,20 @@ impl AcquiredDesktopFrame {
             .ok_or_else(|| windows::core::Error::from(DXGI_ERROR_INVALID_CALL))?;
         resource.cast()
     }
+
+    pub fn release(&mut self) -> Result<(), windows::core::Error> {
+        if !self.released {
+            unsafe { self.duplication.ReleaseFrame()? };
+            self.resource = None;
+            self.released = true;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for AcquiredDesktopFrame {
     fn drop(&mut self) {
-        let _ = unsafe { self.duplication.ReleaseFrame() };
+        let _ = self.release();
     }
 }
 
@@ -124,16 +138,62 @@ impl DxgiDuplicationCapture {
             self.duplication
                 .AcquireNextFrame(timeout_ms, &mut info, &mut resource)
         } {
-            Ok(()) => Ok(Some(AcquiredDesktopFrame {
-                duplication: self.duplication.clone(),
-                resource,
-                info,
-            })),
+            Ok(()) => {
+                let (dirty_rects, move_rects) =
+                    collect_frame_metadata(&self.duplication, &info)?;
+                Ok(Some(AcquiredDesktopFrame {
+                    duplication: self.duplication.clone(),
+                    resource,
+                    released: false,
+                    info,
+                    dirty_rects,
+                    move_rects,
+                }))
+            }
             Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => Ok(None),
             Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => Err(DxgiDuplicationError::AccessLost),
             Err(e) => Err(e.into()),
         }
     }
+}
+
+fn collect_frame_metadata(
+    duplication: &IDXGIOutputDuplication,
+    info: &DXGI_OUTDUPL_FRAME_INFO,
+) -> Result<(Vec<RECT>, Vec<DXGI_OUTDUPL_MOVE_RECT>), windows::core::Error> {
+    let metadata_capacity = info.TotalMetadataBufferSize;
+    if metadata_capacity == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let move_rect_capacity =
+        (metadata_capacity as usize) / std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>();
+    let mut move_rects = vec![DXGI_OUTDUPL_MOVE_RECT::default(); move_rect_capacity];
+    let mut move_rect_bytes = 0u32;
+    unsafe {
+        duplication.GetFrameMoveRects(
+            metadata_capacity,
+            move_rects.as_mut_ptr(),
+            &mut move_rect_bytes,
+        )?;
+    }
+    move_rects.truncate(
+        (move_rect_bytes as usize) / std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>(),
+    );
+
+    let dirty_rect_capacity = (metadata_capacity as usize) / std::mem::size_of::<RECT>();
+    let mut dirty_rects = vec![RECT::default(); dirty_rect_capacity];
+    let mut dirty_rect_bytes = 0u32;
+    unsafe {
+        duplication.GetFrameDirtyRects(
+            metadata_capacity,
+            dirty_rects.as_mut_ptr(),
+            &mut dirty_rect_bytes,
+        )?;
+    }
+    dirty_rects.truncate((dirty_rect_bytes as usize) / std::mem::size_of::<RECT>());
+
+    Ok((dirty_rects, move_rects))
 }
 
 impl OutputCandidate {

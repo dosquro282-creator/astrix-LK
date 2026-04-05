@@ -27,6 +27,8 @@ pub mod d3d11_i420;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod d3d11_nv12;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+pub mod d3d11_shared;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod d3d11_rgba;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod dxgi_duplication;

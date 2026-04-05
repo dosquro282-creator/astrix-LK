@@ -34,6 +34,8 @@ use crate::d3d11_i420::{D3d11RgbaToI420, D3d11RgbaToI420Scaled, GpuConvertTiming
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::d3d11_nv12::{D3d11BgraScale, D3d11BgraToNv12};
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use crate::d3d11_shared::create_shared_keyed_texture_ring;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::d3d11_rgba::{
     decode_gpu_failed, mark_decode_gpu_failed, D3d11I420ToRgba, D3d11Nv12ToRgba,
 };
@@ -41,6 +43,8 @@ use crate::d3d11_rgba::{
 use crate::dxgi_duplication::{DxgiDuplicationCapture, DxgiDuplicationError};
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::encoded_h264::{EncodedBackendKind, EncodedH264Encoder, EncodedH264EncoderError};
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use crate::gpu_device::GpuDevice;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::nvenc_d11::NvencD3d11Error;
 use crate::screen_encoder::box_scale_rgba;
@@ -76,6 +80,8 @@ const SCREEN_RECOVERY_POLL_MS_ENV: &str = "ASTRIX_SCREEN_RECOVERY_POLL_MS";
 const LOCAL_AUDIO_QUEUE_MS: u32 = 40;
 const SCREEN_AUDIO_QUEUE_MS: u32 = 500;
 const SCREEN_WEBRTC_MOTION_MODE_ENV: &str = "ASTRIX_SCREEN_WEBRTC_MOTION_MODE";
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+const DXGI_RGB_SECOND_DEVICE_ENV: &str = "ASTRIX_DXGI_RGB_SECOND_DEVICE";
 const REMOTE_MIX_QUEUE_MAX_FRAMES: usize = 6;
 const SCREEN_AUDIO_SIGNAL_THRESHOLD: i16 = 32;
 const MIC_RING_CAPTURE_MAX_FRAMES: usize = 12;
@@ -87,6 +93,13 @@ const LOCAL_SPEAKING_PEAK_THRESHOLD: f32 = 0.0120;
 
 fn screen_webrtc_motion_mode_enabled() -> bool {
     std::env::var(SCREEN_WEBRTC_MOTION_MODE_ENV)
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true)
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn dxgi_rgb_second_device_enabled() -> bool {
+    std::env::var(DXGI_RGB_SECOND_DEVICE_ENV)
         .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
         .unwrap_or(true)
 }
@@ -134,6 +147,11 @@ fn wgc_min_update_interval(target_fps: f64) -> Duration {
     Duration::from_secs_f64((0.5 / target_fps.max(1.0)).clamp(0.004, 0.008))
 }
 
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn dxgi_acquire_timeout_ms(target_fps: f64) -> u32 {
+    ((1000.0 / target_fps.max(1.0)).ceil() as u32).clamp(1, 33)
+}
+
 fn extract_rtt_ms_from_stats(stats: &[livekit::webrtc::stats::RtcStats]) -> Option<f32> {
     let candidate_pair_rtt_ms = stats
         .iter()
@@ -176,6 +194,28 @@ fn extract_rtt_ms_from_stats(stats: &[livekit::webrtc::stats::RtcStats]) -> Opti
             _ => None,
         })
         .min_by(|left, right| left.total_cmp(right))
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn keyed_mutex_try_acquire(
+    keyed_mutex: &windows::Win32::Graphics::Dxgi::IDXGIKeyedMutex,
+    key: u64,
+) -> Result<bool, windows::core::Error> {
+    use windows::core::{HRESULT, Interface};
+    use windows::Win32::Foundation::{WAIT_ABANDONED, WAIT_TIMEOUT};
+
+    let hr = unsafe {
+        (Interface::vtable(keyed_mutex).AcquireSync)(Interface::as_raw(keyed_mutex), key, 0)
+    };
+    if hr == HRESULT(WAIT_TIMEOUT.0 as i32) {
+        Ok(false)
+    } else if hr == HRESULT(WAIT_ABANDONED.0 as i32) {
+        Err(windows::core::Error::from(hr))
+    } else if hr.is_ok() {
+        Ok(true)
+    } else {
+        Err(windows::core::Error::from(hr))
+    }
 }
 
 fn extract_session_rtt_ms(
@@ -2182,6 +2222,8 @@ async fn run_session(
                                 let mut last_recovery_request_at =
                                     std::time::Instant::now() - request_cooldown;
                                 let mut recovery_requested_since_last_frame = false;
+                                let mut last_stall_stats_at =
+                                    std::time::Instant::now() - Duration::from_secs(1);
                                 let mut recovery_watchdog =
                                     tokio::time::interval(screen_recovery_poll_interval());
                                 recovery_watchdog
@@ -2258,6 +2300,26 @@ async fn run_session(
                                                 "[voice][screen][viewer] STALL recv_wait_ms={} expected_us={} network_us={} ts_delta={}",
                                                 recv_wait_ms, expected_us, network_us, ts_delta
                                             );
+                                            if telemetry_enabled
+                                                && last_stall_stats_at.elapsed() >= Duration::from_secs(1)
+                                            {
+                                                let stats_track_stall = stats_track.clone();
+                                                let reason =
+                                                    format!("recv_wait {}ms", recv_wait_ms);
+                                                let user_id = recovery_user_id;
+                                                tokio::spawn(async move {
+                                                    let stats = stats_track_stall
+                                                        .get_stats()
+                                                        .await
+                                                        .unwrap_or_default();
+                                                    log_remote_video_inbound_stats(
+                                                        user_id,
+                                                        &reason,
+                                                        &stats,
+                                                    );
+                                                });
+                                                last_stall_stats_at = std::time::Instant::now();
+                                            }
                                         }
                                     } else {
                                         tel_recv.set_network(0);
@@ -3683,8 +3745,10 @@ fn start_screen_capture(
     Option<LocalVideoTrack>,
     Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>,
 ) {
-    let capture_backend =
-        std::env::var("ASTRIX_SCREEN_CAPTURE_BACKEND").unwrap_or_else(|_| "wgc".to_string());
+    let capture_backend_env = std::env::var("ASTRIX_SCREEN_CAPTURE_BACKEND").ok();
+    let capture_backend = capture_backend_env
+        .clone()
+        .unwrap_or_else(|| "dxgi".to_string());
     if capture_backend.eq_ignore_ascii_case("xcap") {
         eprintln!("[voice][screen] capture backend override: xcap");
         return start_screen_capture_xcap(
@@ -3703,7 +3767,11 @@ fn start_screen_capture(
         eprintln!("[voice][screen] DXGI is unavailable for window capture, falling back to WGC");
     }
     if use_dxgi {
-        eprintln!("[voice][screen] capture backend override: dxgi");
+        if capture_backend_env.is_some() {
+            eprintln!("[voice][screen] capture backend override: dxgi");
+        } else {
+            eprintln!("[voice][screen] capture backend default: dxgi");
+        }
         eprintln!("[voice][screen] DXGI build marker: hardfail-fallback-v2");
     }
     let screen_index = match &source_target {
@@ -3711,9 +3779,10 @@ fn start_screen_capture(
         StreamSourceTarget::Window { .. } => None,
     };
     use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering};
+    use windows::core::Interface;
     use windows::Win32::Graphics::Direct3D11::{
-        ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
-        D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+        ID3D11Resource, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
+        D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     };
     use windows_capture::{
         capture::{Context, GraphicsCaptureApiHandler},
@@ -3730,9 +3799,9 @@ fn start_screen_capture(
     let (video_width, video_height, max_fps, bitrate_bps) = preset.params();
 
     /// OBS/Parsec style: encoder runs on fixed timer, reads single "latest" frame.
-    /// Double buffer: WGC overwrites one slot, encoder reads the other.
-    const LATEST_SLOT_COUNT: usize = 2;
-    const LATEST_SLOT_NONE: u8 = 2; // Sentinel: no frame yet
+    /// Small ring buffer: capture overwrites the next free slot, encoder reads the latest one.
+    const LATEST_SLOT_COUNT: usize = 6;
+    const LATEST_SLOT_NONE: u8 = u8::MAX; // Sentinel: no frame yet
 
     /// Phase 2: pool of our D3D11 textures (copy targets). Created on first frame from frame's device/desc.
     /// Two textures for double-buffering: WGC writes to one, encoder reads from the other.
@@ -3741,8 +3810,18 @@ fn start_screen_capture(
         device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
         context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
         textures: [windows::Win32::Graphics::Direct3D11::ID3D11Texture2D; LATEST_SLOT_COUNT],
+        rgb_scale_device: Option<windows::Win32::Graphics::Direct3D11::ID3D11Device>,
+        rgb_scale_context: Option<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>,
+        rgb_scale_context_mutex: Option<Arc<parking_lot::Mutex<()>>>,
+        rgb_scale_input_textures:
+            Option<[windows::Win32::Graphics::Direct3D11::ID3D11Texture2D; LATEST_SLOT_COUNT]>,
+        rgb_scale_capture_mutexes:
+            Option<[windows::Win32::Graphics::Dxgi::IDXGIKeyedMutex; LATEST_SLOT_COUNT]>,
+        rgb_scale_input_mutexes:
+            Option<[windows::Win32::Graphics::Dxgi::IDXGIKeyedMutex; LATEST_SLOT_COUNT]>,
         width: u32,
         height: u32,
+        write_cursor: AtomicUsize,
         /// Mutex protecting Immediate Context from concurrent use by WGC and encoder threads.
         /// D3D11 Immediate Context is NOT thread-safe; both threads must hold this lock
         /// before calling any context methods (CopyResource, Dispatch, etc.).
@@ -3751,8 +3830,8 @@ fn start_screen_capture(
     }
 
     /// Single latest slot: WGC overwrites, encoder reads on timer. OBS/Parsec style.
-    /// Value 0 or 1 = valid slot index; LATEST_SLOT_NONE = no frame yet.
-    struct LatestSlot {
+        /// Value 0..LATEST_SLOT_COUNT-1 = valid slot index; LATEST_SLOT_NONE = no frame yet.
+        struct LatestSlot {
         slot: AtomicU8,
         generation: AtomicU64,
     }
@@ -3772,7 +3851,7 @@ fn start_screen_capture(
         /// Encoder: read which slot has the latest frame. None if no frame yet.
         fn load(&self) -> Option<u8> {
             let s = self.slot.load(Ordering::Acquire);
-            if s >= LATEST_SLOT_NONE {
+            if s == LATEST_SLOT_NONE || (s as usize) >= LATEST_SLOT_COUNT {
                 None
             } else {
                 Some(s)
@@ -3788,6 +3867,53 @@ fn start_screen_capture(
             }
             self.load().map(|slot| (slot, generation))
         }
+    }
+
+    fn select_pool_write_target(
+        pool: &GpuTexturePool,
+        latest_slot: &LatestSlot,
+    ) -> Result<
+        (
+            Option<ID3D11Texture2D>,
+            Option<Arc<parking_lot::Mutex<()>>>,
+            Option<windows::Win32::Graphics::Dxgi::IDXGIKeyedMutex>,
+            u8,
+        ),
+        windows::core::Error,
+    > {
+        let current = latest_slot.slot.load(Ordering::Acquire);
+        let start = pool.write_cursor.fetch_add(1, Ordering::Relaxed);
+        let current_valid = (current as usize) < LATEST_SLOT_COUNT;
+        for offset in 0..LATEST_SLOT_COUNT {
+            let slot = ((start + offset) % LATEST_SLOT_COUNT) as u8;
+            if current_valid && slot == current {
+                continue;
+            }
+            let texture = pool.textures[slot as usize].clone();
+            if let Some(mutexes) = pool.rgb_scale_capture_mutexes.as_ref() {
+                let keyed_mutex = mutexes[slot as usize].clone();
+                match keyed_mutex_try_acquire(&keyed_mutex, 0) {
+                    Ok(true) => {
+                        return Ok((
+                            Some(texture),
+                            Some(Arc::clone(&pool.context_mutex)),
+                            Some(keyed_mutex),
+                            slot,
+                        ));
+                    }
+                    Ok(false) => continue,
+                    Err(err) => return Err(err),
+                }
+            } else {
+                return Ok((
+                    Some(texture),
+                    Some(Arc::clone(&pool.context_mutex)),
+                    None,
+                    slot,
+                ));
+            }
+        }
+        Ok((None, None, None, 0))
     }
 
     #[derive(Clone)]
@@ -3838,22 +3964,57 @@ fn start_screen_capture(
                         std::thread::sleep(Duration::from_millis(1));
                         continue;
                     }
-                    let (texture, context_mutex) = {
+                    let (texture, context_mutex, input_keyed_mutex) = {
                         let guard = pool_ref.lock();
                         let Some(pool) = guard.as_ref() else {
                             drop(guard);
                             std::thread::sleep(Duration::from_millis(1));
                             continue;
                         };
-                        (
-                            pool.textures[slot as usize].clone(),
-                            Arc::clone(&pool.context_mutex),
-                        )
+                        if let (Some(textures), Some(context_mutex)) = (
+                            pool.rgb_scale_input_textures.as_ref(),
+                            pool.rgb_scale_context_mutex.as_ref(),
+                        ) {
+                            (
+                                textures[slot as usize].clone(),
+                                Arc::clone(context_mutex),
+                                pool.rgb_scale_input_mutexes
+                                    .as_ref()
+                                    .map(|mutexes| mutexes[slot as usize].clone()),
+                            )
+                        } else {
+                            (
+                                pool.textures[slot as usize].clone(),
+                                Arc::clone(&pool.context_mutex),
+                                None,
+                            )
+                        }
                     };
+
+                    if let Some(keyed_mutex) = input_keyed_mutex.as_ref() {
+                        match keyed_mutex_try_acquire(keyed_mutex, 1) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                std::thread::sleep(Duration::from_millis(1));
+                                continue;
+                            }
+                            Err(err) => {
+                                failed.store(true, Ordering::Relaxed);
+                                eprintln!(
+                                    "[voice][screen] async direct RGB shared-slot acquire failed: {:?}",
+                                    err
+                                );
+                                break;
+                            }
+                        }
+                    }
 
                     let convert = match converter.convert_timed(&texture, &context_mutex) {
                         Ok(timing) => timing,
                         Err(err) => {
+                            if let Some(keyed_mutex) = input_keyed_mutex.as_ref() {
+                                let _ = unsafe { keyed_mutex.ReleaseSync(0) };
+                            }
                             failed.store(true, Ordering::Relaxed);
                             eprintln!(
                                 "[voice][screen] async direct RGB scale failed: {:?}",
@@ -3865,6 +4026,9 @@ fn start_screen_capture(
                     let flush = match converter.flush_timed(&context_mutex) {
                         Ok(timing) => timing,
                         Err(err) => {
+                            if let Some(keyed_mutex) = input_keyed_mutex.as_ref() {
+                                let _ = unsafe { keyed_mutex.ReleaseSync(0) };
+                            }
                             failed.store(true, Ordering::Relaxed);
                             eprintln!(
                                 "[voice][screen] async direct RGB scale flush failed: {:?}",
@@ -3873,6 +4037,16 @@ fn start_screen_capture(
                             break;
                         }
                     };
+                    if let Some(keyed_mutex) = input_keyed_mutex.as_ref() {
+                        if let Err(err) = unsafe { keyed_mutex.ReleaseSync(0) } {
+                            failed.store(true, Ordering::Relaxed);
+                            eprintln!(
+                                "[voice][screen] async direct RGB shared-slot release failed: {:?}",
+                                err
+                            );
+                            break;
+                        }
+                    }
                     *latest_output.lock() = Some(AsyncRgbScaleFrame {
                         texture: convert.texture,
                         source_wgc: current_wgc,
@@ -4218,8 +4392,15 @@ fn start_screen_capture(
                                     device: device_clone,
                                     context: context_clone,
                                     textures,
+                                    rgb_scale_device: None,
+                                    rgb_scale_context: None,
+                                    rgb_scale_context_mutex: None,
+                                    rgb_scale_input_textures: None,
+                                    rgb_scale_capture_mutexes: None,
+                                    rgb_scale_input_mutexes: None,
                                     width: our_desc.Width,
                                     height: our_desc.Height,
+                                    write_cursor: AtomicUsize::new(0),
                                     context_mutex: Arc::new(parking_lot::Mutex::new(())),
                                 });
                             });
@@ -4237,25 +4418,22 @@ fn start_screen_capture(
                     //
                     // CRITICAL: never block in FrameArrived. If we block >~16 ms, WGC throttles to 30 FPS.
                     // Use try_lock for both pool_ref and context_mutex; skip frame if either is busy.
-                    let (our_tex_clone, context_mutex_clone, write_slot) = {
+                    let (our_tex_clone, context_mutex_clone, capture_keyed_mutex, write_slot) = {
                         let Some(guard) = self.pool_ref.try_lock() else {
                             return Ok(()); // encoder holds pool; skip frame to avoid blocking (30 FPS throttle)
                         };
                         match guard.as_ref() {
-                            None => (None, None, 0u8),
-                            Some(pool) => {
-                                let current = self.latest_slot.slot.load(Ordering::Acquire);
-                                let slot = if current >= LATEST_SLOT_NONE {
-                                    0u8
-                                } else {
-                                    (1 - current) as u8
-                                };
-                                (
-                                    Some(pool.textures[slot as usize].clone()),
-                                    Some(Arc::clone(&pool.context_mutex)),
-                                    slot,
-                                )
-                            }
+                            None => (None, None, None, 0u8),
+                            Some(pool) => match select_pool_write_target(pool, &self.latest_slot) {
+                                Ok(target) => target,
+                                Err(err) => {
+                                    eprintln!(
+                                        "[voice][screen] WGC capture slot select failed: {:?}",
+                                        err
+                                    );
+                                    (None, None, None, 0u8)
+                                }
+                            },
                         }
                     };
                     // pool_ref lock released — encoder can now access the pool concurrently.
@@ -4269,10 +4447,26 @@ fn start_screen_capture(
                             }
                             self.telemetry
                                 .set_capture(capture_start.elapsed().as_micros() as u64);
+                            if let Some(keyed_mutex) = capture_keyed_mutex.as_ref() {
+                                if let Err(err) = unsafe { keyed_mutex.ReleaseSync(1) } {
+                                    eprintln!(
+                                        "[voice][screen] WGC shared capture slot release failed: {:?}",
+                                        err
+                                    );
+                                    return Ok(());
+                                }
+                            }
                             let published_generation = self.latest_slot.store(write_slot);
                             let (published_mutex, published_cv) = &*self.latest_slot_signal;
                             *published_mutex.lock() = published_generation;
                             published_cv.notify_one();
+                        } else if let Some(keyed_mutex) = capture_keyed_mutex.as_ref() {
+                            if let Err(err) = unsafe { keyed_mutex.ReleaseSync(1) } {
+                                eprintln!(
+                                    "[voice][screen] WGC shared capture slot release failed: {:?}",
+                                    err
+                                );
+                            }
                         }
                         // else: encoder still converting; drop frame so WGC thread never blocks
                     }
@@ -4308,6 +4502,7 @@ fn start_screen_capture(
     let wgc_source_fps_milli = Arc::new(AtomicU64::new(0));
     let wgc_log_state = Arc::new(Mutex::new((0u64, None::<std::time::Instant>, 0i64)));
     let telemetry_sender = Arc::new(PipelineTelemetry::new());
+    let dxgi_timeout_ms = dxgi_acquire_timeout_ms(max_fps);
 
     if use_dxgi {
         let stop_dxgi = Arc::clone(&stop_flag);
@@ -4334,7 +4529,7 @@ fn start_screen_capture(
                         break;
                     }
 
-                    let frame = match capture.acquire_next_frame(33) {
+                    let mut frame = match capture.acquire_next_frame(dxgi_timeout_ms) {
                         Ok(Some(frame)) => frame,
                         Ok(None) => continue,
                         Err(DxgiDuplicationError::AccessLost) => {
@@ -4423,27 +4618,125 @@ fn start_screen_capture(
                                     our_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM.into();
                                 }
                             }
+                            let mut rgb_scale_device = None;
+                            let mut rgb_scale_context = None;
+                            let mut rgb_scale_context_mutex = None;
+                            let mut rgb_scale_input_textures = None;
+                            let mut rgb_scale_capture_mutexes = None;
+                            let mut rgb_scale_input_mutexes = None;
+                            let shared_rgb_scale_needed = our_desc.Width != video_width
+                                || our_desc.Height != video_height;
 
-                            let mut textures: [Option<ID3D11Texture2D>; LATEST_SLOT_COUNT] =
-                                std::array::from_fn(|_| None);
-                            let mut pool_ok = true;
-                            for (i, slot) in textures.iter_mut().enumerate() {
-                                if let Err(e) = unsafe {
-                                    capture.device.CreateTexture2D(
+                            let textures = if dxgi_rgb_second_device_enabled() && shared_rgb_scale_needed {
+                                match GpuDevice::create_for_adapter_idx(capture.selection.adapter_idx) {
+                                    Ok(rgb_gpu) => match create_shared_keyed_texture_ring::<LATEST_SLOT_COUNT>(
+                                        &capture.device,
+                                        &rgb_gpu.device,
                                         &our_desc,
-                                        None,
-                                        Some(std::ptr::from_mut(slot)),
-                                    )
-                                } {
-                                    eprintln!("[voice][screen] DXGI CreateTexture2D[{}] failed: {:?}", i, e);
-                                    pool_ok = false;
-                                    break;
+                                    ) {
+                                        Ok(shared_ring) => {
+                                            eprintln!(
+                                                "[voice][screen] DXGI direct RGB shared ring: separate D3D11 device enabled ({}={:?}, adapter {}, {} slot(s))",
+                                                DXGI_RGB_SECOND_DEVICE_ENV,
+                                                std::env::var(DXGI_RGB_SECOND_DEVICE_ENV)
+                                                    .unwrap_or_else(|_| "<default:on>".to_string()),
+                                                capture.selection.adapter_idx,
+                                                LATEST_SLOT_COUNT
+                                            );
+                                            rgb_scale_device = Some(rgb_gpu.device);
+                                            rgb_scale_context = Some(rgb_gpu.context);
+                                            rgb_scale_context_mutex =
+                                                Some(Arc::new(parking_lot::Mutex::new(())));
+                                            rgb_scale_input_textures =
+                                                Some(shared_ring.opened_textures);
+                                            rgb_scale_capture_mutexes =
+                                                Some(shared_ring.owner_mutexes);
+                                            rgb_scale_input_mutexes =
+                                                Some(shared_ring.opened_mutexes);
+                                            shared_ring.owner_textures
+                                        }
+                                        Err(err) => {
+                                            eprintln!(
+                                                "[voice][screen] DXGI direct RGB shared ring init failed, falling back to same-device path: {:?}",
+                                                err
+                                            );
+                                            let mut textures: [Option<ID3D11Texture2D>; LATEST_SLOT_COUNT] =
+                                                std::array::from_fn(|_| None);
+                                            let mut pool_ok = true;
+                                            for (i, slot) in textures.iter_mut().enumerate() {
+                                                if let Err(e) = unsafe {
+                                                    capture.device.CreateTexture2D(
+                                                        &our_desc,
+                                                        None,
+                                                        Some(std::ptr::from_mut(slot)),
+                                                    )
+                                                } {
+                                                    eprintln!(
+                                                        "[voice][screen] DXGI CreateTexture2D[{}] failed: {:?}",
+                                                        i, e
+                                                    );
+                                                    pool_ok = false;
+                                                    break;
+                                                }
+                                            }
+                                            if !pool_ok {
+                                                continue;
+                                            }
+                                            textures.map(|t| t.expect("DXGI CreateTexture2D null"))
+                                        }
+                                    },
+                                    Err(err) => {
+                                        eprintln!(
+                                            "[voice][screen] DXGI separate RGB device init failed, falling back to same-device path: {:?}",
+                                            err
+                                        );
+                                        let mut textures: [Option<ID3D11Texture2D>; LATEST_SLOT_COUNT] =
+                                            std::array::from_fn(|_| None);
+                                        let mut pool_ok = true;
+                                        for (i, slot) in textures.iter_mut().enumerate() {
+                                            if let Err(e) = unsafe {
+                                                capture.device.CreateTexture2D(
+                                                    &our_desc,
+                                                    None,
+                                                    Some(std::ptr::from_mut(slot)),
+                                                )
+                                            } {
+                                                eprintln!(
+                                                    "[voice][screen] DXGI CreateTexture2D[{}] failed: {:?}",
+                                                    i, e
+                                                );
+                                                pool_ok = false;
+                                                break;
+                                            }
+                                        }
+                                        if !pool_ok {
+                                            continue;
+                                        }
+                                        textures.map(|t| t.expect("DXGI CreateTexture2D null"))
+                                    }
                                 }
-                            }
-                            if !pool_ok {
-                                continue;
-                            }
-                            let textures = textures.map(|t| t.expect("DXGI CreateTexture2D null"));
+                            } else {
+                                let mut textures: [Option<ID3D11Texture2D>; LATEST_SLOT_COUNT] =
+                                    std::array::from_fn(|_| None);
+                                let mut pool_ok = true;
+                                for (i, slot) in textures.iter_mut().enumerate() {
+                                    if let Err(e) = unsafe {
+                                        capture.device.CreateTexture2D(
+                                            &our_desc,
+                                            None,
+                                            Some(std::ptr::from_mut(slot)),
+                                        )
+                                    } {
+                                        eprintln!("[voice][screen] DXGI CreateTexture2D[{}] failed: {:?}", i, e);
+                                        pool_ok = false;
+                                        break;
+                                    }
+                                }
+                                if !pool_ok {
+                                    continue;
+                                }
+                                textures.map(|t| t.expect("DXGI CreateTexture2D null"))
+                            };
                             eprintln!(
                                 "[voice][screen] DXGI texture pool created: {}x{} format {:?} ({} slots, latest-frame)",
                                 our_desc.Width, our_desc.Height, our_desc.Format, LATEST_SLOT_COUNT
@@ -4452,29 +4745,107 @@ fn start_screen_capture(
                                 device: capture.device.clone(),
                                 context: capture.context.clone(),
                                 textures,
+                                rgb_scale_device,
+                                rgb_scale_context,
+                                rgb_scale_context_mutex,
+                                rgb_scale_input_textures,
+                                rgb_scale_capture_mutexes,
+                                rgb_scale_input_mutexes,
                                 width: our_desc.Width,
                                 height: our_desc.Height,
+                                write_cursor: AtomicUsize::new(0),
                                 context_mutex: Arc::new(parking_lot::Mutex::new(())),
                             });
                         }
                     }
 
-                    let (our_tex_clone, context_mutex_clone, write_slot) = {
+                    let partial_dirty_update_requested = frame.move_rects.is_empty()
+                        && !frame.dirty_rects.is_empty()
+                        && frame.dirty_rects.len() <= 128;
+                    let (
+                        our_tex_clone,
+                        context_mutex_clone,
+                        capture_keyed_mutex,
+                        write_slot,
+                        partial_dirty_update,
+                    ) = {
                         let guard = pool_ref_dxgi.lock();
                         match guard.as_ref() {
-                            None => (None, None, 0u8),
+                            None => (None, None, None, 0u8, false),
                             Some(pool) => {
-                                let current = latest_slot_dxgi.slot.load(Ordering::Acquire);
-                                let slot = if current >= LATEST_SLOT_NONE {
-                                    0u8
+                                if partial_dirty_update_requested {
+                                    if let (Some(current_slot), Some(mutexes)) = (
+                                        latest_slot_dxgi.load(),
+                                        pool.rgb_scale_capture_mutexes.as_ref(),
+                                    ) {
+                                        let keyed_mutex = mutexes[current_slot as usize].clone();
+                                        match keyed_mutex_try_acquire(&keyed_mutex, 0) {
+                                            Ok(true) => (
+                                                Some(pool.textures[current_slot as usize].clone()),
+                                                Some(Arc::clone(&pool.context_mutex)),
+                                                Some(keyed_mutex),
+                                                current_slot,
+                                                true,
+                                            ),
+                                            Ok(false) => match select_pool_write_target(pool, &latest_slot_dxgi) {
+                                                Ok((tex, ctx, keyed, slot)) => {
+                                                    (tex, ctx, keyed, slot, false)
+                                                }
+                                                Err(err) => {
+                                                    eprintln!(
+                                                        "[voice][screen] DXGI shared capture slot select failed: {:?}",
+                                                        err
+                                                    );
+                                                    (None, None, None, 0u8, false)
+                                                }
+                                            },
+                                            Err(err) => {
+                                                eprintln!(
+                                                    "[voice][screen] DXGI dirty-rect slot acquire failed, falling back to full copy: {:?}",
+                                                    err
+                                                );
+                                                match select_pool_write_target(pool, &latest_slot_dxgi) {
+                                                    Ok((tex, ctx, keyed, slot)) => {
+                                                        (tex, ctx, keyed, slot, false)
+                                                    }
+                                                    Err(err) => {
+                                                        eprintln!(
+                                                            "[voice][screen] DXGI shared capture slot select failed: {:?}",
+                                                            err
+                                                        );
+                                                        (None, None, None, 0u8, false)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        match select_pool_write_target(pool, &latest_slot_dxgi) {
+                                            Ok((tex, ctx, keyed, slot)) => {
+                                                (tex, ctx, keyed, slot, false)
+                                            }
+                                            Err(err) => {
+                                                eprintln!(
+                                                    "[voice][screen] DXGI shared capture slot select failed: {:?}",
+                                                    err
+                                                );
+                                                (None, None, None, 0u8, false)
+                                            }
+                                        }
+                                    }
                                 } else {
-                                    (1 - current) as u8
-                                };
-                                (
-                                    Some(pool.textures[slot as usize].clone()),
-                                    Some(Arc::clone(&pool.context_mutex)),
-                                    slot,
-                                )
+                                    match select_pool_write_target(pool, &latest_slot_dxgi) {
+                                        Ok((tex, ctx, keyed, slot)) => {
+                                            (tex, ctx, keyed, slot, false)
+                                        }
+                                        Err(err) => {
+                                            eprintln!(
+                                                "[voice][screen] DXGI shared capture slot select failed: {:?}",
+                                                err
+                                            );
+                                            (None, None, None, 0u8, false)
+                                        }
+                                    }
+                                }
                             }
                         }
                     };
@@ -4487,9 +4858,127 @@ fn start_screen_capture(
                         let _ctx_guard = ctx_mutex.lock();
                         let capture_start = std::time::Instant::now();
                         unsafe {
-                            capture.context.CopyResource(&our_tex, &texture);
+                            if partial_dirty_update {
+                                let dst = match our_tex.cast::<ID3D11Resource>() {
+                                    Ok(dst) => dst,
+                                    Err(err) => {
+                                        eprintln!(
+                                            "[voice][screen] DXGI dirty-rect dst cast failed, falling back to full copy: {:?}",
+                                            err
+                                        );
+                                        capture.context.CopyResource(&our_tex, &texture);
+                                        if let Err(err) = frame.release() {
+                                            eprintln!(
+                                                "[voice][screen] DXGI early ReleaseFrame failed after fallback copy: {:?}",
+                                                err
+                                            );
+                                        }
+                                        telemetry_dxgi.set_capture(
+                                            capture_start.elapsed().as_micros() as u64,
+                                        );
+                                        if let Some(keyed_mutex) = capture_keyed_mutex.as_ref() {
+                                            if let Err(err) = keyed_mutex.ReleaseSync(1) {
+                                                eprintln!(
+                                                    "[voice][screen] DXGI shared capture slot release failed: {:?}",
+                                                    err
+                                                );
+                                                continue;
+                                            }
+                                        }
+                                        let published_generation = latest_slot_dxgi.store(write_slot);
+                                        let (published_mutex, published_cv) = &*latest_slot_signal_dxgi;
+                                        *published_mutex.lock() = published_generation;
+                                        published_cv.notify_one();
+                                        continue;
+                                    }
+                                };
+                                let src = match texture.cast::<ID3D11Resource>() {
+                                    Ok(src) => src,
+                                    Err(err) => {
+                                        eprintln!(
+                                            "[voice][screen] DXGI dirty-rect src cast failed, falling back to full copy: {:?}",
+                                            err
+                                        );
+                                        capture.context.CopyResource(&our_tex, &texture);
+                                        if let Err(err) = frame.release() {
+                                            eprintln!(
+                                                "[voice][screen] DXGI early ReleaseFrame failed after fallback copy: {:?}",
+                                                err
+                                            );
+                                        }
+                                        telemetry_dxgi.set_capture(
+                                            capture_start.elapsed().as_micros() as u64,
+                                        );
+                                        if let Some(keyed_mutex) = capture_keyed_mutex.as_ref() {
+                                            if let Err(err) = keyed_mutex.ReleaseSync(1) {
+                                                eprintln!(
+                                                    "[voice][screen] DXGI shared capture slot release failed: {:?}",
+                                                    err
+                                                );
+                                                continue;
+                                            }
+                                        }
+                                        let published_generation = latest_slot_dxgi.store(write_slot);
+                                        let (published_mutex, published_cv) = &*latest_slot_signal_dxgi;
+                                        *published_mutex.lock() = published_generation;
+                                        published_cv.notify_one();
+                                        continue;
+                                    }
+                                };
+                                let mut copied_any_dirty_rect = false;
+                                for rect in &frame.dirty_rects {
+                                    let left = rect.left.max(0) as u32;
+                                    let top = rect.top.max(0) as u32;
+                                    let right = (rect.right.max(rect.left)).max(0) as u32;
+                                    let bottom = (rect.bottom.max(rect.top)).max(0) as u32;
+                                    let right = right.min(capture.selection.width);
+                                    let bottom = bottom.min(capture.selection.height);
+                                    if right <= left || bottom <= top {
+                                        continue;
+                                    }
+                                    let src_box = D3D11_BOX {
+                                        left,
+                                        top,
+                                        front: 0,
+                                        right,
+                                        bottom,
+                                        back: 1,
+                                    };
+                                    capture.context.CopySubresourceRegion(
+                                        &dst,
+                                        0,
+                                        left,
+                                        top,
+                                        0,
+                                        &src,
+                                        0,
+                                        Some(&src_box),
+                                    );
+                                    copied_any_dirty_rect = true;
+                                }
+                                if !copied_any_dirty_rect {
+                                    capture.context.CopyResource(&our_tex, &texture);
+                                }
+                            } else {
+                                capture.context.CopyResource(&our_tex, &texture);
+                            }
+                        }
+                        if let Err(err) = frame.release() {
+                            eprintln!(
+                                "[voice][screen] DXGI early ReleaseFrame failed: {:?}",
+                                err
+                            );
                         }
                         telemetry_dxgi.set_capture(capture_start.elapsed().as_micros() as u64);
+                        if let Some(keyed_mutex) = capture_keyed_mutex.as_ref() {
+                            if let Err(err) = unsafe { keyed_mutex.ReleaseSync(1) } {
+                                eprintln!(
+                                    "[voice][screen] DXGI shared capture slot release failed: {:?}",
+                                    err
+                                );
+                                continue;
+                            }
+                        }
                         let published_generation = latest_slot_dxgi.store(write_slot);
                         let (published_mutex, published_cv) = &*latest_slot_signal_dxgi;
                         *published_mutex.lock() = published_generation;
@@ -4761,8 +5250,13 @@ fn start_screen_capture(
             const WEBRTC_FPS_HINT_HYSTERESIS_FPS: f64 = 2.0;
             const SOURCE_CAP_HYSTERESIS_FPS: f64 = 10.0;
             const SOURCE_CAP_CONFIRM_WINDOWS: u32 = 3;
+            const LOCKED_SOURCE_FOLLOW_DOWN_CONFIRM_WINDOWS: u32 = 1;
+            const LOCKED_SOURCE_FOLLOW_UP_CONFIRM_WINDOWS: u32 = 2;
             let mut source_cap_down_votes: u32 = 0;
             let mut source_cap_up_votes: u32 = 0;
+            let mut locked_source_follow_down_votes: u32 = 0;
+            let mut locked_source_follow_up_votes: u32 = 0;
+            let mut locked_source_follow_cap_fps: Option<f64> = None;
             let next_lower_fps = |fps: f64| -> f64 {
                 ADAPTIVE_FPS_LADDER.iter().rev().find(|&&s| s < fps).copied().unwrap_or(*ADAPTIVE_FPS_LADDER.first().unwrap())
             };
@@ -5196,6 +5690,58 @@ fn start_screen_capture(
                 } else if lock_preset_fps {
                     current_source_cap_fps = max_fps_f64;
                 }
+                if lock_preset_fps && max_fps_f64 >= 90.0 && source_fps >= 10.0 {
+                    let trigger_fps = (max_fps_f64 * 0.60).max(30.0);
+                    let release_fps = (max_fps_f64 * 0.80).max(trigger_fps + 10.0);
+                    let proposed_locked_cap_fps = (source_fps + 2.0).clamp(10.0, max_fps_f64);
+                    if let Some(active_cap_fps) = locked_source_follow_cap_fps {
+                        if source_fps >= release_fps {
+                            locked_source_follow_up_votes =
+                                locked_source_follow_up_votes.saturating_add(1);
+                            if locked_source_follow_up_votes
+                                >= LOCKED_SOURCE_FOLLOW_UP_CONFIRM_WINDOWS
+                            {
+                                if telemetry_enabled {
+                                    eprintln!(
+                                        "[voice][screen] locked-source follow: released {:.0} fps cap (capture source {:.1} fps)",
+                                        active_cap_fps,
+                                        source_fps
+                                    );
+                                }
+                                locked_source_follow_cap_fps = None;
+                                locked_source_follow_up_votes = 0;
+                            }
+                        } else {
+                            locked_source_follow_up_votes = 0;
+                            locked_source_follow_cap_fps = Some(proposed_locked_cap_fps);
+                        }
+                    } else if source_fps <= trigger_fps {
+                        locked_source_follow_down_votes =
+                            locked_source_follow_down_votes.saturating_add(1);
+                        if locked_source_follow_down_votes
+                            >= LOCKED_SOURCE_FOLLOW_DOWN_CONFIRM_WINDOWS
+                        {
+                            locked_source_follow_cap_fps = Some(proposed_locked_cap_fps);
+                            locked_source_follow_down_votes = 0;
+                            locked_source_follow_up_votes = 0;
+                            if telemetry_enabled {
+                                eprintln!(
+                                    "[voice][screen] locked-source follow: engaged {:.0} fps cap (capture source {:.1} fps, trigger {:.0})",
+                                    proposed_locked_cap_fps,
+                                    source_fps,
+                                    trigger_fps
+                                );
+                            }
+                        }
+                    } else {
+                        locked_source_follow_down_votes = 0;
+                        locked_source_follow_up_votes = 0;
+                    }
+                } else if locked_source_follow_cap_fps.is_some() {
+                    locked_source_follow_cap_fps = None;
+                    locked_source_follow_down_votes = 0;
+                    locked_source_follow_up_votes = 0;
+                }
                 let startup_cap_fps = startup_transport_fps_cap(
                     webrtc_target_bitrate_bps,
                     enc_session_start.elapsed(),
@@ -5220,6 +5766,11 @@ fn start_screen_capture(
                     current_source_cap_fps
                         .min(effective_webrtc_cap_fps)
                         .min(startup_cap_fps)
+                };
+                let schedule_cap_fps = if let Some(locked_source_cap_fps) = locked_source_follow_cap_fps {
+                    schedule_cap_fps.min(locked_source_cap_fps)
+                } else {
+                    schedule_cap_fps
                 };
                 if let Some(mut st) = stats_enc.try_lock() {
                     st.source_fps = (source_fps > 0.0).then_some(source_fps as f32);
@@ -5724,14 +6275,25 @@ fn start_screen_capture(
                                     can_try_nvenc_rgb_direct
                                         && (pool.width != video_width
                                             || pool.height != video_height);
+                                let rgb_scale_uses_separate_device = nvenc_rgb_needs_scale
+                                    && pool.rgb_scale_device.is_some()
+                                    && pool.rgb_scale_context.is_some()
+                                    && pool.rgb_scale_input_textures.is_some()
+                                    && pool.rgb_scale_input_mutexes.is_some();
+                                let rgb_scale_device =
+                                    pool.rgb_scale_device.as_ref().unwrap_or(&pool.device);
+                                let rgb_scale_context = pool
+                                    .rgb_scale_context
+                                    .as_ref()
+                                    .unwrap_or(&pool.context);
                                 if mft_encoder.is_none()
                                     && can_try_nvenc_rgb_direct
                                     && nvenc_rgb_needs_scale
                                     && bgra_to_rgb.is_none()
                                 {
                                     match D3d11BgraScale::new(
-                                        &pool.device,
-                                        &pool.context,
+                                        rgb_scale_device,
+                                        rgb_scale_context,
                                         pool.width,
                                         pool.height,
                                         video_width,
@@ -5747,6 +6309,11 @@ fn start_screen_capture(
                                                 video_height,
                                                 conv.output_textures().len()
                                             );
+                                            if rgb_scale_uses_separate_device {
+                                                eprintln!(
+                                                    "[voice][screen] NVENC direct RGB scaler: separate D3D11 device via shared keyed ring"
+                                                );
+                                            }
                                             bgra_to_rgb = Some(conv);
                                         }
                                         Err(e) => {
@@ -5797,8 +6364,13 @@ fn start_screen_capture(
                                         } else {
                                             bgra_to_nv12.as_ref().unwrap().output_textures()
                                         };
+                                        let encoder_device = if rgb_scale_uses_separate_device {
+                                            rgb_scale_device
+                                        } else {
+                                            &pool.device
+                                        };
                                         EncodedH264Encoder::new_auto(
-                                            &pool.device,
+                                            encoder_device,
                                             video_width,
                                             video_height,
                                             fps_u32,
