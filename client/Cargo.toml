@@ -48,6 +48,7 @@ windows = { version = "0.61", optional = true, features = [
     "Win32_System_Ole",             # VARIANT for ICodecAPI SetValue
     "Win32_System_Variant",         # VARIANT::from(u32) for ICodecAPI (B-frames=0, low latency)
     "Win32_System_Threading",       # SetThreadPriority for encoder thread (Phase 4.4)
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [features]

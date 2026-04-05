@@ -28,7 +28,19 @@ fn main() {
         .warnings(false)
         .compile("astrix-nvenc-d11");
 
+    cxx_build::bridge("src/bin/nvenc_d11_bridge.rs")
+        .file("src/nvenc_d11_bridge.cpp")
+        .include("include")
+        .include(&nvcodec_include)
+        .flag("/std:c++20")
+        .flag("/EHsc")
+        .flag("/MD")
+        .warnings(false)
+        .compile("astrix_nvenc_d11_probe");
+    println!("cargo:rustc-link-lib=static=astrix_nvenc_d11_probe");
+
     println!("cargo:rerun-if-changed=src/nvenc_d11_bridge.rs");
     println!("cargo:rerun-if-changed=src/nvenc_d11_bridge.cpp");
     println!("cargo:rerun-if-changed=include/astrix/nvenc_d11_bridge.h");
+    println!("cargo:rerun-if-changed=src/bin/nvenc_d11_bridge.rs");
 }

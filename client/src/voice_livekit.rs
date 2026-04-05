@@ -3718,16 +3718,20 @@ fn start_screen_capture(
     /// Value 0 or 1 = valid slot index; LATEST_SLOT_NONE = no frame yet.
     struct LatestSlot {
         slot: AtomicU8,
+        generation: AtomicU64,
     }
     impl LatestSlot {
         fn new() -> Self {
             Self {
                 slot: AtomicU8::new(LATEST_SLOT_NONE),
+                generation: AtomicU64::new(0),
             }
         }
-        /// WGC: after copy to texture[write_slot], call this. Returns the slot we wrote to.
-        fn store(&self, write_slot: u8) {
+        /// Capture thread: publish the slot only after the texture copy is complete.
+        /// Generation advances once per published frame.
+        fn store(&self, write_slot: u8) -> u64 {
             self.slot.store(write_slot, Ordering::Release);
+            self.generation.fetch_add(1, Ordering::Release) + 1
         }
         /// Encoder: read which slot has the latest frame. None if no frame yet.
         fn load(&self) -> Option<u8> {
@@ -3738,6 +3742,93 @@ fn start_screen_capture(
                 Some(s)
             }
         }
+        fn generation(&self) -> u64 {
+            self.generation.load(Ordering::Acquire)
+        }
+        fn load_published(&self) -> Option<(u8, u64)> {
+            let generation = self.generation();
+            if generation == 0 {
+                return None;
+            }
+            self.load().map(|slot| (slot, generation))
+        }
+    }
+
+    #[derive(Clone)]
+    struct AsyncRgbScaleFrame {
+        texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+        source_wgc: u64,
+        convert_us: u64,
+    }
+
+    fn spawn_async_rgb_scale_worker(
+        stop_flag: Arc<AtomicBool>,
+        pool_ref: Arc<Mutex<Option<GpuTexturePool>>>,
+        latest_slot: Arc<LatestSlot>,
+        _latest_slot_signal: Arc<(parking_lot::Mutex<u64>, parking_lot::Condvar)>,
+        converter: D3d11BgraScale,
+        latest_output: Arc<parking_lot::Mutex<Option<AsyncRgbScaleFrame>>>,
+        failed: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::Builder::new()
+            .name("livekit-rgb-scale".into())
+            .spawn(move || {
+                let mut last_converted_wgc = 0u64;
+                while !stop_flag.load(Ordering::Relaxed) {
+                    let Some((slot, current_wgc)) = latest_slot.load_published() else {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    };
+                    if current_wgc == last_converted_wgc {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    let (texture, context_mutex) = {
+                        let guard = pool_ref.lock();
+                        let Some(pool) = guard.as_ref() else {
+                            drop(guard);
+                            std::thread::sleep(Duration::from_millis(1));
+                            continue;
+                        };
+                        (
+                            pool.textures[slot as usize].clone(),
+                            Arc::clone(&pool.context_mutex),
+                        )
+                    };
+
+                    let convert_start = std::time::Instant::now();
+                    let encoder_tex = match converter.convert(&texture, &context_mutex) {
+                        Ok(tex) => tex,
+                        Err(err) => {
+                            failed.store(true, Ordering::Relaxed);
+                            eprintln!(
+                                "[voice][screen] async direct RGB scale failed: {:?}",
+                                err
+                            );
+                            break;
+                        }
+                    };
+                    let convert_us = convert_start.elapsed().as_micros() as u64;
+                    let flush_start = std::time::Instant::now();
+                    if let Err(err) = converter.flush(&context_mutex) {
+                        failed.store(true, Ordering::Relaxed);
+                        eprintln!(
+                            "[voice][screen] async direct RGB scale flush failed: {:?}",
+                            err
+                        );
+                        break;
+                    }
+                    let flush_us = flush_start.elapsed().as_micros() as u64;
+                    *latest_output.lock() = Some(AsyncRgbScaleFrame {
+                        texture: encoder_tex,
+                        source_wgc: current_wgc,
+                        convert_us: convert_us.saturating_add(flush_us),
+                    });
+                    last_converted_wgc = current_wgc;
+                }
+                eprintln!("[voice][screen] async GPU convert worker stopped");
+            })
+            .expect("failed to spawn async RGB scale worker")
     }
 
     const RING_SIZE: usize = 6;
@@ -3870,6 +3961,8 @@ fn start_screen_capture(
     }
     let ring: Arc<RawFrameRing> = Arc::new(RawFrameRing::new());
     let latest_slot: Arc<LatestSlot> = Arc::new(LatestSlot::new());
+    let latest_slot_signal: Arc<(parking_lot::Mutex<u64>, parking_lot::Condvar)> =
+        Arc::new((parking_lot::Mutex::new(0), parking_lot::Condvar::new()));
     let pool_ref: Arc<Mutex<Option<GpuTexturePool>>> = Arc::new(Mutex::new(None));
     /// When true, WGC callback skips CPU ring (expensive GPU→CPU RGBA copy).
     /// Set by encoder thread on first successful GPU convert; cleared on GPU failure.
@@ -3891,6 +3984,7 @@ fn start_screen_capture(
         ring: Arc<RawFrameRing>,
         stop_flag: Arc<AtomicBool>,
         latest_slot: Arc<LatestSlot>,
+        latest_slot_signal: Arc<(parking_lot::Mutex<u64>, parking_lot::Condvar)>,
         pool_ref: Arc<Mutex<Option<GpuTexturePool>>>,
         gpu_encode_active: Arc<AtomicBool>,
         pool_creation_started: Arc<AtomicBool>,
@@ -3904,6 +3998,7 @@ fn start_screen_capture(
         ring: Arc<RawFrameRing>,
         stop_flag: Arc<AtomicBool>,
         latest_slot: Arc<LatestSlot>,
+        latest_slot_signal: Arc<(parking_lot::Mutex<u64>, parking_lot::Condvar)>,
         pool_ref: Arc<Mutex<Option<GpuTexturePool>>>,
         gpu_encode_active: Arc<AtomicBool>,
         pool_creation_started: Arc<AtomicBool>,
@@ -3923,6 +4018,7 @@ fn start_screen_capture(
                 ring: ctx.flags.ring,
                 stop_flag: ctx.flags.stop_flag,
                 latest_slot: ctx.flags.latest_slot,
+                latest_slot_signal: ctx.flags.latest_slot_signal,
                 pool_ref: ctx.flags.pool_ref,
                 gpu_encode_active: ctx.flags.gpu_encode_active,
                 pool_creation_started: ctx.flags.pool_creation_started,
@@ -4100,7 +4196,10 @@ fn start_screen_capture(
                             }
                             self.telemetry
                                 .set_capture(capture_start.elapsed().as_micros() as u64);
-                            self.latest_slot.store(write_slot);
+                            let published_generation = self.latest_slot.store(write_slot);
+                            let (published_mutex, published_cv) = &*self.latest_slot_signal;
+                            *published_mutex.lock() = published_generation;
+                            published_cv.notify_one();
                         }
                         // else: encoder still converting; drop frame so WGC thread never blocks
                     }
@@ -4140,6 +4239,7 @@ fn start_screen_capture(
     if use_dxgi {
         let stop_dxgi = Arc::clone(&stop_flag);
         let latest_slot_dxgi = Arc::clone(&latest_slot);
+        let latest_slot_signal_dxgi = Arc::clone(&latest_slot_signal);
         let pool_ref_dxgi = Arc::clone(&pool_ref);
         let wgc_frame_count_dxgi = Arc::clone(&wgc_frame_count);
         let wgc_source_fps_milli_dxgi = Arc::clone(&wgc_source_fps_milli);
@@ -4317,7 +4417,10 @@ fn start_screen_capture(
                             capture.context.CopyResource(&our_tex, &texture);
                         }
                         telemetry_dxgi.set_capture(capture_start.elapsed().as_micros() as u64);
-                        latest_slot_dxgi.store(write_slot);
+                        let published_generation = latest_slot_dxgi.store(write_slot);
+                        let (published_mutex, published_cv) = &*latest_slot_signal_dxgi;
+                        *published_mutex.lock() = published_generation;
+                        published_cv.notify_one();
                         if total == 1 {
                             eprintln!("[voice][screen] DXGI first frame copied into latest-slot");
                         }
@@ -4348,6 +4451,7 @@ fn start_screen_capture(
             ring: Arc::clone(&ring),
             stop_flag: Arc::clone(&stop_flag),
             latest_slot: Arc::clone(&latest_slot),
+            latest_slot_signal: Arc::clone(&latest_slot_signal),
             pool_ref: Arc::clone(&pool_ref),
             gpu_encode_active: Arc::clone(&gpu_encode_active),
             pool_creation_started: Arc::clone(&pool_creation_started),
@@ -4405,6 +4509,7 @@ fn start_screen_capture(
             ring: Arc::clone(&ring),
             stop_flag: Arc::clone(&stop_flag),
             latest_slot: Arc::clone(&latest_slot),
+            latest_slot_signal: Arc::clone(&latest_slot_signal),
             pool_ref: Arc::clone(&pool_ref),
             gpu_encode_active: Arc::clone(&gpu_encode_active),
             pool_creation_started: Arc::clone(&pool_creation_started),
@@ -4468,7 +4573,6 @@ fn start_screen_capture(
     let ring_enc = Arc::clone(&ring);
     let latest_slot_enc = Arc::clone(&latest_slot);
     let pool_ref_enc = Arc::clone(&pool_ref);
-    let wgc_frame_count_enc = Arc::clone(&wgc_frame_count);
     let wgc_source_fps_milli_enc = Arc::clone(&wgc_source_fps_milli);
     let gpu_encode_active_enc = Arc::clone(&gpu_encode_active);
     let stats_enc = Arc::clone(&session_stats);
@@ -4708,7 +4812,16 @@ fn start_screen_capture(
                     }
                     let ratio = target_bitrate_bps.max(250_000) as f64
                         / preset_bitrate_bps_u32 as f64;
-                    let capped = if ratio < 0.10 {
+                    let high_fps_locked_startup = lock_preset_fps && max_fps_f64 >= 90.0;
+                    let capped = if high_fps_locked_startup {
+                        if ratio < 0.10 {
+                            60.0
+                        } else if ratio < 0.25 {
+                            90.0
+                        } else {
+                            max_fps_f64
+                        }
+                    } else if ratio < 0.10 {
                         30.0
                     } else if ratio < 0.25 {
                         45.0
@@ -4791,6 +4904,15 @@ fn start_screen_capture(
             // then MFT fallback) lazily initialized when the pool is ready.
             let mut bgra_to_nv12: Option<D3d11BgraToNv12> = None;
             let mut bgra_to_rgb: Option<D3d11BgraScale> = None;
+            let mut nvenc_rgb_scale_output_textures: Option<
+                Vec<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D>,
+            > = None;
+            let mut async_rgb_scale_latest: Option<
+                Arc<parking_lot::Mutex<Option<AsyncRgbScaleFrame>>>,
+            > = None;
+            let mut async_rgb_scale_failed: Option<Arc<AtomicBool>> = None;
+            let mut async_rgb_scale_worker: Option<std::thread::JoinHandle<()>> = None;
+            let mut async_rgb_scale_wait_logged = false;
             let mut mft_encoder: Option<EncodedH264Encoder> = None;
             let mut mft_path_failed = false;
             let mut mft_hard_failed = false;
@@ -5019,9 +5141,14 @@ fn start_screen_capture(
                     );
                     last_startup_transport_cap_fps = startup_cap_fps;
                 }
-                let schedule_cap_fps = current_source_cap_fps
-                    .min(effective_webrtc_cap_fps)
-                    .min(startup_cap_fps);
+                let high_fps_locked_startup = lock_preset_fps && max_fps_f64 >= 90.0 && !past_startup;
+                let schedule_cap_fps = if high_fps_locked_startup {
+                    current_source_cap_fps.min(startup_cap_fps)
+                } else {
+                    current_source_cap_fps
+                        .min(effective_webrtc_cap_fps)
+                        .min(startup_cap_fps)
+                };
                 if let Some(mut st) = stats_enc.try_lock() {
                     st.source_fps = (source_fps > 0.0).then_some(source_fps as f32);
                     st.source_cap_fps = Some(current_source_cap_fps as f32);
@@ -5084,7 +5211,15 @@ fn start_screen_capture(
                 if let Some(ref mut mft) = &mut mft_encoder {
                     if mft.fps() != desired_encoder_fps_u32 {
                         let rate_sync_result = if mft.nvenc_uses_rgb_input() {
-                            if let Some(rgb_scale) = bgra_to_rgb.as_ref() {
+                            if let Some(rgb_textures) =
+                                nvenc_rgb_scale_output_textures.as_deref()
+                            {
+                                mft.set_rates(
+                                    desired_encoder_fps_u32,
+                                    webrtc_target_bitrate_bps,
+                                    rgb_textures,
+                                )
+                            } else if let Some(rgb_scale) = bgra_to_rgb.as_ref() {
                                 mft.set_rates(
                                     desired_encoder_fps_u32,
                                     webrtc_target_bitrate_bps,
@@ -5453,7 +5588,7 @@ fn start_screen_capture(
                             // Skip conversion when WGC hasn't delivered new content —
                             // saves GPU work and reduces pool lock hold time so WGC
                             // can write new frames during encode.
-                            let current_wgc = wgc_frame_count_enc.load(Ordering::Relaxed);
+                            let current_wgc = latest_slot_enc.generation();
                             let is_new_content = current_wgc != last_wgc_count;
                             let need_init = bgra_to_nv12.is_none() || mft_encoder.is_none();
                             if need_init {
@@ -5581,7 +5716,11 @@ fn start_screen_capture(
                                 if mft_encoder.is_none() {
                                     let encoder_init = if encode_path_enc == EncodePath::Auto {
                                         let nvenc_input_ring: &[ID3D11Texture2D] = if can_try_nvenc_rgb_direct {
-                                            if let Some(rgb_scale) = bgra_to_rgb.as_ref() {
+                                            if let Some(rgb_textures) =
+                                                nvenc_rgb_scale_output_textures.as_deref()
+                                            {
+                                                rgb_textures
+                                            } else if let Some(rgb_scale) = bgra_to_rgb.as_ref() {
                                                 rgb_scale.output_textures()
                                             } else {
                                                 nvenc_rgb_ring
@@ -5635,7 +5774,10 @@ fn start_screen_capture(
                                                     eprintln!(
                                                         "[voice][screen] NVENC input path: {}",
                                                         if enc_ref.nvenc_uses_rgb_input() {
-                                                            if bgra_to_rgb.is_some() {
+                                                            if bgra_to_rgb.is_some()
+                                                                || nvenc_rgb_scale_output_textures
+                                                                    .is_some()
+                                                            {
                                                                 "direct RGB scale ring"
                                                             } else {
                                                                 "direct RGB ring"
@@ -5656,6 +5798,35 @@ fn start_screen_capture(
                                                 mft_path_logged = true;
                                                 gpu_encode_active_enc.store(true, Ordering::Relaxed);
                                             }
+                                            if async_rgb_scale_worker.is_none() {
+                                                if let Some(rgb_scale) = bgra_to_rgb.take() {
+                                                    let output_textures =
+                                                        rgb_scale.output_textures().to_vec();
+                                                    nvenc_rgb_scale_output_textures =
+                                                        Some(output_textures);
+                                                    let latest_output = Arc::new(
+                                                        parking_lot::Mutex::new(None),
+                                                    );
+                                                    let failed =
+                                                        Arc::new(AtomicBool::new(false));
+                                                    async_rgb_scale_worker =
+                                                        Some(spawn_async_rgb_scale_worker(
+                                                            Arc::clone(&stop_enc),
+                                                            Arc::clone(&pool_ref_enc),
+                                                            Arc::clone(&latest_slot_enc),
+                                                            Arc::clone(&latest_slot_signal),
+                                                            rgb_scale,
+                                                            Arc::clone(&latest_output),
+                                                            Arc::clone(&failed),
+                                                        ));
+                                                    async_rgb_scale_latest =
+                                                        Some(latest_output);
+                                                    async_rgb_scale_failed = Some(failed);
+                                                    eprintln!(
+                                                        "[voice][screen] async GPU convert worker: enabled (direct RGB scale)"
+                                                    );
+                                                }
+                                            }
                                         }
                                         Err(e) => {
                                             eprintln!("[voice][screen] encoded H.264 backend init failed: {:?}", e);
@@ -5673,12 +5844,30 @@ fn start_screen_capture(
                                     .as_ref()
                                     .map(|enc| enc.nvenc_uses_rgb_input())
                                     .unwrap_or(false);
+                                let async_rgb_scale_active = encoder_uses_rgb_input
+                                    && async_rgb_scale_latest.is_some()
+                                    && nvenc_rgb_scale_output_textures.is_some();
+                                if async_rgb_scale_active {
+                                    if async_rgb_scale_failed
+                                        .as_ref()
+                                        .map(|f| f.load(Ordering::Relaxed))
+                                        .unwrap_or(false)
+                                    {
+                                        eprintln!(
+                                            "[voice][screen] async GPU convert worker failed"
+                                        );
+                                        mft_path_failed = true;
+                                        mft_hard_failed = true;
+                                        continue;
+                                    }
+                                }
                                 if let Some(enc) = mft_encoder.as_ref() {
                                     if enc.is_async()
                                         && matches!(
                                             enc.backend_kind(),
                                             EncodedBackendKind::NvencD3d11
                                         )
+                                        && !async_rgb_scale_active
                                         && frame_count >= 3
                                     {
                                         let nvenc_in_flight =
@@ -5708,6 +5897,33 @@ fn start_screen_capture(
                                 if skip_fresh_convert_due_backpressure {
                                     // Let the encoder drain before spending GPU work on a frame
                                     // that would likely be dropped on submit anyway.
+                                } else if async_rgb_scale_active {
+                                    if let Some(frame) = async_rgb_scale_latest
+                                        .as_ref()
+                                        .and_then(|state| state.lock().clone())
+                                    {
+                                        if frame.source_wgc != last_wgc_count {
+                                            converted_nv12_tex = Some(frame.texture.clone());
+                                            last_encoder_input_tex = Some(frame.texture);
+                                            push_trace_stats.convert_ok = push_trace_stats
+                                                .convert_ok
+                                                .saturating_add(1);
+                                            push_trace_stats.convert_us_total =
+                                                push_trace_stats
+                                                    .convert_us_total
+                                                    .saturating_add(frame.convert_us);
+                                            telemetry_enc.set_convert(frame.convert_us);
+                                            last_wgc_count = frame.source_wgc;
+                                            if trace_this_tick {
+                                                eprintln!(
+                                                    "[voice][screen][push][tick {}] async direct RGB scale ready source_wgc={} us={}",
+                                                    push_trace_tick_idx,
+                                                    frame.source_wgc,
+                                                    frame.convert_us,
+                                                );
+                                            }
+                                        }
+                                    }
                                 } else if encoder_uses_rgb_input {
                                     if let Some(rgb_scale) = bgra_to_rgb.as_ref() {
                                         let convert_start = std::time::Instant::now();
@@ -5978,14 +6194,30 @@ fn start_screen_capture(
                             {
                                 Some(tex) => tex,
                                 None => {
-                                    eprintln!(
-                                        "[voice][screen] encoded path missing encoder input texture"
-                                    );
-                                    mft_path_failed = true;
-                                    mft_hard_failed = true;
+                                    let waiting_async_rgb_scale =
+                                        async_rgb_scale_latest.is_some()
+                                        && nvenc_rgb_scale_output_textures.is_some();
+                                    if waiting_async_rgb_scale {
+                                        push_trace_stats.empty_output_ticks = push_trace_stats
+                                            .empty_output_ticks
+                                            .saturating_add(1);
+                                        if !async_rgb_scale_wait_logged {
+                                            eprintln!(
+                                                "[voice][screen] async GPU convert worker: waiting for first scaled frame"
+                                            );
+                                            async_rgb_scale_wait_logged = true;
+                                        }
+                                    } else {
+                                        eprintln!(
+                                            "[voice][screen] encoded path missing encoder input texture"
+                                        );
+                                        mft_path_failed = true;
+                                        mft_hard_failed = true;
+                                    }
                                     continue;
                                 }
                             };
+                            async_rgb_scale_wait_logged = false;
                             // Phase 4.6: pipelined submit/collect for async MFT.
                             // Use submit + collect_blocking so frame is pushed in same iteration (no 1-frame delay).
                                 let use_pipelined = mft_encoder.as_ref().map(|m| m.is_async()).unwrap_or(false)
@@ -6026,7 +6258,11 @@ fn start_screen_capture(
                                 // caps sender throughput at roughly the MFT output latency.
                                 let startup_collect_blocking = frame_count < 3;
                                 let fresh_nv12_this_tick = converted_nv12_tex.is_some();
-                                let skip_new_submit_this_tick = skip_fresh_convert_due_backpressure;
+                                let skip_new_submit_this_tick =
+                                    skip_fresh_convert_due_backpressure
+                                        || (async_rgb_scale_latest.is_some()
+                                            && nvenc_rgb_scale_output_textures.is_some()
+                                            && !fresh_nv12_this_tick);
                                 let steady_timeout_ms = match mft.backend_kind() {
                                     EncodedBackendKind::NvencD3d11 => {
                                         ((current_effective_interval.as_millis() as u32)
@@ -6062,7 +6298,8 @@ fn start_screen_capture(
                                 // a shallow delay here.
                                 let active_submit_delay_frames = if current_fps >= 90.0
                                     && mft.nvenc_uses_rgb_input()
-                                    && bgra_to_rgb.is_some()
+                                    && (bgra_to_rgb.is_some()
+                                        || nvenc_rgb_scale_output_textures.is_some())
                                 {
                                     let nvenc_ring =
                                         mft.nvenc_input_ring_size().unwrap_or(submit_delay_frames);
@@ -6079,7 +6316,13 @@ fn start_screen_capture(
                                         "[voice][screen] NVENC active submit delay: {} frame(s) (ring {}, rgb_scale={})",
                                         active_submit_delay_frames,
                                         mft.nvenc_input_ring_size().unwrap_or(0),
-                                        if bgra_to_rgb.is_some() { "on" } else { "off" }
+                                        if bgra_to_rgb.is_some()
+                                            || nvenc_rgb_scale_output_textures.is_some()
+                                        {
+                                            "on"
+                                        } else {
+                                            "off"
+                                        }
                                     );
                                     last_logged_active_submit_delay_frames =
                                         Some(active_submit_delay_frames);
@@ -7248,6 +7491,9 @@ fn start_screen_capture(
             // Signal capture_frame thread to exit and wait for it (I420 path only).
             if let Some(tx) = capture_tx_opt { drop(tx); }
             if let Some(handle) = capture_handle {
+                let _ = handle.join();
+            }
+            if let Some(handle) = async_rgb_scale_worker {
                 let _ = handle.join();
             }
 
