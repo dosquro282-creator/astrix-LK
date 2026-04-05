@@ -1,7 +1,7 @@
 //! Phase 2 NVENC D3D11 backend.
 //!
 //! This path keeps the existing sender contract intact:
-//! - NV12 D3D11 textures in
+//! - D3D11 textures in (NV12 or packed RGB)
 //! - Annex B H.264 packets out
 //! - async submit/collect semantics compatible with the current MFT path
 
@@ -13,7 +13,12 @@ use cxx::UniquePtr;
 use thiserror::Error;
 use windows::core::{w, Interface};
 use windows::Win32::Foundation::FreeLibrary;
-use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_TEXTURE2D_DESC, ID3D11Device, ID3D11Texture2D,
+};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
+};
 use windows::Win32::System::LibraryLoader::LoadLibraryW;
 
 use crate::gpu_device::{GpuDevice, GpuDeviceError};
@@ -73,7 +78,7 @@ pub enum NvencD3d11Error {
     RuntimeMissing,
     #[error("NVENC D3D11 bridge error: {0}")]
     Bridge(#[from] cxx::Exception),
-    #[error("NVENC D3D11 requires a non-empty NV12 ring")]
+    #[error("NVENC D3D11 requires a non-empty input ring")]
     EmptyInputRing,
     #[error("NVENC D3D11 session returned output without matching frame metadata")]
     MissingFrameMeta,
@@ -84,7 +89,16 @@ pub enum NvencD3d11Error {
 impl NvencD3d11Error {
     pub fn should_fallback_to_mft(&self) -> bool {
         !matches!(self, Self::QueueFull { .. })
+            && !matches!(self, Self::Bridge(err) if is_nvenc_backpressure_message(&err.to_string()))
     }
+}
+
+fn is_nvenc_backpressure_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("queue is full")
+        || lower.contains("queue stayed full")
+        || lower.contains("output slot is still reserved")
+        || lower.contains("output slot became busy")
 }
 
 #[derive(Debug)]
@@ -113,8 +127,16 @@ pub struct NvencD3d11Encoder {
     bitrate: u32,
     async_encode: bool,
     input_ring_size: usize,
+    uses_rgb_input: bool,
     meta_queue: VecDeque<FrameMeta>,
     pending_outputs: VecDeque<PendingOutput>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NvencSubmitBreakdown {
+    pub map_us: u64,
+    pub encode_picture_us: u64,
+    pub total_us: u64,
 }
 
 impl NvencD3d11Encoder {
@@ -135,9 +157,9 @@ impl NvencD3d11Encoder {
         height: u32,
         fps: u32,
         bitrate: u32,
-        nv12_ring: &[ID3D11Texture2D],
+        input_ring: &[ID3D11Texture2D],
     ) -> Result<Self, NvencD3d11Error> {
-        if nv12_ring.is_empty() {
+        if input_ring.is_empty() {
             return Err(NvencD3d11Error::EmptyInputRing);
         }
 
@@ -151,7 +173,11 @@ impl NvencD3d11Encoder {
             return Err(NvencD3d11Error::RuntimeMissing);
         }
 
-        let texture_ptrs: Vec<usize> = nv12_ring.iter().map(texture_raw_ptr).collect();
+        let mut first_desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { input_ring[0].GetDesc(&mut first_desc) };
+        let uses_rgb_input = first_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM.into()
+            || first_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM.into();
+        let texture_ptrs: Vec<usize> = input_ring.iter().map(texture_raw_ptr).collect();
         let session = ffi::nvenc_d3d11_create(
             device.as_raw() as usize,
             width,
@@ -180,6 +206,7 @@ impl NvencD3d11Encoder {
             bitrate,
             async_encode,
             input_ring_size,
+            uses_rgb_input,
             meta_queue: VecDeque::new(),
             pending_outputs: VecDeque::new(),
         })
@@ -199,6 +226,32 @@ impl NvencD3d11Encoder {
 
     pub fn is_async(&self) -> bool {
         self.async_encode
+    }
+
+    pub fn uses_rgb_input(&self) -> bool {
+        self.uses_rgb_input
+    }
+
+    pub fn input_ring_size(&self) -> usize {
+        self.input_ring_size
+    }
+
+    pub fn in_flight_count(&self) -> usize {
+        self.session
+            .as_ref()
+            .map(|session| session.in_flight_count() as usize)
+            .unwrap_or(0)
+    }
+
+    pub fn last_submit_breakdown(&self) -> NvencSubmitBreakdown {
+        let Some(session) = self.session.as_ref() else {
+            return NvencSubmitBreakdown::default();
+        };
+        NvencSubmitBreakdown {
+            map_us: session.last_submit_map_us(),
+            encode_picture_us: session.last_submit_encode_picture_us(),
+            total_us: session.last_submit_total_us(),
+        }
     }
 
     pub fn encode(
@@ -231,7 +284,12 @@ impl NvencD3d11Encoder {
             .unwrap_or(0)
             >= self.input_ring_size
         {
-            match self.collect_impl(need_input_timeout_ms.max(1))? {
+            let collect_timeout_ms = if self.async_encode {
+                0
+            } else {
+                need_input_timeout_ms.max(1)
+            };
+            match self.collect_impl(collect_timeout_ms)? {
                 Some(output) => self.pending_outputs.push_back(output),
                 None => {
                     return Err(NvencD3d11Error::QueueFull {
@@ -242,9 +300,15 @@ impl NvencD3d11Encoder {
             }
         }
 
-        self.session
-            .pin_mut()
-            .submit(texture_raw_ptr(texture), key_frame)?;
+        if let Err(err) = self.session.pin_mut().submit(texture_raw_ptr(texture), key_frame) {
+            if is_nvenc_backpressure_message(&err.to_string()) {
+                return Err(NvencD3d11Error::QueueFull {
+                    pending: self.meta_queue.len(),
+                    ring_size: self.input_ring_size,
+                });
+            }
+            return Err(NvencD3d11Error::Bridge(err));
+        }
         self.meta_queue.push_back(FrameMeta {
             timestamp_us: ts_us,
             rtp_ts,

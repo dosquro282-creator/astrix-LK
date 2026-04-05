@@ -22,6 +22,9 @@ pub mod ffi {
         fn in_flight_count(self: &NvencD3D11Session) -> u32;
         fn collect(self: Pin<&mut NvencD3D11Session>, timeout_ms: u32) -> Result<Vec<u8>>;
         fn last_encode_time_us(self: &NvencD3D11Session) -> u64;
+        fn last_submit_map_us(self: &NvencD3D11Session) -> u64;
+        fn last_submit_encode_picture_us(self: &NvencD3D11Session) -> u64;
+        fn last_submit_total_us(self: &NvencD3D11Session) -> u64;
         fn submit(
             self: Pin<&mut NvencD3D11Session>,
             texture_ptr: usize,

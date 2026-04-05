@@ -94,18 +94,18 @@ impl ScreenPreset {
     /// Too-tight budget makes the RC skip frames, causing stutter.
     pub fn params(self) -> (u32, u32, f64, u64) {
         match self {
-            Self::P720F30 => (1280, 720, 30.0, 5_000_000),
-            Self::P720F60 => (1280, 720, 60.0, 8_000_000),
-            Self::P720F120 => (1280, 720, 120.0, 16_000_000),
-            Self::P1080F30 => (1920, 1080, 30.0, 8_000_000),
-            Self::P1080F60 => (1920, 1080, 60.0, 12_000_000),
-            Self::P1080F120 => (1920, 1080, 120.0, 20_000_000),
-            Self::P1440F30 => (2560, 1440, 30.0, 12_000_000),
-            Self::P1440F60 => (2560, 1440, 60.0, 18_000_000),
+            Self::P720F30 => (1280, 720, 30.0, 6_500_000),
+            Self::P720F60 => (1280, 720, 60.0, 10_400_000),
+            Self::P720F120 => (1280, 720, 120.0, 20_800_000),
+            Self::P1080F30 => (1920, 1080, 30.0, 10_400_000),
+            Self::P1080F60 => (1920, 1080, 60.0, 15_600_000),
+            Self::P1080F120 => (1920, 1080, 120.0, 26_000_000),
+            Self::P1440F30 => (2560, 1440, 30.0, 15_600_000),
+            Self::P1440F60 => (2560, 1440, 60.0, 23_400_000),
             // 24 Mbps is too tight for 1440p90, but 60 Mbps creates heavy
             // bursts on periodic IDRs and can destabilize the subscriber path.
             // Keep this roomy, but below the point where receiver jitter grows.
-            Self::P1440F90 => (2560, 1440, 90.0, 35_000_000),
+            Self::P1440F90 => (2560, 1440, 90.0, 45_500_000),
         }
     }
 
@@ -114,11 +114,11 @@ impl ScreenPreset {
     /// 90/120 fps presets cap to 60 fps. Bitrates are still generous for Baseline profile.
     pub fn effective_params_for_cpu(self) -> (u32, u32, f64, u64) {
         match self {
-            Self::P720F60 => (1280, 720, 30.0, 10_000_000),
-            Self::P1080F60 => (1920, 1080, 30.0, 20_000_000),
-            Self::P720F120 => (1280, 720, 60.0, 20_000_000),
-            Self::P1080F120 => (1920, 1080, 60.0, 35_000_000),
-            Self::P1440F90 => (2560, 1440, 60.0, 50_000_000),
+            Self::P720F60 => (1280, 720, 30.0, 13_000_000),
+            Self::P1080F60 => (1920, 1080, 30.0, 26_000_000),
+            Self::P720F120 => (1280, 720, 60.0, 26_000_000),
+            Self::P1080F120 => (1920, 1080, 60.0, 45_500_000),
+            Self::P1440F90 => (2560, 1440, 60.0, 65_000_000),
             _ => self.params(),
         }
     }
@@ -212,6 +212,38 @@ pub struct VoiceSessionStats {
     pub frames_per_second: Option<f32>,
     /// Upload speed (отдача), Mbit/s. Target bitrate when real stats unavailable.
     pub connection_speed_mbps: Option<f32>,
+    /// Raw sender-side bitrate target requested by WebRTC congestion control, Mbit/s.
+    pub webrtc_requested_bitrate_mbps: Option<f32>,
+    /// Current sender-side bitrate actually applied to the encoder, Mbit/s.
+    pub webrtc_target_bitrate_mbps: Option<f32>,
+    /// Current sender-side FPS hint requested by WebRTC congestion control.
+    pub webrtc_fps_hint: Option<f32>,
+    /// Actual encoded H.264 throughput before RTP/WebRTC packetization, Mbit/s.
+    pub encoded_pre_rtp_bitrate_mbps: Option<f32>,
+    /// Current estimated source/compositor FPS on the sender.
+    pub source_fps: Option<f32>,
+    /// Current sender-side FPS ceiling imposed by source content cadence.
+    pub source_cap_fps: Option<f32>,
+    /// Current effective FPS ceiling derived from WebRTC target bitrate/fps hint.
+    pub webrtc_effective_fps_cap: Option<f32>,
+    /// Current startup-only transport cap used during stream bring-up.
+    pub startup_transport_cap_fps: Option<f32>,
+    /// Final sender schedule cap after combining source/WebRTC/startup limits.
+    pub final_schedule_cap_fps: Option<f32>,
+    /// Current available outgoing bitrate reported by the selected ICE candidate pair, Mbit/s.
+    pub webrtc_available_outgoing_bitrate_mbps: Option<f32>,
+    /// Remote-reported packet loss for outgoing video, %.
+    pub webrtc_packet_loss_pct: Option<f32>,
+    /// Total NACK count reported for outgoing video RTP stats.
+    pub webrtc_nack_count: Option<u32>,
+    /// Total PLI count reported for outgoing video RTP stats.
+    pub webrtc_pli_count: Option<u32>,
+    /// Quality limitation reason reported by outgoing video RTP stats.
+    pub webrtc_quality_limitation_reason: Option<String>,
+    /// Human-readable description of the selected ICE candidate pair.
+    pub webrtc_transport_path: Option<String>,
+    /// Current RTT for the selected ICE candidate pair, ms.
+    pub webrtc_transport_rtt_ms: Option<f32>,
     /// Incoming stream speed (приём) when watching someone's stream, Mbit/s. Estimated from received frames.
     pub incoming_speed_mbps: Option<f32>,
     /// Encoding path for outgoing video: "CPU" or "GPU" (screen share). None when not streaming.

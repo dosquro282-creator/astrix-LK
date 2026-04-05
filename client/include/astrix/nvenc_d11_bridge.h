@@ -28,6 +28,9 @@ class NvencD3D11Session {
   std::uint32_t in_flight_count() const;
   rust::Vec<std::uint8_t> collect(std::uint32_t timeout_ms);
   std::uint64_t last_encode_time_us() const;
+  std::uint64_t last_submit_map_us() const;
+  std::uint64_t last_submit_encode_picture_us() const;
+  std::uint64_t last_submit_total_us() const;
   void submit(std::uintptr_t texture_ptr, bool force_idr);
   void set_bitrate(std::uint32_t bitrate);
 

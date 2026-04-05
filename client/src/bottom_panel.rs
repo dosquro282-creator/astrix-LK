@@ -63,6 +63,22 @@ pub struct BottomPanelVoiceSnapshot {
     pub stream_fps: Option<f32>,
     pub resolution: Option<(u32, u32)>,
     pub outgoing_speed_mbps: Option<f32>,
+    pub webrtc_requested_bitrate_mbps: Option<f32>,
+    pub webrtc_target_bitrate_mbps: Option<f32>,
+    pub webrtc_fps_hint: Option<f32>,
+    pub encoded_pre_rtp_bitrate_mbps: Option<f32>,
+    pub source_fps: Option<f32>,
+    pub source_cap_fps: Option<f32>,
+    pub webrtc_effective_fps_cap: Option<f32>,
+    pub startup_transport_cap_fps: Option<f32>,
+    pub final_schedule_cap_fps: Option<f32>,
+    pub webrtc_available_outgoing_bitrate_mbps: Option<f32>,
+    pub webrtc_packet_loss_pct: Option<f32>,
+    pub webrtc_nack_count: Option<u32>,
+    pub webrtc_pli_count: Option<u32>,
+    pub webrtc_quality_limitation_reason: Option<String>,
+    pub webrtc_transport_path: Option<String>,
+    pub webrtc_transport_rtt_ms: Option<f32>,
     pub encoding_path: Option<String>,
     pub decoding_path: Option<String>,
 }
@@ -498,6 +514,152 @@ fn latency_popup_contents(ui: &mut egui::Ui, theme: &Theme, voice: &BottomPanelV
     ui.add_space(10.0);
     ui.separator();
     ui.add_space(8.0);
+
+    let (_, _, preset_fps, preset_bitrate_bps) = voice.screen_preset.params();
+
+    popup_stat_row(
+        ui,
+        theme,
+        "Preset",
+        format!(
+            "{} / {:.0} fps / {:.1} Mbps",
+            voice.screen_preset.label(),
+            preset_fps,
+            preset_bitrate_bps as f32 / 1_000_000.0
+        ),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Source FPS",
+        voice
+            .source_fps
+            .map(|fps| format!("{fps:.1}"))
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Caps",
+        format!(
+            "src {} / bwe {} / boot {} / final {}",
+            voice
+                .source_cap_fps
+                .map(|fps| format!("{fps:.0}"))
+                .unwrap_or_else(|| "-".to_string()),
+            voice
+                .webrtc_effective_fps_cap
+                .map(|fps| format!("{fps:.0}"))
+                .unwrap_or_else(|| "-".to_string()),
+            voice
+                .startup_transport_cap_fps
+                .map(|fps| format!("{fps:.0}"))
+                .unwrap_or_else(|| "-".to_string()),
+            voice
+                .final_schedule_cap_fps
+                .map(|fps| format!("{fps:.0}"))
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "BWE target",
+        voice
+            .webrtc_requested_bitrate_mbps
+            .map(|speed| format!("{speed:.2} Mbps"))
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Encoder bitrate",
+        voice
+            .webrtc_target_bitrate_mbps
+            .map(|speed| format!("{speed:.2} Mbps"))
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "FPS hint",
+        voice
+            .webrtc_fps_hint
+            .map(|fps| format!("{fps:.1}"))
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Available bitrate",
+        voice
+            .webrtc_available_outgoing_bitrate_mbps
+            .map(|speed| format!("{speed:.2} Mbps"))
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Pre-RTP bitrate",
+        voice
+            .encoded_pre_rtp_bitrate_mbps
+            .map(|speed| format!("{speed:.2} Mbps"))
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Packet loss",
+        voice
+            .webrtc_packet_loss_pct
+            .map(|loss| format!("{loss:.2}%"))
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "NACK",
+        voice
+            .webrtc_nack_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "PLI",
+        voice
+            .webrtc_pli_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Quality limit",
+        voice
+            .webrtc_quality_limitation_reason
+            .clone()
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Transport path",
+        voice
+            .webrtc_transport_path
+            .clone()
+            .unwrap_or_else(|| "-".to_string()),
+    );
+    popup_stat_row(
+        ui,
+        theme,
+        "Transport RTT",
+        voice
+            .webrtc_transport_rtt_ms
+            .map(|rtt| format!("{rtt:.1} ms"))
+            .unwrap_or_else(|| "-".to_string()),
+    );
 
     popup_stat_row(
         ui,

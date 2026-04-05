@@ -14,7 +14,7 @@ use thiserror::Error;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 
 use crate::mft_encoder::{EncodedFrame, MftEncoderError, MftH264Encoder};
-use crate::nvenc_d11::{NvencD3d11Encoder, NvencD3d11Error};
+use crate::nvenc_d11::{NvencD3d11Encoder, NvencD3d11Error, NvencSubmitBreakdown};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodedBackendKind {
@@ -253,6 +253,72 @@ impl EncodedH264Encoder {
         }
     }
 
+    pub fn set_rates(
+        &mut self,
+        fps: u32,
+        bitrate: u32,
+        nv12_ring: &[ID3D11Texture2D],
+    ) -> Result<(), EncodedH264EncoderError> {
+        let fps = fps.max(1);
+        if fps == self.config.fps {
+            return self.set_bitrate(bitrate);
+        }
+
+        let old_fps = self.config.fps;
+        let old_bitrate = self.config.bitrate;
+        let backend_kind = self.backend_kind();
+        let new_inner = match backend_kind {
+            EncodedBackendKind::NvencD3d11 => match NvencD3d11Encoder::new(
+                &self.config.device,
+                self.config.width,
+                self.config.height,
+                fps,
+                bitrate,
+                nv12_ring,
+            ) {
+                Ok(enc) => EncodedH264EncoderImpl::Nvenc(enc),
+                Err(err)
+                    if self.config.allow_runtime_mft_fallback && err.should_fallback_to_mft() =>
+                {
+                    eprintln!(
+                        "[encoded_h264] NVENC D3D11 rate reconfigure failed, rebuilding as MFT: {}",
+                        err
+                    );
+                    EncodedH264EncoderImpl::Mft(MftH264Encoder::new(
+                        &self.config.device,
+                        self.config.width,
+                        self.config.height,
+                        fps,
+                        bitrate,
+                    )?)
+                }
+                Err(err) => return Err(err.into()),
+            },
+            EncodedBackendKind::MftHardware | EncodedBackendKind::MftSoftware => {
+                EncodedH264EncoderImpl::Mft(MftH264Encoder::new(
+                    &self.config.device,
+                    self.config.width,
+                    self.config.height,
+                    fps,
+                    bitrate,
+                )?)
+            }
+        };
+
+        self.inner = new_inner;
+        self.config.fps = fps;
+        self.config.bitrate = bitrate;
+        eprintln!(
+            "[encoded_h264] backend rate reconfigured: fps {} -> {}, bitrate {:.2} -> {:.2} Mbps ({})",
+            old_fps,
+            fps,
+            old_bitrate as f64 / 1_000_000.0,
+            bitrate as f64 / 1_000_000.0,
+            self.encoder_name().trim_end_matches('\0')
+        );
+        Ok(())
+    }
+
     pub fn is_async(&self) -> bool {
         match &self.inner {
             EncodedH264EncoderImpl::Nvenc(enc) => enc.is_async(),
@@ -264,6 +330,27 @@ impl EncodedH264Encoder {
         match &self.inner {
             EncodedH264EncoderImpl::Nvenc(enc) => enc.is_hardware(),
             EncodedH264EncoderImpl::Mft(enc) => enc.is_hardware(),
+        }
+    }
+
+    pub fn nvenc_uses_rgb_input(&self) -> bool {
+        match &self.inner {
+            EncodedH264EncoderImpl::Nvenc(enc) => enc.uses_rgb_input(),
+            EncodedH264EncoderImpl::Mft(_) => false,
+        }
+    }
+
+    pub fn nvenc_input_ring_size(&self) -> Option<usize> {
+        match &self.inner {
+            EncodedH264EncoderImpl::Nvenc(enc) => Some(enc.input_ring_size()),
+            EncodedH264EncoderImpl::Mft(_) => None,
+        }
+    }
+
+    pub fn nvenc_in_flight_count(&self) -> Option<usize> {
+        match &self.inner {
+            EncodedH264EncoderImpl::Nvenc(enc) => Some(enc.in_flight_count()),
+            EncodedH264EncoderImpl::Mft(_) => None,
         }
     }
 
@@ -282,6 +369,21 @@ impl EncodedH264Encoder {
             EncodedH264EncoderImpl::Nvenc(enc) => Cow::Borrowed(enc.encoder_name()),
             EncodedH264EncoderImpl::Mft(enc) => Cow::Borrowed(enc.encoder_name()),
         }
+    }
+
+    pub fn last_nvenc_submit_breakdown(&self) -> Option<NvencSubmitBreakdown> {
+        match &self.inner {
+            EncodedH264EncoderImpl::Nvenc(enc) => Some(enc.last_submit_breakdown()),
+            EncodedH264EncoderImpl::Mft(_) => None,
+        }
+    }
+
+    pub fn bitrate_bps(&self) -> u32 {
+        self.config.bitrate
+    }
+
+    pub fn fps(&self) -> u32 {
+        self.config.fps
     }
 
     fn promote_nvenc_to_mft(

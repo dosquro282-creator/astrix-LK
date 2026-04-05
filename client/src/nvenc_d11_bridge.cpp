@@ -4,10 +4,16 @@
 #include <dxgi.h>
 #include <windows.h>
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
+#include <cstring>
+#include <cstdio>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -100,10 +106,69 @@ NV_ENCODE_API_FUNCTION_LIST CreateApi(HMODULE module) {
   return api;
 }
 
+uint32_t ComputeVbvBufferBits(uint32_t bitrate, uint32_t fps) {
+  const uint32_t safe_fps = fps > 0 ? fps : 1u;
+  const uint64_t frame_bits =
+      static_cast<uint64_t>(bitrate) / safe_fps > 0
+          ? static_cast<uint64_t>(bitrate) / safe_fps
+          : 1u;
+  const uint64_t frame_window_bits =
+      frame_bits * (safe_fps >= 90 ? 12ull : safe_fps >= 60 ? 8ull : 6ull);
+  const uint64_t duration_window_bits =
+      static_cast<uint64_t>(bitrate) / 4u > 0
+          ? static_cast<uint64_t>(bitrate) / 4u
+          : 1u;
+  const uint64_t vbv_bits =
+      frame_window_bits > duration_window_bits ? frame_window_bits
+                                               : duration_window_bits;
+  const uint64_t max_u32 = static_cast<uint64_t>(UINT32_MAX);
+  return static_cast<uint32_t>(
+      vbv_bits > max_u32 ? max_u32 : vbv_bits);
+}
+
+struct DetectedInputFormat {
+  NV_ENC_BUFFER_FORMAT nvenc_format;
+  DXGI_FORMAT dxgi_format;
+  const char* label;
+};
+
+DetectedInputFormat DetectInputFormat(
+    const rust::Vec<std::uintptr_t>& texture_ptrs) {
+  if (texture_ptrs.empty()) {
+    throw std::runtime_error("NVENC D3D11 requires at least one input texture");
+  }
+  auto* texture = reinterpret_cast<ID3D11Texture2D*>(texture_ptrs[0]);
+  if (!texture) {
+    throw std::runtime_error("NVENC D3D11 texture pointer is null");
+  }
+
+  D3D11_TEXTURE2D_DESC desc = {};
+  texture->GetDesc(&desc);
+  if (desc.Format == DXGI_FORMAT_NV12) {
+    return {NV_ENC_BUFFER_FORMAT_NV12, DXGI_FORMAT_NV12, "NV12"};
+  }
+  if (desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM) {
+    return {NV_ENC_BUFFER_FORMAT_ARGB, DXGI_FORMAT_B8G8R8A8_UNORM,
+            "ARGB/BGRA"};
+  }
+  if (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM) {
+    return {NV_ENC_BUFFER_FORMAT_ABGR, DXGI_FORMAT_R8G8B8A8_UNORM,
+            "ABGR/RGBA"};
+  }
+
+  std::ostringstream oss;
+  oss << "NVENC D3D11 unsupported input DXGI format: "
+      << static_cast<int>(desc.Format);
+  throw std::runtime_error(oss.str());
+}
+
 }  // namespace
 
 struct PendingSubmission {
+  uint32_t input_slot = 0;
   uint32_t output_slot = 0;
+  bool force_idr = false;
+  std::chrono::steady_clock::time_point enqueued_at;
   std::chrono::steady_clock::time_point submitted_at;
 };
 
@@ -116,6 +181,7 @@ struct OutputSlot {
   HANDLE completion_event = nullptr;
   NV_ENC_OUTPUT_PTR bitstream = nullptr;
   NV_ENC_INPUT_PTR mapped_input = nullptr;
+  bool reserved = false;
 };
 
 struct NvencD3D11Session::Impl {
@@ -131,7 +197,7 @@ struct NvencD3D11Session::Impl {
         bitrate_(bitrate),
         ring_size_(static_cast<uint32_t>(texture_ptrs.size())) {
     if (ring_size_ == 0) {
-      throw std::runtime_error("NVENC D3D11 requires at least one NV12 texture");
+      throw std::runtime_error("NVENC D3D11 requires at least one input texture");
     }
 
     device_ = reinterpret_cast<ID3D11Device*>(d3d11_device);
@@ -140,6 +206,10 @@ struct NvencD3D11Session::Impl {
     }
     device_->AddRef();
     encoder_name_ = AdapterNameFromDevice(device_);
+    const auto detected_input_format = DetectInputFormat(texture_ptrs);
+    input_buffer_format_ = detected_input_format.nvenc_format;
+    input_dxgi_format_ = detected_input_format.dxgi_format;
+    input_format_label_ = detected_input_format.label;
 
     module_ = LoadLibraryW(L"nvEncodeAPI64.dll");
     if (!module_) {
@@ -163,6 +233,10 @@ struct NvencD3D11Session::Impl {
     if (!stop_event_) {
       throw std::runtime_error("CreateEventW failed for NVENC stop event");
     }
+    submit_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!submit_event_) {
+      throw std::runtime_error("CreateEventW failed for NVENC submit event");
+    }
     StartOutputWorker();
   }
 
@@ -177,7 +251,7 @@ struct NvencD3D11Session::Impl {
   std::uint32_t in_flight_count() const {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ThrowWorkerErrorLocked();
-    return static_cast<std::uint32_t>(pending_.size());
+    return static_cast<std::uint32_t>(submit_queue_.size() + in_flight_.size());
   }
 
   std::uint64_t last_encode_time_us() const {
@@ -185,18 +259,29 @@ struct NvencD3D11Session::Impl {
     return last_encode_time_us_;
   }
 
+  std::uint64_t last_submit_map_us() const {
+    return last_submit_map_us_.load(std::memory_order_relaxed);
+  }
+
+  std::uint64_t last_submit_encode_picture_us() const {
+    return last_submit_encode_picture_us_.load(std::memory_order_relaxed);
+  }
+
+  std::uint64_t last_submit_total_us() const {
+    return last_submit_total_us_.load(std::memory_order_relaxed);
+  }
+
   void submit(std::uintptr_t texture_ptr, bool force_idr) {
+    const auto submit_started_at = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> submit_lock(submit_mutex_);
 
     uint32_t input_slot = 0;
     uint32_t output_slot = 0;
-    HANDLE completion_event = nullptr;
-    NV_ENC_OUTPUT_PTR bitstream = nullptr;
 
     {
       std::lock_guard<std::mutex> lock(queue_mutex_);
       ThrowWorkerErrorLocked();
-      if (pending_.size() >= outputs_.size()) {
+      if (submit_queue_.size() + in_flight_.size() >= outputs_.size()) {
         throw std::runtime_error("NVENC D3D11 queue is full");
       }
 
@@ -206,68 +291,38 @@ struct NvencD3D11Session::Impl {
             "NVENC D3D11 received a texture outside the registered ring");
       }
       input_slot = it->second;
-      output_slot =
-          static_cast<uint32_t>(next_submit_index_ % outputs_.size());
-      auto& out = outputs_[output_slot];
-      if (out.mapped_input != nullptr) {
-        throw std::runtime_error(
-            "NVENC D3D11 output slot still has a mapped input");
-      }
-      completion_event = out.completion_event;
-      bitstream = out.bitstream;
-    }
-
-    NV_ENC_INPUT_PTR mapped_input = nullptr;
-    {
-      std::lock_guard<std::mutex> api_lock(api_mutex_);
-      NV_ENC_MAP_INPUT_RESOURCE map_input = {NV_ENC_MAP_INPUT_RESOURCE_VER};
-      map_input.registeredResource = registered_inputs_[input_slot];
-      CheckNvenc(api_.nvEncMapInputResource(encoder_, &map_input),
-                 "nvEncMapInputResource failed");
-      mapped_input = map_input.mappedResource;
-
-      NV_ENC_PIC_PARAMS pic_params = {NV_ENC_PIC_PARAMS_VER};
-      pic_params.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
-      pic_params.inputBuffer = mapped_input;
-      pic_params.bufferFmt = NV_ENC_BUFFER_FORMAT_NV12;
-      pic_params.inputWidth = width_;
-      pic_params.inputHeight = height_;
-      pic_params.outputBitstream = bitstream;
-      pic_params.completionEvent = completion_event;
-      if (force_idr) {
-        pic_params.encodePicFlags = NV_ENC_PIC_FLAG_FORCEINTRA |
-                                    NV_ENC_PIC_FLAG_FORCEIDR |
-                                    NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
-      }
-
-      const NVENCSTATUS status = api_.nvEncEncodePicture(encoder_, &pic_params);
-      if (status != NV_ENC_SUCCESS && status != NV_ENC_ERR_NEED_MORE_INPUT) {
-        if (mapped_input != nullptr) {
-          api_.nvEncUnmapInputResource(encoder_, mapped_input);
-          mapped_input = nullptr;
+      bool found_free_slot = false;
+      for (std::size_t i = 0; i < outputs_.size(); ++i) {
+        const auto candidate =
+            static_cast<uint32_t>((next_submit_index_ + i) % outputs_.size());
+        auto& out = outputs_[candidate];
+        if (!out.reserved && out.mapped_input == nullptr) {
+          output_slot = candidate;
+          found_free_slot = true;
+          break;
         }
-        ThrowNvenc("nvEncEncodePicture failed", status);
       }
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(queue_mutex_);
-      ThrowWorkerErrorLocked();
+      if (!found_free_slot) {
+        throw std::runtime_error("NVENC D3D11 queue is full");
+      }
       auto& out = outputs_[output_slot];
-      if (out.mapped_input != nullptr) {
-        std::lock_guard<std::mutex> api_lock(api_mutex_);
-        if (mapped_input != nullptr) {
-          api_.nvEncUnmapInputResource(encoder_, mapped_input);
-        }
-        throw std::runtime_error(
-            "NVENC D3D11 output slot became busy during submit");
-      }
-      out.mapped_input = mapped_input;
-      pending_.push_back(PendingSubmission{
+      out.reserved = true;
+      submit_queue_.push_back(PendingSubmission{
+          .input_slot = input_slot,
           .output_slot = output_slot,
-          .submitted_at = std::chrono::steady_clock::now(),
+          .force_idr = force_idr,
+          .enqueued_at = std::chrono::steady_clock::now(),
       });
       next_submit_index_++;
+    }
+    last_submit_total_us_.store(
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - submit_started_at)
+                .count()),
+        std::memory_order_relaxed);
+    if (submit_event_) {
+      SetEvent(submit_event_);
     }
     pending_cv_.notify_one();
   }
@@ -323,8 +378,7 @@ struct NvencD3D11Session::Impl {
     init.encodeConfig = &config;
     config.rcParams.averageBitRate = bitrate;
     config.rcParams.maxBitRate = bitrate;
-    const uint32_t vbv =
-        std::max<std::uint32_t>(bitrate / std::max<std::uint32_t>(fps_, 1), 1u) * 2u;
+    const uint32_t vbv = ComputeVbvBufferBits(bitrate, fps_);
     config.rcParams.vbvBufferSize = vbv;
     config.rcParams.vbvInitialDelay = vbv;
     reconfig.reInitEncodeParams = init;
@@ -377,13 +431,41 @@ struct NvencD3D11Session::Impl {
 
     const bool async_supported =
         GetCapability(NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT) != 0;
-    std::vector<InitAttempt> attempts = {
-        {"custom async p4", async_supported, false, false, false, NV_ENC_PRESET_P4_GUID},
-        {"preset async p4", async_supported, true, false, false, NV_ENC_PRESET_P4_GUID},
-        {"preset sync p4", false, true, false, false, NV_ENC_PRESET_P4_GUID},
-        {"minimal sync p1", false, true, true, false, NV_ENC_PRESET_P1_GUID},
-        {"null-config sync p1", false, true, true, true, NV_ENC_PRESET_P1_GUID},
-    };
+    const bool prefer_fast_preset = fps_ >= 90;
+    const char* fast_h264_env = std::getenv("ASTRIX_DXGI_NVENC_FAST_H264_MODE");
+    const bool prefer_fast_h264_mode =
+        fast_h264_env == nullptr
+            ? prefer_fast_preset
+            : !(std::strcmp(fast_h264_env, "0") == 0 ||
+                std::strcmp(fast_h264_env, "false") == 0 ||
+                std::strcmp(fast_h264_env, "FALSE") == 0);
+    std::vector<InitAttempt> attempts;
+    attempts.reserve(prefer_fast_preset ? 8 : 5);
+    if (prefer_fast_preset) {
+      attempts.push_back(
+          {"custom async p1", async_supported, false, false, false, NV_ENC_PRESET_P1_GUID});
+      attempts.push_back(
+          {"preset async p1", async_supported, true, false, false, NV_ENC_PRESET_P1_GUID});
+      attempts.push_back(
+          {"preset sync p1", false, true, false, false, NV_ENC_PRESET_P1_GUID});
+      attempts.push_back(
+          {"custom async p4 fallback", async_supported, false, false, false, NV_ENC_PRESET_P4_GUID});
+      attempts.push_back(
+          {"preset async p4 fallback", async_supported, true, false, false, NV_ENC_PRESET_P4_GUID});
+      attempts.push_back(
+          {"preset sync p4 fallback", false, true, false, false, NV_ENC_PRESET_P4_GUID});
+    } else {
+      attempts.push_back(
+          {"custom async p4", async_supported, false, false, false, NV_ENC_PRESET_P4_GUID});
+      attempts.push_back(
+          {"preset async p4", async_supported, true, false, false, NV_ENC_PRESET_P4_GUID});
+      attempts.push_back(
+          {"preset sync p4", false, true, false, false, NV_ENC_PRESET_P4_GUID});
+    }
+    attempts.push_back(
+        {"minimal sync p1", false, true, true, false, NV_ENC_PRESET_P1_GUID});
+    attempts.push_back(
+        {"null-config sync p1", false, true, true, true, NV_ENC_PRESET_P1_GUID});
 
     auto build_attempt = [&](const InitAttempt& attempt) {
       NV_ENC_PRESET_CONFIG preset = {NV_ENC_PRESET_CONFIG_VER,
@@ -405,19 +487,43 @@ struct NvencD3D11Session::Impl {
         encode_config_.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
         encode_config_.rcParams.averageBitRate = bitrate_;
         encode_config_.rcParams.maxBitRate = bitrate_;
+        encode_config_.rcParams.multiPass = NV_ENC_MULTI_PASS_DISABLED;
         encode_config_.rcParams.enableAQ = 0;
         encode_config_.rcParams.enableLookahead = 0;
+        encode_config_.rcParams.enableTemporalAQ = 0;
         encode_config_.rcParams.zeroReorderDelay = 1;
+        encode_config_.rcParams.enableNonRefP = prefer_fast_preset ? 1 : 0;
+        encode_config_.rcParams.strictGOPTarget = 1;
+        encode_config_.encodeCodecConfig.h264Config.outputBufferingPeriodSEI = 0;
+        encode_config_.encodeCodecConfig.h264Config.outputPictureTimingSEI = 0;
+        encode_config_.encodeCodecConfig.h264Config.maxNumRefFrames =
+            prefer_fast_preset ? 1u : 0u;
+        encode_config_.encodeCodecConfig.h264Config.numRefL0 =
+            prefer_fast_preset ? NV_ENC_NUM_REF_FRAMES_1
+                               : NV_ENC_NUM_REF_FRAMES_AUTOSELECT;
+        encode_config_.encodeCodecConfig.h264Config.numRefL1 =
+            NV_ENC_NUM_REF_FRAMES_AUTOSELECT;
+        encode_config_.encodeCodecConfig.h264Config.useBFramesAsRef =
+            NV_ENC_BFRAME_REF_MODE_DISABLED;
+      }
+
+      if (prefer_fast_h264_mode && !attempt.minimal_preset) {
+        encode_config_.profileGUID = NV_ENC_H264_PROFILE_BASELINE_GUID;
+        encode_config_.encodeCodecConfig.h264Config.entropyCodingMode =
+            NV_ENC_H264_ENTROPY_CODING_MODE_CAVLC;
+        encode_config_.encodeCodecConfig.h264Config.adaptiveTransformMode =
+            NV_ENC_H264_ADAPTIVE_TRANSFORM_DISABLE;
+        encode_config_.encodeCodecConfig.h264Config.disableDeblockingFilterIDC =
+            2;
       }
 
       if (!attempt.conservative && !attempt.minimal_preset) {
-        encode_config_.profileGUID = NV_ENC_CODEC_PROFILE_AUTOSELECT_GUID;
+        if (!prefer_fast_h264_mode) {
+          encode_config_.profileGUID = NV_ENC_CODEC_PROFILE_AUTOSELECT_GUID;
+        }
         encode_config_.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
         encode_config_.encodeCodecConfig.h264Config.disableSPSPPS = 0;
-        const uint32_t vbv =
-            std::max<std::uint32_t>(bitrate_ / std::max<std::uint32_t>(fps_, 1),
-                                    1u) *
-            2u;
+        const uint32_t vbv = ComputeVbvBufferBits(bitrate_, fps_);
         encode_config_.rcParams.vbvBufferSize = vbv;
         encode_config_.rcParams.vbvInitialDelay = vbv;
       }
@@ -439,7 +545,7 @@ struct NvencD3D11Session::Impl {
       init_params_.maxEncodeWidth = attempt.minimal_preset ? 0u : width_;
       init_params_.maxEncodeHeight = attempt.minimal_preset ? 0u : height_;
       init_params_.tuningInfo = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
-      init_params_.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+      init_params_.bufferFormat = input_buffer_format_;
     };
 
     NVENCSTATUS last_status = NV_ENC_ERR_GENERIC;
@@ -464,6 +570,15 @@ struct NvencD3D11Session::Impl {
           api_.nvEncInitializeEncoder(encoder_, &init_params_);
       if (status == NV_ENC_SUCCESS) {
         async_encode_ = attempt.enable_async;
+        std::fprintf(
+            stderr,
+            "[nvenc_d11] init: %s (fps=%u, async=%s, low_latency=%s, input=%s, h264_fast=%s)\n",
+            attempt.label,
+            fps_,
+            attempt.enable_async ? "on" : "off",
+            prefer_fast_preset ? "prefer-fast" : "balanced",
+            input_format_label_,
+            prefer_fast_h264_mode ? "on" : "off");
         return;
       }
 
@@ -513,8 +628,8 @@ struct NvencD3D11Session::Impl {
       if (desc.Width != width_ || desc.Height != height_) {
         throw std::runtime_error("NVENC D3D11 input ring texture size mismatch");
       }
-      if (desc.Format != DXGI_FORMAT_NV12) {
-        throw std::runtime_error("NVENC D3D11 input ring must use DXGI_FORMAT_NV12");
+      if (desc.Format != input_dxgi_format_) {
+        throw std::runtime_error("NVENC D3D11 input ring texture format mismatch");
       }
 
       NV_ENC_REGISTER_RESOURCE resource = {NV_ENC_REGISTER_RESOURCE_VER};
@@ -524,7 +639,7 @@ struct NvencD3D11Session::Impl {
       resource.pitch = 0;
       resource.subResourceIndex = 0;
       resource.resourceToRegister = texture;
-      resource.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+      resource.bufferFormat = input_buffer_format_;
       resource.bufferUsage = NV_ENC_INPUT_IMAGE;
       CheckNvenc(api_.nvEncRegisterResource(encoder_, &resource),
                  "nvEncRegisterResource failed");
@@ -574,7 +689,8 @@ struct NvencD3D11Session::Impl {
 
     {
       std::lock_guard<std::mutex> lock(queue_mutex_);
-      pending_.clear();
+      submit_queue_.clear();
+      in_flight_.clear();
       completed_.clear();
       worker_error_.clear();
     }
@@ -582,6 +698,10 @@ struct NvencD3D11Session::Impl {
     if (stop_event_) {
       CloseHandle(stop_event_);
       stop_event_ = nullptr;
+    }
+    if (submit_event_) {
+      CloseHandle(submit_event_);
+      submit_event_ = nullptr;
     }
 
     for (auto* texture : textures_) {
@@ -614,6 +734,9 @@ struct NvencD3D11Session::Impl {
     if (stop_event_) {
       SetEvent(stop_event_);
     }
+    if (submit_event_) {
+      SetEvent(submit_event_);
+    }
     pending_cv_.notify_all();
     completed_cv_.notify_all();
     if (output_worker_.joinable()) {
@@ -624,29 +747,128 @@ struct NvencD3D11Session::Impl {
   void OutputWorkerLoop() {
     try {
       while (true) {
-        PendingSubmission submission;
+        PendingSubmission queued_submission;
+        bool have_queued_submission = false;
         HANDLE completion_event = nullptr;
         {
           std::unique_lock<std::mutex> lock(queue_mutex_);
           pending_cv_.wait(lock, [&] {
-            return stop_requested_ || !pending_.empty();
+            return stop_requested_ || !submit_queue_.empty() || !in_flight_.empty();
           });
-          if (stop_requested_) {
+          if (stop_requested_ && submit_queue_.empty() && in_flight_.empty()) {
             return;
           }
-          submission = pending_.front();
-          completion_event = outputs_[submission.output_slot].completion_event;
+          if (!submit_queue_.empty() && in_flight_.size() < outputs_.size()) {
+            queued_submission = submit_queue_.front();
+            submit_queue_.pop_front();
+            have_queued_submission = true;
+          } else if (!in_flight_.empty()) {
+            completion_event = outputs_[in_flight_.front().output_slot].completion_event;
+          } else {
+            continue;
+          }
         }
 
-        HANDLE wait_handles[2] = {stop_event_, completion_event};
+        if (have_queued_submission) {
+          NV_ENC_INPUT_PTR mapped_input = nullptr;
+          std::uint64_t map_us = 0;
+          std::uint64_t encode_picture_us = 0;
+          const auto submit_started_at = std::chrono::steady_clock::now();
+          {
+            std::lock_guard<std::mutex> api_lock(api_mutex_);
+            const auto map_started_at = std::chrono::steady_clock::now();
+            NV_ENC_MAP_INPUT_RESOURCE map_input = {NV_ENC_MAP_INPUT_RESOURCE_VER};
+            map_input.registeredResource =
+                registered_inputs_[queued_submission.input_slot];
+            CheckNvenc(api_.nvEncMapInputResource(encoder_, &map_input),
+                       "nvEncMapInputResource failed");
+            mapped_input = map_input.mappedResource;
+            map_us = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - map_started_at)
+                    .count());
+
+            auto& out = outputs_[queued_submission.output_slot];
+            NV_ENC_PIC_PARAMS pic_params = {NV_ENC_PIC_PARAMS_VER};
+            pic_params.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
+            pic_params.inputBuffer = mapped_input;
+            pic_params.bufferFmt = input_buffer_format_;
+            pic_params.inputWidth = width_;
+            pic_params.inputHeight = height_;
+            pic_params.outputBitstream = out.bitstream;
+            pic_params.completionEvent = out.completion_event;
+            if (queued_submission.force_idr) {
+              pic_params.encodePicFlags = NV_ENC_PIC_FLAG_FORCEINTRA |
+                                          NV_ENC_PIC_FLAG_FORCEIDR |
+                                          NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
+            }
+
+            const auto encode_started_at = std::chrono::steady_clock::now();
+            const NVENCSTATUS status = api_.nvEncEncodePicture(encoder_, &pic_params);
+            encode_picture_us = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - encode_started_at)
+                    .count());
+            if (status != NV_ENC_SUCCESS && status != NV_ENC_ERR_NEED_MORE_INPUT) {
+              if (mapped_input != nullptr) {
+                api_.nvEncUnmapInputResource(encoder_, mapped_input);
+                mapped_input = nullptr;
+              }
+              ThrowNvenc("nvEncEncodePicture failed", status);
+            }
+          }
+
+          {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            ThrowWorkerErrorLocked();
+            auto& out = outputs_[queued_submission.output_slot];
+            if (!out.reserved) {
+              throw std::runtime_error(
+                  "NVENC D3D11 output slot lost reservation before submit");
+            }
+            if (out.mapped_input != nullptr) {
+              throw std::runtime_error(
+                  "NVENC D3D11 output slot became busy in worker submit");
+            }
+            out.mapped_input = mapped_input;
+            queued_submission.submitted_at = std::chrono::steady_clock::now();
+            in_flight_.push_back(queued_submission);
+          }
+
+          last_submit_map_us_.store(map_us, std::memory_order_relaxed);
+          last_submit_encode_picture_us_.store(
+              encode_picture_us, std::memory_order_relaxed);
+          last_submit_total_us_.store(
+              static_cast<std::uint64_t>(
+                  std::chrono::duration_cast<std::chrono::microseconds>(
+                      std::chrono::steady_clock::now() - submit_started_at)
+                      .count()),
+              std::memory_order_relaxed);
+          continue;
+        }
+
+        HANDLE wait_handles[3] = {stop_event_, submit_event_, completion_event};
         const DWORD wait_result =
-            WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
+            WaitForMultipleObjects(3, wait_handles, FALSE, INFINITE);
         if (wait_result == WAIT_OBJECT_0) {
           return;
         }
-        if (wait_result != WAIT_OBJECT_0 + 1) {
+        if (wait_result == WAIT_OBJECT_0 + 1) {
+          continue;
+        }
+        if (wait_result != WAIT_OBJECT_0 + 2) {
           throw std::runtime_error(
               "WaitForMultipleObjects failed for NVENC completion event");
+        }
+
+        PendingSubmission submission;
+        {
+          std::lock_guard<std::mutex> lock(queue_mutex_);
+          if (in_flight_.empty()) {
+            throw std::runtime_error(
+                "NVENC D3D11 output worker lost in-flight submission state");
+          }
+          submission = in_flight_.front();
         }
 
         CompletedPacket packet;
@@ -679,11 +901,12 @@ struct NvencD3D11Session::Impl {
           std::lock_guard<std::mutex> lock(queue_mutex_);
           auto& out = outputs_[submission.output_slot];
           out.mapped_input = nullptr;
-          if (pending_.empty()) {
+          out.reserved = false;
+          if (in_flight_.empty()) {
             throw std::runtime_error(
-                "NVENC D3D11 output worker lost pending submission state");
+                "NVENC D3D11 output worker lost in-flight submission state");
           }
-          pending_.pop_front();
+          in_flight_.pop_front();
           completed_.push_back(std::move(packet));
         }
         completed_cv_.notify_one();
@@ -707,6 +930,9 @@ struct NvencD3D11Session::Impl {
     if (stop_event_) {
       SetEvent(stop_event_);
     }
+    if (submit_event_) {
+      SetEvent(submit_event_);
+    }
     pending_cv_.notify_all();
     completed_cv_.notify_all();
   }
@@ -727,24 +953,32 @@ struct NvencD3D11Session::Impl {
   uint32_t fps_ = 0;
   uint32_t bitrate_ = 0;
   uint32_t ring_size_ = 0;
+  NV_ENC_BUFFER_FORMAT input_buffer_format_ = NV_ENC_BUFFER_FORMAT_NV12;
+  DXGI_FORMAT input_dxgi_format_ = DXGI_FORMAT_NV12;
+  const char* input_format_label_ = "NV12";
   bool async_encode_ = false;
   std::vector<ID3D11Texture2D*> textures_;
   std::vector<NV_ENC_REGISTERED_PTR> registered_inputs_;
   std::unordered_map<std::uintptr_t, uint32_t> texture_to_slot_;
   std::vector<OutputSlot> outputs_;
   HANDLE stop_event_ = nullptr;
+  HANDLE submit_event_ = nullptr;
   std::thread output_worker_;
   mutable std::mutex queue_mutex_;
   std::mutex submit_mutex_;
   std::mutex api_mutex_;
   std::condition_variable pending_cv_;
   std::condition_variable completed_cv_;
-  std::deque<PendingSubmission> pending_;
+  std::deque<PendingSubmission> submit_queue_;
+  std::deque<PendingSubmission> in_flight_;
   std::deque<CompletedPacket> completed_;
   std::string worker_error_;
   std::size_t next_submit_index_ = 0;
   bool stop_requested_ = false;
   std::uint64_t last_encode_time_us_ = 0;
+  std::atomic<std::uint64_t> last_submit_map_us_{0};
+  std::atomic<std::uint64_t> last_submit_encode_picture_us_{0};
+  std::atomic<std::uint64_t> last_submit_total_us_{0};
   NV_ENC_INITIALIZE_PARAMS init_params_ = {};
   NV_ENC_CONFIG encode_config_ = {};
 };
@@ -786,6 +1020,18 @@ rust::Vec<std::uint8_t> NvencD3D11Session::collect(std::uint32_t timeout_ms) {
 
 std::uint64_t NvencD3D11Session::last_encode_time_us() const {
   return impl_->last_encode_time_us();
+}
+
+std::uint64_t NvencD3D11Session::last_submit_map_us() const {
+  return impl_->last_submit_map_us();
+}
+
+std::uint64_t NvencD3D11Session::last_submit_encode_picture_us() const {
+  return impl_->last_submit_encode_picture_us();
+}
+
+std::uint64_t NvencD3D11Session::last_submit_total_us() const {
+  return impl_->last_submit_total_us();
 }
 
 void NvencD3D11Session::submit(std::uintptr_t texture_ptr, bool force_idr) {

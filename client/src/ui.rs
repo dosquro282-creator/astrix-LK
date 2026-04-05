@@ -4987,6 +4987,25 @@ pub(crate) fn main_screen(
                 .or(voice_session_stats.frames_per_second),
             resolution: voice_session_stats.resolution,
             outgoing_speed_mbps: voice_session_stats.connection_speed_mbps,
+            webrtc_requested_bitrate_mbps: voice_session_stats.webrtc_requested_bitrate_mbps,
+            webrtc_target_bitrate_mbps: voice_session_stats.webrtc_target_bitrate_mbps,
+            webrtc_fps_hint: voice_session_stats.webrtc_fps_hint,
+            encoded_pre_rtp_bitrate_mbps: voice_session_stats.encoded_pre_rtp_bitrate_mbps,
+            source_fps: voice_session_stats.source_fps,
+            source_cap_fps: voice_session_stats.source_cap_fps,
+            webrtc_effective_fps_cap: voice_session_stats.webrtc_effective_fps_cap,
+            startup_transport_cap_fps: voice_session_stats.startup_transport_cap_fps,
+            final_schedule_cap_fps: voice_session_stats.final_schedule_cap_fps,
+            webrtc_available_outgoing_bitrate_mbps: voice_session_stats
+                .webrtc_available_outgoing_bitrate_mbps,
+            webrtc_packet_loss_pct: voice_session_stats.webrtc_packet_loss_pct,
+            webrtc_nack_count: voice_session_stats.webrtc_nack_count,
+            webrtc_pli_count: voice_session_stats.webrtc_pli_count,
+            webrtc_quality_limitation_reason: voice_session_stats
+                .webrtc_quality_limitation_reason
+                .clone(),
+            webrtc_transport_path: voice_session_stats.webrtc_transport_path.clone(),
+            webrtc_transport_rtt_ms: voice_session_stats.webrtc_transport_rtt_ms,
             encoding_path: voice_session_stats.encoding_path.clone(),
             decoding_path: voice_session_stats.decoding_path.clone(),
         };
