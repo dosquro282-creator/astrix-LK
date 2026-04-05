@@ -1261,9 +1261,15 @@ struct DxgiPushTraceStats {
     convert_fail: u64,
     convert_skip_backpressure: u64,
     convert_us_total: u64,
+    convert_ctx_wait_us_total: u64,
+    convert_submit_us_total: u64,
+    convert_copy_us_total: u64,
+    convert_blt_us_total: u64,
     flush_ok: u64,
     flush_fail: u64,
     flush_us_total: u64,
+    flush_ctx_wait_us_total: u64,
+    flush_call_us_total: u64,
     ready_immediate: u64,
     ready_waited: u64,
     ready_timeout: u64,
@@ -1331,14 +1337,20 @@ impl DxgiPushTraceStats {
             mode,
         );
         eprintln!(
-            "[voice][screen][push][timing] convert={}/{} avg={}us bp_skip={} flush={}/{} avg={}us ready=imm:{} wait:{} timeout:{} avg={}us submit={}/{} avg={}us map_avg={}us pic_avg={}us collect=some:{} none:{} err:{} frames={:.1} avg={}us encode={}/{} avg={}us send_calls={:.1} avg_send={}us",
+            "[voice][screen][push][timing] convert={}/{} avg={}us ctx_avg={}us gpu_avg={}us copy_avg={}us blt_avg={}us bp_skip={} flush={}/{} avg={}us ctx_avg={}us call_avg={}us ready=imm:{} wait:{} timeout:{} avg={}us submit={}/{} avg={}us map_avg={}us pic_avg={}us collect=some:{} none:{} err:{} frames={:.1} avg={}us encode={}/{} avg={}us send_calls={:.1} avg_send={}us",
             self.convert_ok,
             self.convert_fail,
             Self::avg_us(self.convert_us_total, self.convert_ok),
+            Self::avg_us(self.convert_ctx_wait_us_total, self.convert_ok),
+            Self::avg_us(self.convert_submit_us_total, self.convert_ok),
+            Self::avg_us(self.convert_copy_us_total, self.convert_ok),
+            Self::avg_us(self.convert_blt_us_total, self.convert_ok),
             self.convert_skip_backpressure,
             self.flush_ok,
             self.flush_fail,
             Self::avg_us(self.flush_us_total, self.flush_ok),
+            Self::avg_us(self.flush_ctx_wait_us_total, self.flush_ok),
+            Self::avg_us(self.flush_call_us_total, self.flush_ok),
             self.ready_immediate,
             self.ready_waited,
             self.ready_timeout,
@@ -3759,6 +3771,13 @@ fn start_screen_capture(
         texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
         source_wgc: u64,
         convert_us: u64,
+        convert_ctx_wait_us: u64,
+        convert_submit_us: u64,
+        convert_copy_us: u64,
+        convert_blt_us: u64,
+        flush_us: u64,
+        flush_ctx_wait_us: u64,
+        flush_call_us: u64,
     }
 
     fn spawn_async_rgb_scale_worker(
@@ -3796,9 +3815,8 @@ fn start_screen_capture(
                         )
                     };
 
-                    let convert_start = std::time::Instant::now();
-                    let encoder_tex = match converter.convert(&texture, &context_mutex) {
-                        Ok(tex) => tex,
+                    let convert = match converter.convert_timed(&texture, &context_mutex) {
+                        Ok(timing) => timing,
                         Err(err) => {
                             failed.store(true, Ordering::Relaxed);
                             eprintln!(
@@ -3808,21 +3826,28 @@ fn start_screen_capture(
                             break;
                         }
                     };
-                    let convert_us = convert_start.elapsed().as_micros() as u64;
-                    let flush_start = std::time::Instant::now();
-                    if let Err(err) = converter.flush(&context_mutex) {
-                        failed.store(true, Ordering::Relaxed);
-                        eprintln!(
-                            "[voice][screen] async direct RGB scale flush failed: {:?}",
-                            err
-                        );
-                        break;
-                    }
-                    let flush_us = flush_start.elapsed().as_micros() as u64;
+                    let flush = match converter.flush_timed(&context_mutex) {
+                        Ok(timing) => timing,
+                        Err(err) => {
+                            failed.store(true, Ordering::Relaxed);
+                            eprintln!(
+                                "[voice][screen] async direct RGB scale flush failed: {:?}",
+                                err
+                            );
+                            break;
+                        }
+                    };
                     *latest_output.lock() = Some(AsyncRgbScaleFrame {
-                        texture: encoder_tex,
+                        texture: convert.texture,
                         source_wgc: current_wgc,
-                        convert_us: convert_us.saturating_add(flush_us),
+                        convert_us: convert.ctx_wait_us.saturating_add(convert.submit_us),
+                        convert_ctx_wait_us: convert.ctx_wait_us,
+                        convert_submit_us: convert.submit_us,
+                        convert_copy_us: convert.copy_us,
+                        convert_blt_us: convert.blt_us,
+                        flush_us: flush.ctx_wait_us.saturating_add(flush.call_us),
+                        flush_ctx_wait_us: flush.ctx_wait_us,
+                        flush_call_us: flush.call_us,
                     });
                     last_converted_wgc = current_wgc;
                 }
@@ -4797,7 +4822,6 @@ fn start_screen_capture(
             let mut last_encoder_input_tex:
                 Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
             let enc_session_start = std::time::Instant::now();
-            let mut last_send_capture_us: i64 = 0;
             let mut encoded_bytes_window: u64 = 0;
             let mut encoded_frames_window: u64 = 0;
             let mut last_startup_diag_sec: Option<u64> = None;
@@ -5397,11 +5421,6 @@ fn start_screen_capture(
                                         encoded_frames_window =
                                             encoded_frames_window.saturating_add(1);
                                         enc_src.push_frame(&ef.data, rtp_timestamp, capture_us, ef.key_frame);
-                                        if telemetry_enabled {
-                                            let now_us = enc_session_start.elapsed().as_micros() as i64;
-                                            println!("SEND: rtp={} capture={} delta={} now={}", rtp_timestamp, capture_us, capture_us - last_send_capture_us, now_us);
-                                            last_send_capture_us = capture_us;
-                                        }
                                         rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
                                     }
                                     if sent_keyframe {
@@ -5912,7 +5931,39 @@ fn start_screen_capture(
                                                 push_trace_stats
                                                     .convert_us_total
                                                     .saturating_add(frame.convert_us);
-                                            telemetry_enc.set_convert(frame.convert_us);
+                                            push_trace_stats.convert_ctx_wait_us_total =
+                                                push_trace_stats
+                                                    .convert_ctx_wait_us_total
+                                                    .saturating_add(frame.convert_ctx_wait_us);
+                                            push_trace_stats.convert_submit_us_total =
+                                                push_trace_stats
+                                                    .convert_submit_us_total
+                                                    .saturating_add(frame.convert_submit_us);
+                                            push_trace_stats.convert_copy_us_total =
+                                                push_trace_stats
+                                                    .convert_copy_us_total
+                                                    .saturating_add(frame.convert_copy_us);
+                                            push_trace_stats.convert_blt_us_total =
+                                                push_trace_stats
+                                                    .convert_blt_us_total
+                                                    .saturating_add(frame.convert_blt_us);
+                                            push_trace_stats.flush_ok = push_trace_stats
+                                                .flush_ok
+                                                .saturating_add(1);
+                                            push_trace_stats.flush_us_total = push_trace_stats
+                                                .flush_us_total
+                                                .saturating_add(frame.flush_us);
+                                            push_trace_stats.flush_ctx_wait_us_total =
+                                                push_trace_stats
+                                                    .flush_ctx_wait_us_total
+                                                    .saturating_add(frame.flush_ctx_wait_us);
+                                            push_trace_stats.flush_call_us_total =
+                                                push_trace_stats
+                                                    .flush_call_us_total
+                                                    .saturating_add(frame.flush_call_us);
+                                            telemetry_enc.set_convert(
+                                                frame.convert_us.saturating_add(frame.flush_us),
+                                            );
                                             last_wgc_count = frame.source_wgc;
                                             if trace_this_tick {
                                                 eprintln!(
@@ -5926,13 +5977,15 @@ fn start_screen_capture(
                                     }
                                 } else if encoder_uses_rgb_input {
                                     if let Some(rgb_scale) = bgra_to_rgb.as_ref() {
-                                        let convert_start = std::time::Instant::now();
-                                        match rgb_scale.convert(&texture, &context_mutex) {
-                                            Ok(encoder_tex) => {
-                                                let convert_us =
-                                                    convert_start.elapsed().as_micros() as u64;
-                                                converted_nv12_tex = Some(encoder_tex.clone());
-                                                last_encoder_input_tex = Some(encoder_tex);
+                                        match rgb_scale.convert_timed(&texture, &context_mutex) {
+                                            Ok(convert_timing) => {
+                                                let convert_us = convert_timing
+                                                    .ctx_wait_us
+                                                    .saturating_add(convert_timing.submit_us);
+                                                converted_nv12_tex =
+                                                    Some(convert_timing.texture.clone());
+                                                last_encoder_input_tex =
+                                                    Some(convert_timing.texture);
                                                 push_trace_stats.convert_ok = push_trace_stats
                                                     .convert_ok
                                                     .saturating_add(1);
@@ -5940,6 +5993,22 @@ fn start_screen_capture(
                                                     push_trace_stats
                                                         .convert_us_total
                                                         .saturating_add(convert_us);
+                                                push_trace_stats.convert_ctx_wait_us_total =
+                                                    push_trace_stats
+                                                        .convert_ctx_wait_us_total
+                                                        .saturating_add(convert_timing.ctx_wait_us);
+                                                push_trace_stats.convert_submit_us_total =
+                                                    push_trace_stats
+                                                        .convert_submit_us_total
+                                                        .saturating_add(convert_timing.submit_us);
+                                                push_trace_stats.convert_copy_us_total =
+                                                    push_trace_stats
+                                                        .convert_copy_us_total
+                                                        .saturating_add(convert_timing.copy_us);
+                                                push_trace_stats.convert_blt_us_total =
+                                                    push_trace_stats
+                                                        .convert_blt_us_total
+                                                        .saturating_add(convert_timing.blt_us);
                                                 if trace_this_tick {
                                                     eprintln!(
                                                         "[voice][screen][push][tick {}] direct RGB scale ok slot={} us={}",
@@ -5948,21 +6017,27 @@ fn start_screen_capture(
                                                         convert_us,
                                                     );
                                                 }
-                                                let flush_start = std::time::Instant::now();
-                                                if let Err(e) = rgb_scale.flush(&context_mutex) {
-                                                    push_trace_stats.flush_fail = push_trace_stats
-                                                        .flush_fail
-                                                        .saturating_add(1);
-                                                    eprintln!(
-                                                        "[voice][screen] direct RGB scale flush failed: {:?}",
-                                                        e
-                                                    );
-                                                    mft_path_failed = true;
-                                                    mft_hard_failed = true;
-                                                    continue;
-                                                }
-                                                let flush_us =
-                                                    flush_start.elapsed().as_micros() as u64;
+                                                let flush_timing = match rgb_scale
+                                                    .flush_timed(&context_mutex)
+                                                {
+                                                    Ok(timing) => timing,
+                                                    Err(e) => {
+                                                        push_trace_stats.flush_fail =
+                                                            push_trace_stats
+                                                                .flush_fail
+                                                                .saturating_add(1);
+                                                        eprintln!(
+                                                            "[voice][screen] direct RGB scale flush failed: {:?}",
+                                                            e
+                                                        );
+                                                        mft_path_failed = true;
+                                                        mft_hard_failed = true;
+                                                        continue;
+                                                    }
+                                                };
+                                                let flush_us = flush_timing
+                                                    .ctx_wait_us
+                                                    .saturating_add(flush_timing.call_us);
                                                 push_trace_stats.flush_ok = push_trace_stats
                                                     .flush_ok
                                                     .saturating_add(1);
@@ -5970,6 +6045,14 @@ fn start_screen_capture(
                                                     push_trace_stats
                                                         .flush_us_total
                                                         .saturating_add(flush_us);
+                                                push_trace_stats.flush_ctx_wait_us_total =
+                                                    push_trace_stats
+                                                        .flush_ctx_wait_us_total
+                                                        .saturating_add(flush_timing.ctx_wait_us);
+                                                push_trace_stats.flush_call_us_total =
+                                                    push_trace_stats
+                                                        .flush_call_us_total
+                                                        .saturating_add(flush_timing.call_us);
                                                 if nv12_ready_trace {
                                                     match rgb_scale.poll_output_ready() {
                                                         Ok(true) => {
@@ -6035,14 +6118,22 @@ fn start_screen_capture(
                                         let encoder_tex = rgb_ring[ring_slot].clone();
                                         nvenc_rgb_ring_cursor =
                                             (nvenc_rgb_ring_cursor + 1) % rgb_ring.len();
-                                        let convert_start = std::time::Instant::now();
+                                        let lock_start = std::time::Instant::now();
+                                        let ctx_wait_us;
+                                        let convert_submit_us;
                                         {
                                             let _ctx_guard = context_mutex.lock();
+                                            ctx_wait_us =
+                                                lock_start.elapsed().as_micros() as u64;
+                                            let copy_start = std::time::Instant::now();
                                             unsafe {
                                                 pool.context.CopyResource(&encoder_tex, &texture);
                                             }
+                                            convert_submit_us =
+                                                copy_start.elapsed().as_micros() as u64;
                                         }
-                                        let convert_us = convert_start.elapsed().as_micros() as u64;
+                                        let convert_us =
+                                            ctx_wait_us.saturating_add(convert_submit_us);
                                         converted_nv12_tex = Some(encoder_tex.clone());
                                         last_encoder_input_tex = Some(encoder_tex);
                                         push_trace_stats.convert_ok =
@@ -6050,6 +6141,18 @@ fn start_screen_capture(
                                         push_trace_stats.convert_us_total = push_trace_stats
                                             .convert_us_total
                                             .saturating_add(convert_us);
+                                        push_trace_stats.convert_ctx_wait_us_total =
+                                            push_trace_stats
+                                                .convert_ctx_wait_us_total
+                                                .saturating_add(ctx_wait_us);
+                                        push_trace_stats.convert_submit_us_total =
+                                            push_trace_stats
+                                                .convert_submit_us_total
+                                                .saturating_add(convert_submit_us);
+                                        push_trace_stats.convert_copy_us_total =
+                                            push_trace_stats
+                                                .convert_copy_us_total
+                                                .saturating_add(convert_submit_us);
                                         if trace_this_tick {
                                             eprintln!(
                                                 "[voice][screen][push][tick {}] direct RGB copy ok src_slot={} ring_slot={} us={}",
@@ -6064,16 +6167,34 @@ fn start_screen_capture(
                                     }
                                 } else {
                                 let b2n = bgra_to_nv12.as_ref().unwrap();
-                                let convert_start = std::time::Instant::now();
-                                match b2n.convert(&pool.context, &texture, &context_mutex) {
-                                    Ok(nv12_tex) => {
-                                        let convert_us = convert_start.elapsed().as_micros() as u64;
-                                        converted_nv12_tex = Some(nv12_tex.clone());
-                                        last_encoder_input_tex = Some(nv12_tex);
+                                match b2n.convert_timed(&pool.context, &texture, &context_mutex) {
+                                    Ok(convert_timing) => {
+                                        let convert_us = convert_timing
+                                            .ctx_wait_us
+                                            .saturating_add(convert_timing.submit_us);
+                                        converted_nv12_tex =
+                                            Some(convert_timing.texture.clone());
+                                        last_encoder_input_tex = Some(convert_timing.texture);
                                         push_trace_stats.convert_ok =
                                             push_trace_stats.convert_ok.saturating_add(1);
                                         push_trace_stats.convert_us_total =
                                             push_trace_stats.convert_us_total.saturating_add(convert_us);
+                                        push_trace_stats.convert_ctx_wait_us_total =
+                                            push_trace_stats
+                                                .convert_ctx_wait_us_total
+                                                .saturating_add(convert_timing.ctx_wait_us);
+                                        push_trace_stats.convert_submit_us_total =
+                                            push_trace_stats
+                                                .convert_submit_us_total
+                                                .saturating_add(convert_timing.submit_us);
+                                        push_trace_stats.convert_copy_us_total =
+                                            push_trace_stats
+                                                .convert_copy_us_total
+                                                .saturating_add(convert_timing.copy_us);
+                                        push_trace_stats.convert_blt_us_total =
+                                            push_trace_stats
+                                                .convert_blt_us_total
+                                                .saturating_add(convert_timing.blt_us);
                                         if trace_this_tick {
                                             eprintln!(
                                                 "[voice][screen][push][tick {}] convert ok slot={} us={}",
@@ -6082,27 +6203,39 @@ fn start_screen_capture(
                                                 convert_us,
                                             );
                                         }
-                                        let flush_start = std::time::Instant::now();
-                                        if let Err(e) = b2n.flush(&context_mutex) {
-                                            push_trace_stats.flush_fail =
-                                                push_trace_stats.flush_fail.saturating_add(1);
-                                            if trace_this_tick {
-                                                eprintln!(
-                                                    "[voice][screen][push][tick {}] flush failed: {:?}",
-                                                    push_trace_tick_idx,
-                                                    e,
-                                                );
+                                        let flush_timing = match b2n.flush_timed(&context_mutex) {
+                                            Ok(timing) => timing,
+                                            Err(e) => {
+                                                push_trace_stats.flush_fail =
+                                                    push_trace_stats.flush_fail.saturating_add(1);
+                                                if trace_this_tick {
+                                                    eprintln!(
+                                                        "[voice][screen][push][tick {}] flush failed: {:?}",
+                                                        push_trace_tick_idx,
+                                                        e,
+                                                    );
+                                                }
+                                                eprintln!("[voice][screen] BGRA→NV12 flush failed: {:?}", e);
+                                                mft_path_failed = true;
+                                                mft_hard_failed = true;
+                                                continue;
                                             }
-                                            eprintln!("[voice][screen] BGRA→NV12 flush failed: {:?}", e);
-                                            mft_path_failed = true;
-                                            mft_hard_failed = true;
-                                            continue;
-                                        }
-                                        let flush_us = flush_start.elapsed().as_micros() as u64;
+                                        };
+                                        let flush_us = flush_timing
+                                            .ctx_wait_us
+                                            .saturating_add(flush_timing.call_us);
                                         push_trace_stats.flush_ok =
                                             push_trace_stats.flush_ok.saturating_add(1);
                                         push_trace_stats.flush_us_total =
                                             push_trace_stats.flush_us_total.saturating_add(flush_us);
+                                        push_trace_stats.flush_ctx_wait_us_total =
+                                            push_trace_stats
+                                                .flush_ctx_wait_us_total
+                                                .saturating_add(flush_timing.ctx_wait_us);
+                                        push_trace_stats.flush_call_us_total =
+                                            push_trace_stats
+                                                .flush_call_us_total
+                                                .saturating_add(flush_timing.call_us);
                                         if trace_this_tick {
                                             eprintln!(
                                                 "[voice][screen][push][tick {}] flush ok us={}",
@@ -6493,20 +6626,6 @@ fn start_screen_capture(
                                                         cap_prev,
                                                         ef.key_frame,
                                                     );
-                                                    if telemetry_enabled {
-                                                        let now_us = enc_session_start
-                                                            .elapsed()
-                                                            .as_micros()
-                                                            as i64;
-                                                        println!(
-                                                            "SEND: rtp={} capture={} delta={} now={}",
-                                                            push_rtp_timestamp,
-                                                            cap_prev,
-                                                            cap_prev - last_send_capture_us,
-                                                            now_us
-                                                        );
-                                                        last_send_capture_us = cap_prev;
-                                                    }
                                                     collected_this += 1;
                                                     push_rtp_timestamp = push_rtp_timestamp
                                                         .wrapping_add(current_rtp_step);
@@ -6679,11 +6798,6 @@ fn start_screen_capture(
                                         encoded_frames_window =
                                             encoded_frames_window.saturating_add(1);
                                         enc_src.push_frame(&ef.data, rtp_timestamp, capture_us, ef.key_frame);
-                                        if telemetry_enabled {
-                                            let now_us = enc_session_start.elapsed().as_micros() as i64;
-                                            println!("SEND: rtp={} capture={} delta={} now={}", rtp_timestamp, capture_us, capture_us - last_send_capture_us, now_us);
-                                            last_send_capture_us = capture_us;
-                                        }
                                         rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
                                     }
                                     if sent_keyframe {

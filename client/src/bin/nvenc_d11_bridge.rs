@@ -36,3 +36,5 @@ pub mod ffi {
         fn set_bitrate(self: Pin<&mut NvencD3D11Session>, bitrate: u32) -> Result<()>;
     }
 }
+
+fn main() {}

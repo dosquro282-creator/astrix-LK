@@ -58,6 +58,22 @@ const NV12_RING_ENV: &str = "ASTRIX_DXGI_NV12_RING";
 const NV12_SPEED_ENV: &str = "ASTRIX_DXGI_NV12_OPTIMAL_SPEED";
 const RGB_SCALE_CS_ENV: &str = "ASTRIX_DXGI_RGB_SCALE_COMPUTE";
 
+#[derive(Debug, Clone)]
+pub struct D3d11ConvertTextureTiming {
+    pub texture: ID3D11Texture2D,
+    pub ctx_wait_us: u64,
+    pub submit_us: u64,
+    pub copy_us: u64,
+    pub blt_us: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct D3d11FlushTiming {
+    pub skipped: bool,
+    pub ctx_wait_us: u64,
+    pub call_us: u64,
+}
+
 /// Compute shader: BGRA/RGBA → NV12 with nearest-neighbor scaling. BT.601.
 /// `src_width/src_height` = input texture dimensions (WGC native).
 /// `width/height` = output dimensions (target resolution).
@@ -430,27 +446,55 @@ impl D3d11BgraToNv12 {
         input: &ID3D11Texture2D,
         context_mutex: &parking_lot::Mutex<()>,
     ) -> Result<ID3D11Texture2D, D3d11Nv12Error> {
-        let _ctx_guard = context_mutex.lock();
-        if self.use_cs_fallback.load(Ordering::Relaxed) {
-            return self.convert_cs(context, input);
-        }
-
-        match self.convert_vp(input) {
-            Ok(output_texture) => return Ok(output_texture),
-            Err(D3d11Nv12Error::Windows(e)) => {
-                let hr = e.code().0 as u32;
-                if hr == E_INVALIDARG {
-                    eprintln!("[d3d11_nv12] convert_vp E_INVALIDARG hr=0x{:x} (CreateInputView/OutputView/Blt), switching to CS fallback", hr);
-                    self.use_cs_fallback.store(true, Ordering::Relaxed);
-                    return self.convert_cs(context, input);
-                }
-                return Err(D3d11Nv12Error::Windows(e));
-            }
-            Err(e) => return Err(e),
-        }
+        Ok(self.convert_timed(context, input, context_mutex)?.texture)
     }
 
-    fn convert_vp(&self, input: &ID3D11Texture2D) -> Result<ID3D11Texture2D, D3d11Nv12Error> {
+    pub fn convert_timed(
+        &self,
+        context: &ID3D11DeviceContext,
+        input: &ID3D11Texture2D,
+        context_mutex: &parking_lot::Mutex<()>,
+    ) -> Result<D3d11ConvertTextureTiming, D3d11Nv12Error> {
+        let lock_start = std::time::Instant::now();
+        let _ctx_guard = context_mutex.lock();
+        let ctx_wait_us = lock_start.elapsed().as_micros() as u64;
+        let submit_start = std::time::Instant::now();
+        let (texture, copy_us, blt_us) = if self.use_cs_fallback.load(Ordering::Relaxed) {
+            let texture = self.convert_cs(context, input)?;
+            let submit_us = submit_start.elapsed().as_micros() as u64;
+            (texture, 0, submit_us)
+        } else {
+            match self.convert_vp(input) {
+                Ok(result) => result,
+                Err(D3d11Nv12Error::Windows(e)) => {
+                    let hr = e.code().0 as u32;
+                    if hr == E_INVALIDARG {
+                        eprintln!("[d3d11_nv12] convert_vp E_INVALIDARG hr=0x{:x} (CreateInputView/OutputView/Blt), switching to CS fallback", hr);
+                        self.use_cs_fallback.store(true, Ordering::Relaxed);
+                        let texture = self.convert_cs(context, input)?;
+                        let submit_us = submit_start.elapsed().as_micros() as u64;
+                        (texture, 0, submit_us)
+                    } else {
+                        return Err(D3d11Nv12Error::Windows(e));
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        };
+        let submit_us = submit_start.elapsed().as_micros() as u64;
+        Ok(D3d11ConvertTextureTiming {
+            texture,
+            ctx_wait_us,
+            submit_us,
+            copy_us,
+            blt_us,
+        })
+    }
+
+    fn convert_vp(
+        &self,
+        input: &ID3D11Texture2D,
+    ) -> Result<(ID3D11Texture2D, u64, u64), D3d11Nv12Error> {
         // first_frame = true only on the very first successful call (or after resize).
         let first_frame = !self.vp_logged_once.load(Ordering::Relaxed);
         let output_index = self.next_output_index();
@@ -489,6 +533,7 @@ impl D3d11BgraToNv12 {
         // CopyResource requires SAME format for source and dest; using B8G8R8A8 when
         // input is R8G8B8A8 (WGC ColorFormat::Rgba8) produced black output.
         let intermediate_holder: Option<ID3D11Texture2D>;
+        let mut copy_us = 0u64;
         let vp_input: &ID3D11Texture2D = {
             let needs_intermediate = input_desc.BindFlags & D3D11_BIND_RENDER_TARGET.0 as u32 == 0
                 || input_desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -520,7 +565,9 @@ impl D3d11BgraToNv12 {
                 }
                 let ctx: ID3D11DeviceContext =
                     self.video_context.cast().map_err(D3d11Nv12Error::Windows)?;
+                let copy_start = std::time::Instant::now();
                 unsafe { ctx.CopyResource(guard.as_ref().unwrap(), input) };
+                copy_us = copy_start.elapsed().as_micros() as u64;
                 intermediate_holder = Some(guard.as_ref().unwrap().clone());
                 drop(guard);
                 intermediate_holder.as_ref().unwrap()
@@ -596,6 +643,7 @@ impl D3d11BgraToNv12 {
             );
         }
 
+        let blt_start = std::time::Instant::now();
         unsafe {
             if !self.vp_state_initialized.swap(true, Ordering::Relaxed) {
                 self.video_context.VideoProcessorSetStreamFrameFormat(
@@ -632,6 +680,7 @@ impl D3d11BgraToNv12 {
                 .VideoProcessorBlt(&self.processor, &output_view, 0, &[stream])
                 .map_err(D3d11Nv12Error::Windows)?;
         }
+        let blt_us = blt_start.elapsed().as_micros() as u64;
 
         if first_frame {
             eprintln!(
@@ -647,7 +696,7 @@ impl D3d11BgraToNv12 {
         }
         self.last_output_index
             .store(output_index as u32, Ordering::Relaxed);
-        Ok(output_texture.clone())
+        Ok((output_texture.clone(), copy_us, blt_us))
     }
 
     fn convert_cs(
@@ -827,19 +876,36 @@ impl D3d11BgraToNv12 {
     /// Startup-only by default: enough to avoid the first ProcessInput blocking on
     /// some NVIDIA drivers, without paying a per-frame Flush() penalty forever.
     pub fn flush(&self, context_mutex: &parking_lot::Mutex<()>) -> Result<(), D3d11Nv12Error> {
+        self.flush_timed(context_mutex).map(|_| ())
+    }
+
+    pub fn flush_timed(
+        &self,
+        context_mutex: &parking_lot::Mutex<()>,
+    ) -> Result<D3d11FlushTiming, D3d11Nv12Error> {
         let remaining = self.flush_frames_remaining.load(Ordering::Relaxed);
         if remaining == 0 {
-            return Ok(());
+            return Ok(D3d11FlushTiming {
+                skipped: true,
+                ..Default::default()
+            });
         }
         self.flush_frames_remaining
             .store(remaining.saturating_sub(1), Ordering::Relaxed);
+        let lock_start = std::time::Instant::now();
         let _ctx_guard = context_mutex.lock();
+        let ctx_wait_us = lock_start.elapsed().as_micros() as u64;
         let ctx: ID3D11DeviceContext =
             self.video_context.cast().map_err(D3d11Nv12Error::Windows)?;
+        let flush_start = std::time::Instant::now();
         unsafe {
             ctx.Flush();
         }
-        Ok(())
+        Ok(D3d11FlushTiming {
+            skipped: false,
+            ctx_wait_us,
+            call_us: flush_start.elapsed().as_micros() as u64,
+        })
     }
 
     fn cached_input_view(
@@ -1031,23 +1097,50 @@ impl D3d11BgraScale {
         input: &ID3D11Texture2D,
         context_mutex: &parking_lot::Mutex<()>,
     ) -> Result<ID3D11Texture2D, D3d11Nv12Error> {
+        Ok(self.convert_timed(input, context_mutex)?.texture)
+    }
+
+    pub fn convert_timed(
+        &self,
+        input: &ID3D11Texture2D,
+        context_mutex: &parking_lot::Mutex<()>,
+    ) -> Result<D3d11ConvertTextureTiming, D3d11Nv12Error> {
+        let lock_start = std::time::Instant::now();
         let _ctx_guard = context_mutex.lock();
-        if self.use_cs_scale.load(Ordering::Relaxed) {
+        let ctx_wait_us = lock_start.elapsed().as_micros() as u64;
+        let submit_start = std::time::Instant::now();
+        let (texture, copy_us, blt_us) = if self.use_cs_scale.load(Ordering::Relaxed) {
             match self.convert_cs(input) {
-                Ok(texture) => return Ok(texture),
+                Ok(texture) => {
+                    let submit_us = submit_start.elapsed().as_micros() as u64;
+                    (texture, 0, submit_us)
+                }
                 Err(err) => {
                     self.use_cs_scale.store(false, Ordering::Relaxed);
                     eprintln!(
                         "[d3d11_nv12] RGB scaler compute failed, falling back to VideoProcessor: {:?}",
                         err
                     );
+                    self.convert_vp(input)?
                 }
             }
-        }
-        self.convert_vp(input)
+        } else {
+            self.convert_vp(input)?
+        };
+        let submit_us = submit_start.elapsed().as_micros() as u64;
+        Ok(D3d11ConvertTextureTiming {
+            texture,
+            ctx_wait_us,
+            submit_us,
+            copy_us,
+            blt_us,
+        })
     }
 
-    fn convert_vp(&self, input: &ID3D11Texture2D) -> Result<ID3D11Texture2D, D3d11Nv12Error> {
+    fn convert_vp(
+        &self,
+        input: &ID3D11Texture2D,
+    ) -> Result<(ID3D11Texture2D, u64, u64), D3d11Nv12Error> {
         let first_frame = !self.vp_logged_once.load(Ordering::Relaxed);
         let output_index = self.next_output_index();
         let output_texture = &self.output_textures[output_index];
@@ -1064,6 +1157,7 @@ impl D3d11BgraScale {
         }
 
         let intermediate_holder: Option<ID3D11Texture2D>;
+        let mut copy_us = 0u64;
         let vp_input: &ID3D11Texture2D = {
             let needs_intermediate = input_desc.BindFlags & D3D11_BIND_RENDER_TARGET.0 as u32 == 0
                 || (input_desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM
@@ -1088,7 +1182,9 @@ impl D3d11BgraScale {
                 }
                 let ctx: ID3D11DeviceContext =
                     self.video_context.cast().map_err(D3d11Nv12Error::Windows)?;
+                let copy_start = std::time::Instant::now();
                 unsafe { ctx.CopyResource(guard.as_ref().unwrap(), input) };
+                copy_us = copy_start.elapsed().as_micros() as u64;
                 intermediate_holder = Some(guard.as_ref().unwrap().clone());
                 drop(guard);
                 intermediate_holder.as_ref().unwrap()
@@ -1124,6 +1220,7 @@ impl D3d11BgraScale {
             pInputSurfaceRight: ManuallyDrop::new(None),
             ppFutureSurfacesRight: std::ptr::null_mut(),
         };
+        let blt_start = std::time::Instant::now();
         unsafe {
             if !self.vp_state_initialized.swap(true, Ordering::Relaxed) {
                 self.video_context.VideoProcessorSetStreamFrameFormat(
@@ -1158,6 +1255,7 @@ impl D3d11BgraScale {
                 .VideoProcessorBlt(&self.processor, &output_view, 0, &[stream])
                 .map_err(D3d11Nv12Error::Windows)?;
         }
+        let blt_us = blt_start.elapsed().as_micros() as u64;
         if first_frame {
             eprintln!(
                 "[d3d11_nv12] RGB scaler OK: input={}x{} -> output={}x{}",
@@ -1171,12 +1269,12 @@ impl D3d11BgraScale {
         }
         self.last_output_index
             .store(output_index as u32, Ordering::Relaxed);
-        Ok(output_texture.clone())
+        Ok((output_texture.clone(), copy_us, blt_us))
     }
 
     fn convert_cs(&self, input: &ID3D11Texture2D) -> Result<ID3D11Texture2D, D3d11Nv12Error> {
         let Some(cs) = self.cs_scale.as_ref() else {
-            return self.convert_vp(input);
+            return self.convert_vp(input).map(|(texture, _, _)| texture);
         };
         let ctx = self.immediate_context()?;
         let output_index = self.next_output_index();
@@ -1224,19 +1322,36 @@ impl D3d11BgraScale {
     }
 
     pub fn flush(&self, context_mutex: &parking_lot::Mutex<()>) -> Result<(), D3d11Nv12Error> {
+        self.flush_timed(context_mutex).map(|_| ())
+    }
+
+    pub fn flush_timed(
+        &self,
+        context_mutex: &parking_lot::Mutex<()>,
+    ) -> Result<D3d11FlushTiming, D3d11Nv12Error> {
         let remaining = self.flush_frames_remaining.load(Ordering::Relaxed);
         if remaining == 0 {
-            return Ok(());
+            return Ok(D3d11FlushTiming {
+                skipped: true,
+                ..Default::default()
+            });
         }
         self.flush_frames_remaining
             .store(remaining.saturating_sub(1), Ordering::Relaxed);
+        let lock_start = std::time::Instant::now();
         let _ctx_guard = context_mutex.lock();
+        let ctx_wait_us = lock_start.elapsed().as_micros() as u64;
         let ctx: ID3D11DeviceContext =
             self.video_context.cast().map_err(D3d11Nv12Error::Windows)?;
+        let flush_start = std::time::Instant::now();
         unsafe {
             ctx.Flush();
         }
-        Ok(())
+        Ok(D3d11FlushTiming {
+            skipped: false,
+            ctx_wait_us,
+            call_us: flush_start.elapsed().as_micros() as u64,
+        })
     }
 
     fn cached_input_view(

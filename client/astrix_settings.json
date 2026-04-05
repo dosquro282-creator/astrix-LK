@@ -1,15 +1,41 @@
 {
   "remember_me": true,
-  "saved_username": "123",
-  "saved_password": "123",
+  "saved_username": "321",
+  "saved_password": "321",
+  "saved_accounts": [
+    {
+      "user_id": 2,
+      "username": "321",
+      "password": "321",
+      "display_name": "321"
+    },
+    {
+      "user_id": 1,
+      "username": "123",
+      "password": "123",
+      "display_name": "123"
+    }
+  ],
   "api_base": "http://193.233.251.173:8080",
   "last_server": {
-    "1": 1,
-    "2": 17
+    "2": 1,
+    "1": 1
   },
   "dark_mode": true,
   "voice_volume_by_user": {},
   "stream_volume_by_user": {},
+  "receiver_denoise_by_user": [],
+  "denoise_model_id": "DeepFilterNet3_onnx.tar.gz",
+  "denoise_atten_lim_db": 42.0,
+  "denoise_post_filter_beta": 0.01,
+  "denoise_min_db_thresh": -15.0,
+  "denoise_max_db_erb_thresh": 35.0,
+  "denoise_max_db_df_thresh": 35.0,
+  "denoise_reduce_mask": "max",
+  "input_volume": 1.0,
+  "input_sensitivity": 0.55,
+  "output_volume": 1.0,
+  "screen_preset": "P1080F120",
   "decode_path": "mft",
   "video_decoder_gamma": 0.0,
   "video_decoder_gamma_migrated_v2": true
