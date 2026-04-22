@@ -285,7 +285,10 @@ impl NvencD3d11Encoder {
             >= self.input_ring_size
         {
             let collect_timeout_ms = if self.async_encode {
-                0
+                // Only wait when the native ring is already full. A tiny grace
+                // period lets the output worker harvest a just-completed packet
+                // instead of surfacing a transient QueueFull under IDR/heavy scenes.
+                1
             } else {
                 need_input_timeout_ms.max(1)
             };

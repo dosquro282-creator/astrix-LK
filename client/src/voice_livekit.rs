@@ -46,6 +46,8 @@ use crate::encoded_h264::{EncodedBackendKind, EncodedH264Encoder, EncodedH264Enc
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::gpu_device::GpuDevice;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+use crate::mft_encoder::EncodedFrame;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use crate::nvenc_d11::NvencD3d11Error;
 use crate::screen_encoder::box_scale_rgba;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
@@ -82,6 +84,8 @@ const SCREEN_AUDIO_QUEUE_MS: u32 = 500;
 const SCREEN_WEBRTC_MOTION_MODE_ENV: &str = "ASTRIX_SCREEN_WEBRTC_MOTION_MODE";
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 const DXGI_RGB_SECOND_DEVICE_ENV: &str = "ASTRIX_DXGI_RGB_SECOND_DEVICE";
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+const DXGI_NV12_SECOND_DEVICE_ENV: &str = "ASTRIX_DXGI_NV12_SECOND_DEVICE";
 const REMOTE_MIX_QUEUE_MAX_FRAMES: usize = 6;
 const SCREEN_AUDIO_SIGNAL_THRESHOLD: i16 = 32;
 const MIC_RING_CAPTURE_MAX_FRAMES: usize = 12;
@@ -103,6 +107,67 @@ fn dxgi_rgb_second_device_enabled() -> bool {
         .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
         .unwrap_or(true)
 }
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn dxgi_nvenc_direct_rgb_enabled(max_fps: f64) -> bool {
+    std::env::var("ASTRIX_DXGI_NVENC_DIRECT_RGB")
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(max_fps >= 90.0)
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn dxgi_nv12_second_device_enabled() -> bool {
+    std::env::var(DXGI_NV12_SECOND_DEVICE_ENV)
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(false)
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn astrix_high_priority_pipeline_enabled() -> bool {
+    std::env::var("ASTRIX_HIGH_PRIORITY_PIPELINE")
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("normal")))
+        .unwrap_or(true)
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn apply_astrix_process_priority(reason: &str) {
+    if !astrix_high_priority_pipeline_enabled() {
+        return;
+    }
+    unsafe {
+        use windows::Win32::System::Threading::{
+            GetCurrentProcess, SetPriorityClass, HIGH_PRIORITY_CLASS,
+        };
+        let _ = SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+    }
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "[voice][screen] Astrix process priority: HIGH_PRIORITY_CLASS ({reason}, ASTRIX_HIGH_PRIORITY_PIPELINE={})",
+            std::env::var("ASTRIX_HIGH_PRIORITY_PIPELINE")
+                .unwrap_or_else(|_| "<default:on>".to_string()),
+        );
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn apply_astrix_pipeline_thread_priority() {
+    if !astrix_high_priority_pipeline_enabled() {
+        return;
+    }
+    unsafe {
+        use windows::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
+        };
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    }
+}
+
+#[cfg(not(all(target_os = "windows", feature = "wgc-capture")))]
+fn apply_astrix_process_priority(_reason: &str) {}
+
+#[cfg(not(all(target_os = "windows", feature = "wgc-capture")))]
+fn apply_astrix_pipeline_thread_priority() {}
 
 fn create_screen_video_track(source: RtcVideoSource, motion_mode: bool) -> LocalVideoTrack {
     let track = LocalVideoTrack::create_video_track("screen", source);
@@ -626,6 +691,7 @@ fn guarded_screen_share_webrtc_fps_cap(
     transport_path: Option<&str>,
     transport_rtt_ms: Option<f32>,
     _quality_limitation_reason: Option<&str>,
+    dxgi_nvenc_high_fps: bool,
 ) -> f64 {
     if raw_cap_fps >= 30.0 || max_fps_f64 < 60.0 || source_fps < 45.0 {
         return raw_cap_fps;
@@ -640,6 +706,10 @@ fn guarded_screen_share_webrtc_fps_cap(
     let low_loss = packet_loss_pct.unwrap_or(100.0) <= 0.5;
     let sane_rtt = transport_rtt_ms.unwrap_or(10_000.0) <= 120.0;
 
+    if dxgi_nvenc_high_fps && max_fps_f64 >= 90.0 && udp_non_relay && low_loss && sane_rtt {
+        return max_fps_f64;
+    }
+
     if udp_non_relay && low_loss && sane_rtt {
         raw_cap_fps.max(30.0_f64.min(max_fps_f64))
     } else {
@@ -652,10 +722,12 @@ fn guarded_screen_share_webrtc_bitrate_floor_bps(
     preset_bitrate_bps_u32: u32,
     source_fps: f64,
     max_fps_f64: f64,
+    available_outgoing_bitrate_mbps: Option<f32>,
     packet_loss_pct: Option<f32>,
     transport_path: Option<&str>,
     transport_rtt_ms: Option<f32>,
     quality_limitation_reason: Option<&str>,
+    dxgi_nvenc_high_fps: bool,
 ) -> u32 {
     if preset_bitrate_bps_u32 == 0 || max_fps_f64 < 60.0 || source_fps < 45.0 {
         return raw_target_bitrate_bps;
@@ -675,9 +747,39 @@ fn guarded_screen_share_webrtc_bitrate_floor_bps(
         return raw_target_bitrate_bps;
     }
 
-    let floor_ratio = if max_fps_f64 >= 85.0 { 0.12 } else { 0.10 };
+    let floor_ratio = if dxgi_nvenc_high_fps && max_fps_f64 >= 90.0 {
+        0.35
+    } else if max_fps_f64 >= 85.0 {
+        0.12
+    } else {
+        0.10
+    };
+    let floor_min_bps = if dxgi_nvenc_high_fps && max_fps_f64 >= 90.0 {
+        6_000_000
+    } else {
+        1_000_000
+    };
+    let floor_max_bps = if dxgi_nvenc_high_fps && max_fps_f64 >= 90.0 {
+        16_000_000
+    } else {
+        5_000_000
+    };
     let floor_bps = ((preset_bitrate_bps_u32 as f64) * floor_ratio).round() as u32;
-    let floor_bps = floor_bps.clamp(1_000_000, 5_000_000).min(preset_bitrate_bps_u32);
+    let mut floor_bps = floor_bps
+        .clamp(floor_min_bps, floor_max_bps)
+        .min(preset_bitrate_bps_u32);
+    if dxgi_nvenc_high_fps && max_fps_f64 >= 90.0 {
+        // Avoid turning the BWE guard into a transport queue. If WebRTC's candidate
+        // pair estimate is still low, let the floor climb only slightly ahead of it
+        // instead of jumping straight to the preset-derived floor.
+        let measured_ceiling_bps = available_outgoing_bitrate_mbps
+            .filter(|mbps| mbps.is_finite() && *mbps > 0.0)
+            .map(|mbps| (mbps as f64 * 1_000_000.0 * 1.35).round() as u32)
+            .unwrap_or_else(|| {
+                ((raw_target_bitrate_bps.max(250_000) as f64) * 1.35).round() as u32
+            });
+        floor_bps = floor_bps.min(measured_ceiling_bps.max(raw_target_bitrate_bps));
+    }
     raw_target_bitrate_bps.max(floor_bps)
 }
 
@@ -1331,17 +1433,34 @@ struct DxgiPushTraceStats {
     submit_us_total: u64,
     submit_map_us_total: u64,
     submit_encode_picture_us_total: u64,
+    submit_map_us_samples: Vec<u64>,
+    submit_encode_picture_us_samples: Vec<u64>,
     collect_some: u64,
     collect_none: u64,
     collect_err: u64,
     collect_frames: u64,
     collect_us_total: u64,
+    nvenc_encode_time_us_samples: Vec<u64>,
+    nvenc_in_flight_samples: Vec<u64>,
+    nvenc_preencode_drop_frames: u64,
+    nvenc_preencode_drop_keyframes: u64,
+    nvenc_preencode_leaky_ticks: u64,
     encode_ok: u64,
     encode_fail: u64,
     encode_us_total: u64,
     send_calls: u64,
     sent_frames: u64,
     send_us_total: u64,
+    sent_bytes_total: u64,
+    sent_frame_max_bytes: u64,
+    sent_frame_size_samples: Vec<u64>,
+    sent_keyframes: u64,
+    send_gap_samples: u64,
+    send_gap_us_total: u64,
+    send_gap_max_us: u64,
+    send_burst_gaps: u64,
+    send_stall_gaps: u64,
+    send_coalesced_drop: u64,
 }
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
@@ -1355,6 +1474,48 @@ impl DxgiPushTraceStats {
             0
         } else {
             total / count
+        }
+    }
+
+    fn percentile_u64(samples: &[u64], percentile: usize) -> u64 {
+        if samples.is_empty() {
+            return 0;
+        }
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+        let idx = ((sorted.len() * percentile.min(100) + 99) / 100).saturating_sub(1);
+        sorted[idx.min(sorted.len().saturating_sub(1))]
+    }
+
+    fn max_u64(samples: &[u64]) -> u64 {
+        samples.iter().copied().max().unwrap_or(0)
+    }
+
+    fn record_sent_frame(
+        &mut self,
+        bytes: u64,
+        key_frame: bool,
+        gap_us: Option<u64>,
+        frame_interval_us: u64,
+    ) {
+        self.sent_bytes_total = self.sent_bytes_total.saturating_add(bytes);
+        self.sent_frame_max_bytes = self.sent_frame_max_bytes.max(bytes);
+        self.sent_frame_size_samples.push(bytes);
+        if key_frame {
+            self.sent_keyframes = self.sent_keyframes.saturating_add(1);
+        }
+        if let Some(gap_us) = gap_us {
+            self.send_gap_samples = self.send_gap_samples.saturating_add(1);
+            self.send_gap_us_total = self.send_gap_us_total.saturating_add(gap_us);
+            self.send_gap_max_us = self.send_gap_max_us.max(gap_us);
+            let burst_threshold_us = (frame_interval_us / 2).max(1_000);
+            let stall_threshold_us = frame_interval_us.saturating_mul(3).max(50_000);
+            if gap_us <= burst_threshold_us {
+                self.send_burst_gaps = self.send_burst_gaps.saturating_add(1);
+            }
+            if gap_us >= stall_threshold_us {
+                self.send_stall_gaps = self.send_stall_gaps.saturating_add(1);
+            }
         }
     }
 
@@ -1435,6 +1596,47 @@ impl DxgiPushTraceStats {
             Self::rate(self.send_calls, secs),
             Self::avg_us(self.send_us_total, self.send_calls),
         );
+        if self.sent_frames > 0 {
+            eprintln!(
+                "[voice][screen][push][burst] sent_frames={} key={} avg_frame={}KB max_frame={}KB gap_avg={}us gap_max={}us burst_gaps={} stall_gaps={}",
+                self.sent_frames,
+                self.sent_keyframes,
+                self.sent_bytes_total / self.sent_frames / 1024,
+                self.sent_frame_max_bytes / 1024,
+                Self::avg_us(self.send_gap_us_total, self.send_gap_samples),
+                self.send_gap_max_us,
+                self.send_burst_gaps,
+                self.send_stall_gaps,
+            );
+            if self.send_coalesced_drop > 0 {
+                eprintln!(
+                    "[voice][screen][push][coalesce] dropped={} stale encoded frame(s) before WebRTC push",
+                    self.send_coalesced_drop,
+                );
+            }
+        }
+        if !self.submit_map_us_samples.is_empty()
+            || !self.submit_encode_picture_us_samples.is_empty()
+            || !self.nvenc_encode_time_us_samples.is_empty()
+            || !self.nvenc_in_flight_samples.is_empty()
+        {
+            eprintln!(
+                "[voice][screen][push][nvenc] map_p95={}us map_max={}us pic_p95={}us pic_max={}us encode_time_p95={}us encode_time_max={}us in_flight_p95={} in_flight_max={} frame_p95={}KB frame_max={}KB pre_drop={} pre_drop_key={} leaky_ticks={}",
+                Self::percentile_u64(&self.submit_map_us_samples, 95),
+                Self::max_u64(&self.submit_map_us_samples),
+                Self::percentile_u64(&self.submit_encode_picture_us_samples, 95),
+                Self::max_u64(&self.submit_encode_picture_us_samples),
+                Self::percentile_u64(&self.nvenc_encode_time_us_samples, 95),
+                Self::max_u64(&self.nvenc_encode_time_us_samples),
+                Self::percentile_u64(&self.nvenc_in_flight_samples, 95),
+                Self::max_u64(&self.nvenc_in_flight_samples),
+                Self::percentile_u64(&self.sent_frame_size_samples, 95) / 1024,
+                Self::max_u64(&self.sent_frame_size_samples) / 1024,
+                self.nvenc_preencode_drop_frames,
+                self.nvenc_preencode_drop_keyframes,
+                self.nvenc_preencode_leaky_ticks,
+            );
+        }
         *self = Self::default();
         *window_start = std::time::Instant::now();
     }
@@ -2082,11 +2284,7 @@ async fn run_session(
                             std::thread::Builder::new()
                                 .name(format!("astrix-conv-{}", conv_task_key))
                                 .spawn(move || {
-                                    #[cfg(target_os = "windows")]
-                                    unsafe {
-                                        use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL};
-                                        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-                                    }
+                                    apply_astrix_pipeline_thread_priority();
                                     if pacing_enabled {
                                         eprintln!("[voice][screen][viewer] converter thread started: pacing auto-adapt");
                                     } else {
@@ -2217,6 +2415,11 @@ async fn run_session(
                                 let mut prev_frame_ts: i64 = 0;
                                 let mut wait_start = std::time::Instant::now();
                                 let mut last_frame_at = std::time::Instant::now();
+                                let mut recv_gap_samples: u64 = 0;
+                                let mut recv_gap_us_total: u64 = 0;
+                                let mut recv_gap_max_us: u64 = 0;
+                                let mut recv_burst_gaps: u64 = 0;
+                                let mut recv_stall_gaps: u64 = 0;
                                 let stall_threshold = screen_recovery_stall_threshold();
                                 let request_cooldown = screen_recovery_request_cooldown();
                                 let mut last_recovery_request_at =
@@ -2258,12 +2461,25 @@ async fn run_session(
                                             // Do not push auto_expected_us into pacing slot — see pacing_slot_ema.
                                             if crate::telemetry::is_telemetry_enabled() {
                                                 eprintln!(
-                                                    "[voice][screen][viewer] recv rate: {:.1} fps (ts_step={} us)",
+                                                    "[voice][screen][viewer] recv rate: {:.1} fps (ts_step={} us, gap_avg={}us gap_max={}us burst_gaps={} stall_gaps={})",
                                                     fps,
-                                                    pacing_slot_ema
+                                                    pacing_slot_ema,
+                                                    if recv_gap_samples > 0 {
+                                                        recv_gap_us_total / recv_gap_samples
+                                                    } else {
+                                                        0
+                                                    },
+                                                    recv_gap_max_us,
+                                                    recv_burst_gaps,
+                                                    recv_stall_gaps,
                                                 );
                                             }
                                         }
+                                        recv_gap_samples = 0;
+                                        recv_gap_us_total = 0;
+                                        recv_gap_max_us = 0;
+                                        recv_burst_gaps = 0;
+                                        recv_stall_gaps = 0;
                                         fps_window_frames = 0;
                                         fps_window_start = std::time::Instant::now();
                                     }
@@ -2282,6 +2498,17 @@ async fn run_session(
                                         }
                                         let expected_us = if ts_delta > 0 { ts_delta } else { auto_expected_us };
                                         let network_us = receive_wait_us.saturating_sub(expected_us);
+                                        recv_gap_samples = recv_gap_samples.saturating_add(1);
+                                        recv_gap_us_total = recv_gap_us_total.saturating_add(receive_wait_us);
+                                        recv_gap_max_us = recv_gap_max_us.max(receive_wait_us);
+                                        let recv_burst_threshold_us = (expected_us / 2).max(1_000);
+                                        let recv_stall_threshold_us = expected_us.saturating_mul(3).max(50_000);
+                                        if receive_wait_us <= recv_burst_threshold_us {
+                                            recv_burst_gaps = recv_burst_gaps.saturating_add(1);
+                                        }
+                                        if receive_wait_us >= recv_stall_threshold_us {
+                                            recv_stall_gaps = recv_stall_gaps.saturating_add(1);
+                                        }
                                         tel_recv.add_receiver_frame(network_us, receive_wait_us, expected_us);
                                         if raw_frame_count <= 5 && telemetry_enabled {
                                             eprintln!(
@@ -3745,6 +3972,8 @@ fn start_screen_capture(
     Option<LocalVideoTrack>,
     Option<tokio::sync::oneshot::Receiver<LocalVideoTrack>>,
 ) {
+    apply_astrix_process_priority("screen pipeline start");
+    apply_astrix_pipeline_thread_priority();
     let capture_backend_env = std::env::var("ASTRIX_SCREEN_CAPTURE_BACKEND").ok();
     let capture_backend = capture_backend_env
         .clone()
@@ -3954,6 +4183,7 @@ fn start_screen_capture(
         std::thread::Builder::new()
             .name("livekit-rgb-scale".into())
             .spawn(move || {
+                apply_astrix_pipeline_thread_priority();
                 let mut last_converted_wgc = 0u64;
                 while !stop_flag.load(Ordering::Relaxed) {
                     let Some((slot, current_wgc)) = latest_slot.load_published() else {
@@ -4076,6 +4306,142 @@ fn start_screen_capture(
                 eprintln!("[voice][screen] async GPU convert worker stopped");
             })
             .expect("failed to spawn async RGB scale worker")
+    }
+
+    fn spawn_async_nv12_worker(
+        stop_flag: Arc<AtomicBool>,
+        pool_ref: Arc<Mutex<Option<GpuTexturePool>>>,
+        latest_slot: Arc<LatestSlot>,
+        converter: D3d11BgraToNv12,
+        latest_output: Arc<parking_lot::Mutex<Option<AsyncRgbScaleFrame>>>,
+        failed: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::Builder::new()
+            .name("livekit-nv12-convert".into())
+            .spawn(move || {
+                apply_astrix_pipeline_thread_priority();
+                let mut last_converted_wgc = 0u64;
+                while !stop_flag.load(Ordering::Relaxed) {
+                    let Some((slot, current_wgc)) = latest_slot.load_published() else {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    };
+                    if current_wgc == last_converted_wgc {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+
+                    let (texture, context, context_mutex, input_keyed_mutex) = {
+                        let guard = pool_ref.lock();
+                        let Some(pool) = guard.as_ref() else {
+                            drop(guard);
+                            std::thread::sleep(Duration::from_millis(1));
+                            continue;
+                        };
+                        if let (Some(textures), Some(context), Some(context_mutex)) = (
+                            pool.rgb_scale_input_textures.as_ref(),
+                            pool.rgb_scale_context.as_ref(),
+                            pool.rgb_scale_context_mutex.as_ref(),
+                        ) {
+                            (
+                                textures[slot as usize].clone(),
+                                context.clone(),
+                                Arc::clone(context_mutex),
+                                pool.rgb_scale_input_mutexes
+                                    .as_ref()
+                                    .map(|mutexes| mutexes[slot as usize].clone()),
+                            )
+                        } else {
+                            (
+                                pool.textures[slot as usize].clone(),
+                                pool.context.clone(),
+                                Arc::clone(&pool.context_mutex),
+                                None,
+                            )
+                        }
+                    };
+
+                    if let Some(keyed_mutex) = input_keyed_mutex.as_ref() {
+                        match keyed_mutex_try_acquire(keyed_mutex, 1) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                std::thread::sleep(Duration::from_millis(1));
+                                continue;
+                            }
+                            Err(err) => {
+                                failed.store(true, Ordering::Relaxed);
+                                eprintln!(
+                                    "[voice][screen] async NV12 shared-slot acquire failed: {:?}",
+                                    err
+                                );
+                                break;
+                            }
+                        }
+                    }
+
+                    let convert = match converter.convert_timed(&context, &texture, &context_mutex)
+                    {
+                        Ok(timing) => timing,
+                        Err(err) => {
+                            if let Some(keyed_mutex) = input_keyed_mutex.as_ref() {
+                                let _ = unsafe { keyed_mutex.ReleaseSync(0) };
+                            }
+                            failed.store(true, Ordering::Relaxed);
+                            eprintln!("[voice][screen] async NV12 convert failed: {:?}", err);
+                            break;
+                        }
+                    };
+                    let flush = match converter.flush_timed(&context_mutex) {
+                        Ok(timing) => timing,
+                        Err(err) => {
+                            if let Some(keyed_mutex) = input_keyed_mutex.as_ref() {
+                                let _ = unsafe { keyed_mutex.ReleaseSync(0) };
+                            }
+                            failed.store(true, Ordering::Relaxed);
+                            eprintln!("[voice][screen] async NV12 flush failed: {:?}", err);
+                            break;
+                        }
+                    };
+                    if let Some(keyed_mutex) = input_keyed_mutex.as_ref() {
+                        if let Err(err) = unsafe { keyed_mutex.ReleaseSync(0) } {
+                            failed.store(true, Ordering::Relaxed);
+                            eprintln!(
+                                "[voice][screen] async NV12 shared-slot release failed: {:?}",
+                                err
+                            );
+                            break;
+                        }
+                    }
+
+                    *latest_output.lock() = Some(AsyncRgbScaleFrame {
+                        texture: convert.texture,
+                        source_wgc: current_wgc,
+                        convert_us: convert.ctx_wait_us.saturating_add(convert.submit_us),
+                        convert_ctx_wait_us: convert.ctx_wait_us,
+                        convert_submit_us: convert.submit_us,
+                        convert_copy_us: convert.copy_us,
+                        convert_srv_us: convert.srv_us,
+                        convert_cb_us: convert.cb_us,
+                        convert_bind_us: convert.bind_us,
+                        convert_bind_state_us: convert.bind_state_us,
+                        convert_bind_shader_us: convert.bind_shader_us,
+                        convert_bind_cb_us: convert.bind_cb_us,
+                        convert_bind_sampler_us: convert.bind_sampler_us,
+                        convert_bind_srv_us: convert.bind_srv_us,
+                        convert_bind_uav_us: convert.bind_uav_us,
+                        convert_dispatch_us: convert.dispatch_us,
+                        convert_unbind_us: convert.unbind_us,
+                        convert_query_us: convert.query_us,
+                        convert_blt_us: convert.blt_us,
+                        flush_us: flush.ctx_wait_us.saturating_add(flush.call_us),
+                        flush_ctx_wait_us: flush.ctx_wait_us,
+                        flush_call_us: flush.call_us,
+                    });
+                    last_converted_wgc = current_wgc;
+                }
+                eprintln!("[voice][screen] async NV12 convert worker stopped");
+            })
+            .expect("failed to spawn async NV12 convert worker")
     }
 
     const RING_SIZE: usize = 6;
@@ -4365,6 +4731,7 @@ fn start_screen_capture(
                                 }
                             }
                             std::thread::spawn(move || {
+                                apply_astrix_pipeline_thread_priority();
                                 let mut textures: [Option<ID3D11Texture2D>; LATEST_SLOT_COUNT] =
                                     std::array::from_fn(|_| None);
                                 for (i, slot) in textures.iter_mut().enumerate() {
@@ -4516,6 +4883,8 @@ fn start_screen_capture(
         std::thread::Builder::new()
             .name("livekit-screen-dxgi".into())
             .spawn(move || {
+                apply_astrix_process_priority("DXGI capture thread");
+                apply_astrix_pipeline_thread_priority();
                 let mut capture = match DxgiDuplicationCapture::new(screen_index) {
                     Ok(capture) => capture,
                     Err(e) => {
@@ -4523,6 +4892,8 @@ fn start_screen_capture(
                         return;
                     }
                 };
+                let mut dxgi_accumulated_frames_sum: u64 = 0;
+                let mut dxgi_accumulated_frames_max: u32 = 0;
 
                 loop {
                     if stop_dxgi.load(Ordering::Relaxed) {
@@ -4552,6 +4923,11 @@ fn start_screen_capture(
                     let total = wgc_frame_count_dxgi.fetch_add(1, Ordering::Relaxed) + 1;
                     let now = std::time::Instant::now();
                     let frame_timestamp_100ns = frame.info.LastPresentTime;
+                    let accumulated_frames = frame.info.AccumulatedFrames.max(1);
+                    dxgi_accumulated_frames_sum = dxgi_accumulated_frames_sum
+                        .saturating_add(accumulated_frames as u64);
+                    dxgi_accumulated_frames_max =
+                        dxgi_accumulated_frames_max.max(accumulated_frames);
                     if let Some(mut guard) = wgc_log_state_dxgi.try_lock() {
                         let (last_count, last_t, last_frame_timestamp_100ns) = *guard;
                         match last_t {
@@ -4560,6 +4936,14 @@ fn start_screen_capture(
                                 let elapsed_sec = now.duration_since(t0).as_secs_f32().max(0.001);
                                 let callback_fps = (total - last_count) as f32 / elapsed_sec;
                                 let frames = total.saturating_sub(last_count);
+                                let accumulated_sum = dxgi_accumulated_frames_sum.max(frames);
+                                let accumulated_est_fps =
+                                    accumulated_sum as f32 / elapsed_sec;
+                                let accumulated_avg = if frames > 0 {
+                                    accumulated_sum as f32 / frames as f32
+                                } else {
+                                    0.0
+                                };
                                 let compositor_fps = if last_frame_timestamp_100ns > 0
                                     && frame_timestamp_100ns > last_frame_timestamp_100ns
                                     && frames > 1
@@ -4573,13 +4957,17 @@ fn start_screen_capture(
                                 };
                                 wgc_source_fps_milli_dxgi
                                     .store((compositor_fps * 1000.0) as u64, Ordering::Relaxed);
-                                if is_telemetry_enabled() {
-                                    eprintln!(
-                                        "[voice][screen] DXGI rate: callback {:.1} fps, compositor {:.1} fps",
-                                        callback_fps, compositor_fps
-                                    );
-                                }
+                                eprintln!(
+                                    "[voice][screen] DXGI rate: callback {:.1} fps, compositor {:.1} fps, accumulated_est {:.1} fps (avg {:.2}x max {}x)",
+                                    callback_fps,
+                                    compositor_fps,
+                                    accumulated_est_fps,
+                                    accumulated_avg,
+                                    dxgi_accumulated_frames_max,
+                                );
                                 *guard = (total, Some(now), frame_timestamp_100ns);
+                                dxgi_accumulated_frames_sum = 0;
+                                dxgi_accumulated_frames_max = 0;
                             }
                             _ => {}
                         }
@@ -4626,8 +5014,17 @@ fn start_screen_capture(
                             let mut rgb_scale_input_mutexes = None;
                             let shared_rgb_scale_needed = our_desc.Width != video_width
                                 || our_desc.Height != video_height;
+                            let direct_rgb_for_shared_ring =
+                                dxgi_nvenc_direct_rgb_enabled(max_fps);
+                            let nv12_second_device_for_shared_ring =
+                                dxgi_nv12_second_device_enabled() && !direct_rgb_for_shared_ring;
+                            let shared_second_device_needed =
+                                nv12_second_device_for_shared_ring
+                                    || (direct_rgb_for_shared_ring && shared_rgb_scale_needed);
 
-                            let textures = if dxgi_rgb_second_device_enabled() && shared_rgb_scale_needed {
+                            let textures = if dxgi_rgb_second_device_enabled()
+                                && shared_second_device_needed
+                            {
                                 match GpuDevice::create_for_adapter_idx(capture.selection.adapter_idx) {
                                     Ok(rgb_gpu) => match create_shared_keyed_texture_ring::<LATEST_SLOT_COUNT>(
                                         &capture.device,
@@ -4636,10 +5033,18 @@ fn start_screen_capture(
                                     ) {
                                         Ok(shared_ring) => {
                                             eprintln!(
-                                                "[voice][screen] DXGI direct RGB shared ring: separate D3D11 device enabled ({}={:?}, adapter {}, {} slot(s))",
+                                                "[voice][screen] DXGI {} shared ring: separate D3D11 device enabled ({}={:?}, {}={:?}, adapter {}, {} slot(s))",
+                                                if nv12_second_device_for_shared_ring {
+                                                    "NV12"
+                                                } else {
+                                                    "direct RGB"
+                                                },
                                                 DXGI_RGB_SECOND_DEVICE_ENV,
                                                 std::env::var(DXGI_RGB_SECOND_DEVICE_ENV)
                                                     .unwrap_or_else(|_| "<default:on>".to_string()),
+                                                DXGI_NV12_SECOND_DEVICE_ENV,
+                                                std::env::var(DXGI_NV12_SECOND_DEVICE_ENV)
+                                                    .unwrap_or_else(|_| "<default:off>".to_string()),
                                                 capture.selection.adapter_idx,
                                                 LATEST_SLOT_COUNT
                                             );
@@ -4657,7 +5062,7 @@ fn start_screen_capture(
                                         }
                                         Err(err) => {
                                             eprintln!(
-                                                "[voice][screen] DXGI direct RGB shared ring init failed, falling back to same-device path: {:?}",
+                                                "[voice][screen] DXGI second-device shared ring init failed, falling back to same-device path: {:?}",
                                                 err
                                             );
                                             let mut textures: [Option<ID3D11Texture2D>; LATEST_SLOT_COUNT] =
@@ -4687,7 +5092,7 @@ fn start_screen_capture(
                                     },
                                     Err(err) => {
                                         eprintln!(
-                                            "[voice][screen] DXGI separate RGB device init failed, falling back to same-device path: {:?}",
+                                            "[voice][screen] DXGI separate D3D11 device init failed, falling back to same-device path: {:?}",
                                             err
                                         );
                                         let mut textures: [Option<ID3D11Texture2D>; LATEST_SLOT_COUNT] =
@@ -5152,13 +5557,8 @@ fn start_screen_capture(
         .name("livekit-screen-enc".into())
         .spawn(move || {
             // Phase 4.4: raise encoder thread priority — reduces jitter when CPU is loaded (e.g. gaming).
-            #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-            unsafe {
-                use windows::Win32::System::Threading::{
-                    GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
-                };
-                let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-            }
+            apply_astrix_process_priority("encoder thread");
+            apply_astrix_pipeline_thread_priority();
 
             // Raise Windows timer resolution to 1 ms.
             unsafe {
@@ -5178,6 +5578,7 @@ fn start_screen_capture(
                 Some(std::thread::Builder::new()
                     .name("livekit-capture-frame".into())
                     .spawn(move || {
+                        apply_astrix_pipeline_thread_priority();
                         while let Ok(vf) = capture_rx.recv() {
                             source_for_capture.capture_frame(&vf);
                         }
@@ -5257,6 +5658,8 @@ fn start_screen_capture(
             let mut locked_source_follow_down_votes: u32 = 0;
             let mut locked_source_follow_up_votes: u32 = 0;
             let mut locked_source_follow_cap_fps: Option<f64> = None;
+            let locked_source_follow_enabled = false;
+            eprintln!("[voice][screen] locked-source follow: disabled");
             let next_lower_fps = |fps: f64| -> f64 {
                 ADAPTIVE_FPS_LADDER.iter().rev().find(|&&s| s < fps).copied().unwrap_or(*ADAPTIVE_FPS_LADDER.first().unwrap())
             };
@@ -5301,9 +5704,29 @@ fn start_screen_capture(
             let mut pending_nv12_submit: std::collections::VecDeque<PendingNv12Submit> =
                 std::collections::VecDeque::new();
             let mut last_logged_active_submit_delay_frames: Option<usize> = None;
-            let nvenc_direct_rgb_enabled = std::env::var("ASTRIX_DXGI_NVENC_DIRECT_RGB")
-                .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
-                .unwrap_or(max_fps_f64 >= 90.0);
+            let nvenc_direct_rgb_enabled = dxgi_nvenc_direct_rgb_enabled(max_fps_f64);
+            let nv12_second_device_enabled =
+                dxgi_nv12_second_device_enabled() && !nvenc_direct_rgb_enabled;
+            let nvenc_send_coalesce_enabled =
+                std::env::var("ASTRIX_DXGI_NVENC_COALESCE_SEND")
+                    .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+                    .unwrap_or(false);
+            let nvenc_preencode_leaky_enabled =
+                std::env::var("ASTRIX_DXGI_NVENC_LEAKY_PREENCODE")
+                    .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+                    .unwrap_or(true);
+            let nvenc_preencode_leaky_max_in_flight: usize =
+                std::env::var("ASTRIX_DXGI_NVENC_LEAKY_MAX_IN_FLIGHT")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(4)
+                    .clamp(1, 16);
+            let nvenc_starvation_reset_threshold_ms: u64 =
+                std::env::var("ASTRIX_DXGI_NVENC_STARVATION_RESET_MS")
+                    .ok()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(if max_fps_f64 >= 90.0 { 1_000 } else { 1_500 })
+                    .clamp(300, 10_000);
             let nvenc_rgb_ring_size: usize = std::env::var("ASTRIX_DXGI_NVENC_RGB_RING")
                 .ok()
                 .and_then(|s| s.parse::<usize>().ok())
@@ -5327,6 +5750,52 @@ fn start_screen_capture(
                             "<default:12>".to_string()
                         } else {
                             "<default:4>".to_string()
+                        }
+                    }),
+            );
+            eprintln!(
+                "[voice][screen] NV12 second D3D11 device: {} ({}={})",
+                if nv12_second_device_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                DXGI_NV12_SECOND_DEVICE_ENV,
+                std::env::var(DXGI_NV12_SECOND_DEVICE_ENV)
+                    .unwrap_or_else(|_| "<default:off>".to_string()),
+            );
+            eprintln!(
+                "[voice][screen] NVENC send coalescing: {} (ASTRIX_DXGI_NVENC_COALESCE_SEND={})",
+                if nvenc_send_coalesce_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                std::env::var("ASTRIX_DXGI_NVENC_COALESCE_SEND")
+                    .unwrap_or_else(|_| "<default:off>".to_string()),
+            );
+            eprintln!(
+                "[voice][screen] NVENC pre-encode leaky queue: {} max_in_flight={} (ASTRIX_DXGI_NVENC_LEAKY_PREENCODE={}, ASTRIX_DXGI_NVENC_LEAKY_MAX_IN_FLIGHT={})",
+                if nvenc_preencode_leaky_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                nvenc_preencode_leaky_max_in_flight,
+                std::env::var("ASTRIX_DXGI_NVENC_LEAKY_PREENCODE")
+                    .unwrap_or_else(|_| "<default:on>".to_string()),
+                std::env::var("ASTRIX_DXGI_NVENC_LEAKY_MAX_IN_FLIGHT")
+                    .unwrap_or_else(|_| "<default:4>".to_string()),
+            );
+            eprintln!(
+                "[voice][screen] NVENC starvation reset threshold: {}ms (ASTRIX_DXGI_NVENC_STARVATION_RESET_MS={})",
+                nvenc_starvation_reset_threshold_ms,
+                std::env::var("ASTRIX_DXGI_NVENC_STARVATION_RESET_MS")
+                    .unwrap_or_else(|_| {
+                        if max_fps_f64 >= 90.0 {
+                            "<default:1000>".to_string()
+                        } else {
+                            "<default:1500>".to_string()
                         }
                     }),
             );
@@ -5484,6 +5953,8 @@ fn start_screen_capture(
             let mut mft_hard_failed = false;
             let mut mft_retry_at: Option<std::time::Instant> = None;
             let mut mft_transient_timeouts = 0u32;
+            let mut nvenc_starved_since: Option<std::time::Instant> = None;
+            let mut nvenc_stall_reset_cooldown_until: Option<std::time::Instant> = None;
             let mut mft_path_logged = false;
             let mut cpu_path_encoder_logged = false;
             let mut gpu_i420_encoder_logged = false;
@@ -5521,6 +5992,7 @@ fn start_screen_capture(
             let mut extra_intervals = 0i64;
             let mut prev_frame_time: Option<std::time::Instant> = None;
             let mut prev_send_time: Option<std::time::Instant> = None;
+            let mut encoded_push_last_at: Option<std::time::Instant> = None;
             // Phase 4.7: GIR + periodic forced IDR for packet loss recovery.
             // ASTRIX_PERIODIC_IDR_SECS=N (0 = disable, not recommended on WAN). Longer interval = fewer IDR spikes.
             let periodic_idr_override_secs: Option<u64> = std::env::var("ASTRIX_PERIODIC_IDR_SECS")
@@ -5583,18 +6055,20 @@ fn start_screen_capture(
                 let source_fps = (wgc_source_fps_milli_enc.load(Ordering::Relaxed) as f64) / 1000.0;
                 let (
                     guard_packet_loss_pct,
+                    guard_available_outgoing_bitrate_mbps,
                     guard_transport_path,
                     guard_transport_rtt_ms,
                     guard_quality_limitation_reason,
                 ) = if let Some(st) = stats_enc.try_lock() {
                     (
                         st.webrtc_packet_loss_pct,
+                        st.webrtc_available_outgoing_bitrate_mbps,
                         st.webrtc_transport_path.clone(),
                         st.webrtc_transport_rtt_ms,
                         st.webrtc_quality_limitation_reason.clone(),
                     )
                 } else {
-                    (None, None, None, None)
+                    (None, None, None, None, None)
                 };
                 let raw_webrtc_cap_fps = effective_webrtc_fps_cap(
                     webrtc_fps_hint,
@@ -5602,6 +6076,17 @@ fn start_screen_capture(
                     preset_bitrate_bps_u32,
                     max_fps_f64,
                 );
+                let dxgi_nvenc_high_fps_guard =
+                    use_dxgi
+                        && max_fps_f64 >= 90.0
+                        && match mft_encoder.as_ref().map(|enc| enc.backend_kind()) {
+                            Some(EncodedBackendKind::NvencD3d11) => true,
+                            // Before the first backend init, DXGI + Auto is expected to try
+                            // direct NVENC. Keep WebRTC's low screen-content hint from pinning
+                            // startup cadence to 30 fps during that short window.
+                            None if encode_path_enc == EncodePath::Auto => true,
+                            _ => false,
+                        };
                 let effective_webrtc_cap_fps = guarded_screen_share_webrtc_fps_cap(
                     raw_webrtc_cap_fps,
                     source_fps,
@@ -5610,6 +6095,7 @@ fn start_screen_capture(
                     guard_transport_path.as_deref(),
                     guard_transport_rtt_ms,
                     guard_quality_limitation_reason.as_deref(),
+                    dxgi_nvenc_high_fps_guard,
                 );
                 if !lock_preset_fps && source_fps >= 10.0 {
                     let source_cap_candidate = ADAPTIVE_FPS_LADDER
@@ -5690,7 +6176,7 @@ fn start_screen_capture(
                 } else if lock_preset_fps {
                     current_source_cap_fps = max_fps_f64;
                 }
-                if lock_preset_fps && max_fps_f64 >= 90.0 && source_fps >= 10.0 {
+                if locked_source_follow_enabled && lock_preset_fps && max_fps_f64 >= 90.0 && source_fps >= 10.0 {
                     let trigger_fps = (max_fps_f64 * 0.60).max(30.0);
                     let release_fps = (max_fps_f64 * 0.80).max(trigger_fps + 10.0);
                     let proposed_locked_cap_fps = (source_fps + 2.0).clamp(10.0, max_fps_f64);
@@ -5829,8 +6315,23 @@ fn start_screen_capture(
                         "startup recovery floor",
                     );
                 }
-                let desired_encoder_fps_u32 =
+                let preset_encoder_fps_u32 =
+                    max_fps_f64.round().clamp(1.0, max_fps_f64) as u32;
+                let schedule_encoder_fps_u32 =
                     current_fps.round().clamp(1.0, max_fps_f64) as u32;
+                let desired_encoder_fps_u32 =
+                    match mft_encoder.as_ref().map(|enc| enc.backend_kind()) {
+                        // DXGI + direct NVENC must keep the encoder session stable. Cadence can
+                        // adapt via current_fps, but changing NVENC fps rebuilds the session and
+                        // can break the viewer until the next IDR/PLI recovery.
+                        Some(EncodedBackendKind::NvencD3d11) if use_dxgi => preset_encoder_fps_u32,
+                        // First auto init on DXGI should also start NVENC at the preset max. If
+                        // NVENC is unavailable and we fall back to MFT, the next loop can sync MFT.
+                        None if use_dxgi && encode_path_enc == EncodePath::Auto => {
+                            preset_encoder_fps_u32
+                        }
+                        _ => schedule_encoder_fps_u32,
+                    };
                 if let Some(ref mut mft) = &mut mft_encoder {
                     if mft.fps() != desired_encoder_fps_u32 {
                         let rate_sync_result = if mft.nvenc_uses_rgb_input() {
@@ -6019,6 +6520,16 @@ fn start_screen_capture(
                                             .saturating_add(ef.data.len() as u64);
                                         encoded_frames_window =
                                             encoded_frames_window.saturating_add(1);
+                                        let push_now = std::time::Instant::now();
+                                        let push_gap_us = encoded_push_last_at
+                                            .replace(push_now)
+                                            .map(|prev| push_now.duration_since(prev).as_micros() as u64);
+                                        push_trace_stats.record_sent_frame(
+                                            ef.data.len() as u64,
+                                            ef.key_frame,
+                                            push_gap_us,
+                                            frame_interval_us,
+                                        );
                                         enc_src.push_frame(&ef.data, rtp_timestamp, capture_us, ef.key_frame);
                                         rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
                                     }
@@ -6134,10 +6645,12 @@ fn start_screen_capture(
                                         preset_bitrate_bps_u32,
                                         source_fps,
                                         max_fps_f64,
+                                        guard_available_outgoing_bitrate_mbps,
                                         guard_packet_loss_pct,
                                         guard_transport_path.as_deref(),
                                         guard_transport_rtt_ms,
                                         guard_quality_limitation_reason.as_deref(),
+                                        dxgi_nvenc_high_fps_guard,
                                     );
                                 let capped_bitrate_bps =
                                     guarded_bitrate_bps.clamp(250_000, preset_bitrate_bps_u32);
@@ -6193,6 +6706,16 @@ fn start_screen_capture(
                                         preset_bitrate_bps_u32,
                                         max_fps_f64,
                                     );
+                                    let effective_fps_cap = guarded_screen_share_webrtc_fps_cap(
+                                        effective_fps_cap,
+                                        source_fps,
+                                        max_fps_f64,
+                                        guard_packet_loss_pct,
+                                        guard_transport_path.as_deref(),
+                                        guard_transport_rtt_ms,
+                                        guard_quality_limitation_reason.as_deref(),
+                                        dxgi_nvenc_high_fps_guard,
+                                    );
                                     eprintln!(
                                         "[voice][screen] WebRTC BWE target: requested={:.1} Mbps applied={:.1} Mbps fps_hint={:.1} effective_fps_cap={:.1}",
                                         webrtc_requested_bitrate_bps as f64 / 1_000_000.0,
@@ -6208,7 +6731,14 @@ fn start_screen_capture(
                             // can write new frames during encode.
                             let current_wgc = latest_slot_enc.generation();
                             let is_new_content = current_wgc != last_wgc_count;
-                            let need_init = bgra_to_nv12.is_none() || mft_encoder.is_none();
+                            let nv12_async_converter_ready = nv12_second_device_enabled
+                                && !nvenc_direct_rgb_enabled
+                                && bgra_to_nv12.is_none()
+                                && async_rgb_scale_worker.is_some()
+                                && nvenc_rgb_scale_output_textures.is_some();
+                            let need_init =
+                                (!nv12_async_converter_ready && bgra_to_nv12.is_none())
+                                    || mft_encoder.is_none();
                             if need_init {
                                 push_trace_stats.need_init_ticks =
                                     push_trace_stats.need_init_ticks.saturating_add(1);
@@ -6252,14 +6782,36 @@ fn start_screen_capture(
                                 // Lazy init D3d11BgraToNv12 and the encoded H.264 backend.
                                 let fps_u32 = desired_encoder_fps_u32;
                                 let bitrate_u32 = webrtc_target_bitrate_bps;
-                                if bgra_to_nv12.is_none() {
+                                let nv12_uses_separate_device = nv12_second_device_enabled
+                                    && !nvenc_direct_rgb_enabled
+                                    && pool.rgb_scale_device.is_some()
+                                    && pool.rgb_scale_context.is_some()
+                                    && pool.rgb_scale_input_textures.is_some()
+                                    && pool.rgb_scale_input_mutexes.is_some();
+                                let nv12_device =
+                                    pool.rgb_scale_device.as_ref().unwrap_or(&pool.device);
+                                let nv12_context =
+                                    pool.rgb_scale_context.as_ref().unwrap_or(&pool.context);
+                                if bgra_to_nv12.is_none()
+                                    && !(nv12_uses_separate_device
+                                        && nvenc_rgb_scale_output_textures.is_some()
+                                        && async_rgb_scale_worker.is_some())
+                                {
                                     match D3d11BgraToNv12::new(
-                                        &pool.device, &pool.context,
+                                        nv12_device,
+                                        nv12_context,
                                         pool.width, pool.height,
                                         video_width, video_height,
                                         fps_u32,
                                     ) {
-                                        Ok(conv) => bgra_to_nv12 = Some(conv),
+                                        Ok(conv) => {
+                                            if nv12_uses_separate_device {
+                                                eprintln!(
+                                                    "[voice][screen] NV12 converter: separate D3D11 device via shared keyed ring"
+                                                );
+                                            }
+                                            bgra_to_nv12 = Some(conv);
+                                        }
                                         Err(e) => {
                                             eprintln!("[voice][screen] D3d11BgraToNv12 init failed: {:?}", e);
                                             mft_path_failed = true;
@@ -6290,6 +6842,8 @@ fn start_screen_capture(
                                     && can_try_nvenc_rgb_direct
                                     && nvenc_rgb_needs_scale
                                     && bgra_to_rgb.is_none()
+                                    && nvenc_rgb_scale_output_textures.is_none()
+                                    && async_rgb_scale_worker.is_none()
                                 {
                                     match D3d11BgraScale::new(
                                         rgb_scale_device,
@@ -6362,10 +6916,14 @@ fn start_screen_capture(
                                                     .unwrap_or_else(|| bgra_to_nv12.as_ref().unwrap().output_textures())
                                             }
                                         } else {
-                                            bgra_to_nv12.as_ref().unwrap().output_textures()
+                                            nvenc_rgb_scale_output_textures
+                                                .as_deref()
+                                                .unwrap_or_else(|| bgra_to_nv12.as_ref().unwrap().output_textures())
                                         };
                                         let encoder_device = if rgb_scale_uses_separate_device {
                                             rgb_scale_device
+                                        } else if nv12_uses_separate_device {
+                                            nv12_device
                                         } else {
                                             &pool.device
                                         };
@@ -6422,7 +6980,11 @@ fn start_screen_capture(
                                                                 "direct RGB ring"
                                                             }
                                                         } else {
-                                                            "NV12 convert ring"
+                                                            if nv12_uses_separate_device {
+                                                                "NV12 convert ring (separate D3D11)"
+                                                            } else {
+                                                                "NV12 convert ring"
+                                                            }
                                                         }
                                                     );
                                                 }
@@ -6464,6 +7026,37 @@ fn start_screen_capture(
                                                     eprintln!(
                                                         "[voice][screen] async GPU convert worker: enabled (direct RGB scale)"
                                                     );
+                                                } else if nv12_uses_separate_device {
+                                                    if let Some(nv12_converter) =
+                                                        bgra_to_nv12.take()
+                                                    {
+                                                        let output_textures = nv12_converter
+                                                            .output_textures()
+                                                            .to_vec();
+                                                        nvenc_rgb_scale_output_textures =
+                                                            Some(output_textures);
+                                                        let latest_output = Arc::new(
+                                                            parking_lot::Mutex::new(None),
+                                                        );
+                                                        let failed =
+                                                            Arc::new(AtomicBool::new(false));
+                                                        async_rgb_scale_worker = Some(
+                                                            spawn_async_nv12_worker(
+                                                                Arc::clone(&stop_enc),
+                                                                Arc::clone(&pool_ref_enc),
+                                                                Arc::clone(&latest_slot_enc),
+                                                                nv12_converter,
+                                                                Arc::clone(&latest_output),
+                                                                Arc::clone(&failed),
+                                                            ),
+                                                        );
+                                                        async_rgb_scale_latest =
+                                                            Some(latest_output);
+                                                        async_rgb_scale_failed = Some(failed);
+                                                        eprintln!(
+                                                            "[voice][screen] async GPU convert worker: enabled (NV12 separate D3D11)"
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
@@ -6486,14 +7079,23 @@ fn start_screen_capture(
                                 let async_rgb_scale_active = encoder_uses_rgb_input
                                     && async_rgb_scale_latest.is_some()
                                     && nvenc_rgb_scale_output_textures.is_some();
-                                if async_rgb_scale_active {
+                                let async_nv12_convert_active = !encoder_uses_rgb_input
+                                    && nv12_second_device_enabled
+                                    && async_rgb_scale_latest.is_some()
+                                    && nvenc_rgb_scale_output_textures.is_some();
+                                if async_rgb_scale_active || async_nv12_convert_active {
                                     if async_rgb_scale_failed
                                         .as_ref()
                                         .map(|f| f.load(Ordering::Relaxed))
                                         .unwrap_or(false)
                                     {
                                         eprintln!(
-                                            "[voice][screen] async GPU convert worker failed"
+                                            "[voice][screen] async GPU convert worker failed ({})",
+                                            if async_nv12_convert_active {
+                                                "NV12 separate D3D11"
+                                            } else {
+                                                "direct RGB scale"
+                                            }
                                         );
                                         mft_path_failed = true;
                                         mft_hard_failed = true;
@@ -6507,6 +7109,7 @@ fn start_screen_capture(
                                             EncodedBackendKind::NvencD3d11
                                         )
                                         && !async_rgb_scale_active
+                                        && !async_nv12_convert_active
                                         && frame_count >= 3
                                     {
                                         let nvenc_in_flight =
@@ -6536,7 +7139,7 @@ fn start_screen_capture(
                                 if skip_fresh_convert_due_backpressure {
                                     // Let the encoder drain before spending GPU work on a frame
                                     // that would likely be dropped on submit anyway.
-                                } else if async_rgb_scale_active {
+                                } else if async_rgb_scale_active || async_nv12_convert_active {
                                     if let Some(frame) = async_rgb_scale_latest
                                         .as_ref()
                                         .and_then(|state| state.lock().clone())
@@ -6635,8 +7238,13 @@ fn start_screen_capture(
                                             last_wgc_count = frame.source_wgc;
                                             if trace_this_tick {
                                                 eprintln!(
-                                                    "[voice][screen][push][tick {}] async direct RGB scale ready source_wgc={} us={}",
+                                                    "[voice][screen][push][tick {}] async {} ready source_wgc={} us={}",
                                                     push_trace_tick_idx,
+                                                    if async_nv12_convert_active {
+                                                        "NV12 convert"
+                                                    } else {
+                                                        "direct RGB scale"
+                                                    },
                                                     frame.source_wgc,
                                                     frame.convert_us,
                                                 );
@@ -7139,16 +7747,23 @@ fn start_screen_capture(
                             {
                                 Some(tex) => tex,
                                 None => {
-                                    let waiting_async_rgb_scale =
+                                    let waiting_async_convert =
                                         async_rgb_scale_latest.is_some()
-                                        && nvenc_rgb_scale_output_textures.is_some();
-                                    if waiting_async_rgb_scale {
+                                            && nvenc_rgb_scale_output_textures.is_some();
+                                    if waiting_async_convert {
                                         push_trace_stats.empty_output_ticks = push_trace_stats
                                             .empty_output_ticks
                                             .saturating_add(1);
                                         if !async_rgb_scale_wait_logged {
                                             eprintln!(
-                                                "[voice][screen] async GPU convert worker: waiting for first scaled frame"
+                                                "[voice][screen] async GPU convert worker: waiting for first {} frame",
+                                                if nv12_second_device_enabled
+                                                    && !nvenc_direct_rgb_enabled
+                                                {
+                                                    "NV12"
+                                                } else {
+                                                    "scaled"
+                                                }
                                             );
                                             async_rgb_scale_wait_logged = true;
                                         }
@@ -7170,9 +7785,39 @@ fn start_screen_capture(
                                     && mft_pipelined_enabled;
                             let (mft_result, encode_us, pipelined_collected) = if use_pipelined {
                                 let mft = mft_encoder.as_mut().unwrap();
+                                // The first frame already went through blocking encode(). In pipelined
+                                // mode, only keep a tiny blocking window for the next startup IDRs.
+                                // Using collect_blocking() for the full STARTUP_ACCEPT_FRAMES window
+                                // caps sender throughput at roughly the MFT output latency.
+                                let startup_collect_blocking = frame_count < 3;
+                                let nvenc_preencode_leaky = nvenc_preencode_leaky_enabled
+                                    && use_dxgi
+                                    && matches!(mft.backend_kind(), EncodedBackendKind::NvencD3d11)
+                                    && !startup_collect_blocking;
+                                let nvenc_ring_for_backlog = if nvenc_preencode_leaky {
+                                    mft.nvenc_input_ring_size().unwrap_or(0)
+                                } else {
+                                    0
+                                };
+                                let nvenc_leaky_high_watermark = if nvenc_ring_for_backlog > 0 {
+                                    nvenc_preencode_leaky_max_in_flight
+                                        .min(nvenc_ring_for_backlog.saturating_sub(2).max(1))
+                                } else {
+                                    0
+                                };
+                                let nvenc_in_flight_before = mft.nvenc_in_flight_count();
+                                if let Some(in_flight) = nvenc_in_flight_before {
+                                    push_trace_stats
+                                        .nvenc_in_flight_samples
+                                        .push(in_flight as u64);
+                                }
+                                let nvenc_backlog_high = nvenc_preencode_leaky
+                                    && nvenc_leaky_high_watermark > 0
+                                    && nvenc_in_flight_before.unwrap_or(0)
+                                        >= nvenc_leaky_high_watermark;
                                 let periodic_idr_secs = effective_periodic_idr_secs(Some(mft));
                                 let now_idr = std::time::Instant::now();
-                                let need_periodic_idr = if periodic_idr_secs == 0 {
+                                let periodic_idr_due = if periodic_idr_secs == 0 {
                                     false
                                 } else {
                                     match last_forced_idr_at {
@@ -7186,28 +7831,37 @@ fn start_screen_capture(
                                         }
                                     }
                                 };
-                                if need_periodic_idr {
+                                let requested_key_frame =
+                                    frame_count < 3
+                                        || periodic_idr_due
+                                        || keyframe_request_enc.load(Ordering::Relaxed);
+                                let suppress_keyframe_due_backlog =
+                                    requested_key_frame && nvenc_backlog_high;
+                                let key_frame =
+                                    requested_key_frame && !suppress_keyframe_due_backlog;
+                                if periodic_idr_due && key_frame {
                                     last_forced_idr_at = Some(now_idr);
                                     eprintln!(
                                         "[voice][screen] periodic IDR (GIR recovery, every {}s)",
                                         periodic_idr_secs
                                     );
                                 }
-                                let key_frame =
-                                    frame_count < 3
-                                        || need_periodic_idr
-                                        || keyframe_request_enc.load(Ordering::Relaxed);
-                                // The first frame already went through blocking encode(). In pipelined
-                                // mode, only keep a tiny blocking window for the next startup IDRs.
-                                // Using collect_blocking() for the full STARTUP_ACCEPT_FRAMES window
-                                // caps sender throughput at roughly the MFT output latency.
-                                let startup_collect_blocking = frame_count < 3;
+                                if suppress_keyframe_due_backlog && trace_this_tick {
+                                    eprintln!(
+                                        "[voice][screen][push][tick {}] suppressing keyframe while NVENC backlog is high in_flight={}/{} high={}",
+                                        push_trace_tick_idx,
+                                        nvenc_in_flight_before.unwrap_or(0),
+                                        nvenc_ring_for_backlog,
+                                        nvenc_leaky_high_watermark,
+                                    );
+                                }
                                 let fresh_nv12_this_tick = converted_nv12_tex.is_some();
+                                // A missing fresh async-scale output is not encoder backpressure.
+                                // Re-submit the last ready encoder input to preserve RTP cadence;
+                                // otherwise reuse_content ticks turn into empty outputs and the
+                                // viewer FPS collapses to the async scaler/source cadence.
                                 let skip_new_submit_this_tick =
-                                    skip_fresh_convert_due_backpressure
-                                        || (async_rgb_scale_latest.is_some()
-                                            && nvenc_rgb_scale_output_textures.is_some()
-                                            && !fresh_nv12_this_tick);
+                                    skip_fresh_convert_due_backpressure;
                                 let steady_timeout_ms = match mft.backend_kind() {
                                     EncodedBackendKind::NvencD3d11 => {
                                         ((current_effective_interval.as_millis() as u32)
@@ -7241,7 +7895,26 @@ fn start_screen_capture(
                                 // queue mostly adds latency and can make the viewer appear to
                                 // "rewind" through stale frames under backpressure, so keep only
                                 // a shallow delay here.
-                                let active_submit_delay_frames = if current_fps >= 90.0
+                                let active_submit_delay_fps = if use_dxgi
+                                    && matches!(mft.backend_kind(), EncodedBackendKind::NvencD3d11)
+                                {
+                                    mft.fps() as f64
+                                } else {
+                                    current_fps
+                                };
+                                let async_nv12_convert_active_for_submit_delay =
+                                    !mft.nvenc_uses_rgb_input()
+                                        && nv12_second_device_enabled
+                                        && async_rgb_scale_latest.is_some()
+                                        && nvenc_rgb_scale_output_textures.is_some();
+                                let active_submit_delay_frames = if active_submit_delay_fps >= 90.0
+                                    && async_nv12_convert_active_for_submit_delay
+                                {
+                                    // The separate-device NV12 worker already produces ready encoder
+                                    // input surfaces. Adding another pre-submit queue here turns
+                                    // reuse ticks into empty ticks and lowers sender cadence.
+                                    0
+                                } else if active_submit_delay_fps >= 90.0
                                     && mft.nvenc_uses_rgb_input()
                                     && (bgra_to_rgb.is_some()
                                         || nvenc_rgb_scale_output_textures.is_some())
@@ -7249,8 +7922,8 @@ fn start_screen_capture(
                                     let nvenc_ring =
                                         mft.nvenc_input_ring_size().unwrap_or(submit_delay_frames);
                                     submit_delay_frames
-                                        .max(5)
-                                        .min(nvenc_ring.saturating_sub(3).max(5))
+                                        .max(2)
+                                        .min(nvenc_ring.saturating_sub(3).max(2))
                                 } else {
                                     submit_delay_frames
                                 };
@@ -7289,9 +7962,67 @@ fn start_screen_capture(
                                         .pop_front()
                                         .or_else(|| Some(make_current_submit()))
                                 };
+                                let mut submit_item = submit_item;
+                                if nvenc_preencode_leaky {
+                                    if nvenc_ring_for_backlog > 0
+                                        && nvenc_in_flight_before.unwrap_or(0)
+                                            >= nvenc_leaky_high_watermark
+                                    {
+                                        let mut dropped_frames = 0u64;
+                                        let mut dropped_keyframes = 0u64;
+                                        if let Some(dropped) = submit_item.take() {
+                                            dropped_frames = dropped_frames.saturating_add(1);
+                                            if dropped.4 {
+                                                dropped_keyframes =
+                                                    dropped_keyframes.saturating_add(1);
+                                            }
+                                        }
+                                        while pending_nv12_submit.len() > 1 {
+                                            if let Some(dropped) = pending_nv12_submit.pop_front()
+                                            {
+                                                dropped_frames =
+                                                    dropped_frames.saturating_add(1);
+                                                if dropped.4 {
+                                                    dropped_keyframes =
+                                                        dropped_keyframes.saturating_add(1);
+                                                }
+                                            } else {
+                                                break;
+                                            }
+                                        }
+                                        if dropped_frames > 0 {
+                                            push_trace_stats.nvenc_preencode_drop_frames =
+                                                push_trace_stats
+                                                    .nvenc_preencode_drop_frames
+                                                    .saturating_add(dropped_frames);
+                                            push_trace_stats.nvenc_preencode_drop_keyframes =
+                                                push_trace_stats
+                                                    .nvenc_preencode_drop_keyframes
+                                                    .saturating_add(dropped_keyframes);
+                                            push_trace_stats.nvenc_preencode_leaky_ticks =
+                                                push_trace_stats
+                                                    .nvenc_preencode_leaky_ticks
+                                                    .saturating_add(1);
+                                            if dropped_keyframes > 0 {
+                                                keyframe_request_enc
+                                                    .store(true, Ordering::Relaxed);
+                                            }
+                                            if trace_this_tick {
+                                                eprintln!(
+                                                    "[voice][screen][push][tick {}] pre-encode leaky drop frames={} key={} in_flight={}/{} high={}",
+                                                    push_trace_tick_idx,
+                                                    dropped_frames,
+                                                    dropped_keyframes,
+                                                    nvenc_in_flight_before.unwrap_or(0),
+                                                    nvenc_ring_for_backlog,
+                                                    nvenc_leaky_high_watermark,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                                 let submitted_this_tick = submit_item.is_some();
                                 let submit_start = std::time::Instant::now();
-                                let mut submit_item = submit_item;
                                 let mft_res = if let Some((
                                     submit_tex,
                                     submit_ts_us,
@@ -7311,6 +8042,11 @@ fn start_screen_capture(
                                 } else {
                                     Ok(())
                                 };
+                                if let Some(in_flight) = mft.nvenc_in_flight_count() {
+                                    push_trace_stats
+                                        .nvenc_in_flight_samples
+                                        .push(in_flight as u64);
+                                }
                                 let submit_queue_full = matches!(
                                     &mft_res,
                                     Err(EncodedH264EncoderError::Nvenc(
@@ -7332,12 +8068,18 @@ fn start_screen_capture(
                                         push_trace_stats.submit_map_us_total = push_trace_stats
                                             .submit_map_us_total
                                             .saturating_add(submit_breakdown.map_us);
+                                        push_trace_stats
+                                            .submit_map_us_samples
+                                            .push(submit_breakdown.map_us);
                                         push_trace_stats.submit_encode_picture_us_total =
                                             push_trace_stats
                                                 .submit_encode_picture_us_total
                                                 .saturating_add(
                                                     submit_breakdown.encode_picture_us,
                                                 );
+                                        push_trace_stats
+                                            .submit_encode_picture_us_samples
+                                            .push(submit_breakdown.encode_picture_us);
                                     }
                                     match &mft_res {
                                         Ok(()) => {
@@ -7377,6 +8119,13 @@ fn start_screen_capture(
                                 let mut collected_this: i64 = 0;
                                 if mft_res.is_ok() || submit_queue_full {
                                     let mut drained_collects: usize = 0;
+                                    let coalesce_nvenc_send = nvenc_send_coalesce_enabled
+                                        && use_dxgi
+                                        && matches!(mft.backend_kind(), EncodedBackendKind::NvencD3d11)
+                                        && !startup_collect_blocking;
+                                    let mut coalesced_send: Option<(EncodedFrame, u32, i64, u64)> =
+                                        None;
+                                    let mut coalesced_drop: u64 = 0;
                                     let max_collect_drains = match mft.backend_kind() {
                                         EncodedBackendKind::NvencD3d11 => mft
                                             .nvenc_input_ring_size()
@@ -7409,6 +8158,9 @@ fn start_screen_capture(
                                                     push_trace_stats
                                                         .collect_us_total
                                                         .saturating_add(collect_us);
+                                                push_trace_stats
+                                                    .nvenc_encode_time_us_samples
+                                                    .push(enc_us);
                                                 telemetry_enc.set_encode(enc_us);
                                                 if trace_this_tick {
                                                     eprintln!(
@@ -7422,6 +8174,35 @@ fn start_screen_capture(
                                                         max_collect_drains,
                                                     );
                                                 }
+                                                if coalesce_nvenc_send {
+                                                    let mut push_rtp_timestamp = rtp_prev;
+                                                    for ef in frames {
+                                                        let candidate =
+                                                            (ef, push_rtp_timestamp, cap_prev, enc_us);
+                                                        let candidate_is_key = candidate.0.key_frame;
+                                                        if let Some(existing) =
+                                                            coalesced_send.take()
+                                                        {
+                                                            if existing.0.key_frame
+                                                                && !candidate_is_key
+                                                            {
+                                                                coalesced_send = Some(existing);
+                                                            } else {
+                                                                coalesced_send = Some(candidate);
+                                                            }
+                                                            coalesced_drop =
+                                                                coalesced_drop.saturating_add(1);
+                                                        } else {
+                                                            coalesced_send = Some(candidate);
+                                                        }
+                                                        push_rtp_timestamp = push_rtp_timestamp
+                                                            .wrapping_add(current_rtp_step);
+                                                    }
+                                                    if drained_collects < max_collect_drains {
+                                                        continue;
+                                                    }
+                                                    break;
+                                                }
                                                 let send_start = std::time::Instant::now();
                                                 let mut sent_keyframe = false;
                                                 let mut push_rtp_timestamp = rtp_prev;
@@ -7432,6 +8213,19 @@ fn start_screen_capture(
                                                         .saturating_add(ef.data.len() as u64);
                                                     encoded_frames_window =
                                                         encoded_frames_window.saturating_add(1);
+                                                    let push_now = std::time::Instant::now();
+                                                    let push_gap_us = encoded_push_last_at
+                                                        .replace(push_now)
+                                                        .map(|prev| {
+                                                            push_now.duration_since(prev).as_micros()
+                                                                as u64
+                                                        });
+                                                    push_trace_stats.record_sent_frame(
+                                                        ef.data.len() as u64,
+                                                        ef.key_frame,
+                                                        push_gap_us,
+                                                        frame_interval_us,
+                                                    );
                                                     enc_src.push_frame(
                                                         &ef.data,
                                                         push_rtp_timestamp,
@@ -7504,6 +8298,65 @@ fn start_screen_capture(
                                             }
                                         }
                                         break;
+                                    }
+                                    if coalesced_drop > 0 {
+                                        push_trace_stats.send_coalesced_drop = push_trace_stats
+                                            .send_coalesced_drop
+                                            .saturating_add(coalesced_drop);
+                                        if trace_this_tick {
+                                            eprintln!(
+                                                "[voice][screen][push][tick {}] coalesced stale encoded frames before WebRTC push: dropped={}",
+                                                push_trace_tick_idx,
+                                                coalesced_drop,
+                                            );
+                                        }
+                                    }
+                                    if let Some((
+                                        ef,
+                                        push_rtp_timestamp,
+                                        cap_prev,
+                                        enc_us,
+                                    )) = coalesced_send.take()
+                                    {
+                                        let send_start = std::time::Instant::now();
+                                        let push_now = std::time::Instant::now();
+                                        let push_gap_us = encoded_push_last_at
+                                            .replace(push_now)
+                                            .map(|prev| {
+                                                push_now.duration_since(prev).as_micros() as u64
+                                            });
+                                        push_trace_stats.record_sent_frame(
+                                            ef.data.len() as u64,
+                                            ef.key_frame,
+                                            push_gap_us,
+                                            frame_interval_us,
+                                        );
+                                        encoded_bytes_window = encoded_bytes_window
+                                            .saturating_add(ef.data.len() as u64);
+                                        encoded_frames_window =
+                                            encoded_frames_window.saturating_add(1);
+                                        enc_src.push_frame(
+                                            &ef.data,
+                                            push_rtp_timestamp,
+                                            cap_prev,
+                                            ef.key_frame,
+                                        );
+                                        if ef.key_frame {
+                                            keyframe_request_enc
+                                                .store(false, Ordering::Relaxed);
+                                        }
+                                        collected_this += 1;
+                                        push_trace_stats.send_calls =
+                                            push_trace_stats.send_calls.saturating_add(1);
+                                        push_trace_stats.sent_frames =
+                                            push_trace_stats.sent_frames.saturating_add(1);
+                                        let send_us =
+                                            send_start.elapsed().as_micros() as u64;
+                                        push_trace_stats.send_us_total = push_trace_stats
+                                            .send_us_total
+                                            .saturating_add(send_us);
+                                        telemetry_enc.set_encode(enc_us);
+                                        telemetry_enc.set_send(send_us);
                                     }
                                 }
                                 let us = encode_start.elapsed().as_micros() as u64;
@@ -7580,6 +8433,59 @@ fn start_screen_capture(
                                         push_trace_stats.empty_output_ticks =
                                             push_trace_stats.empty_output_ticks.saturating_add(1);
                                     }
+                                    let nvenc_backlog_count = mft_encoder
+                                        .as_ref()
+                                        .and_then(|enc| {
+                                            if enc.backend_kind() == EncodedBackendKind::NvencD3d11 {
+                                                enc.nvenc_in_flight_count()
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .unwrap_or(0);
+                                    let nvenc_stall_reset_threshold =
+                                        Duration::from_millis(nvenc_starvation_reset_threshold_ms);
+                                    let now_nvenc_stall = std::time::Instant::now();
+                                    if nvenc_backlog_count >= nvenc_preencode_leaky_max_in_flight
+                                        && n == 0
+                                        && use_pipelined
+                                        && use_dxgi
+                                    {
+                                        let started_at = *nvenc_starved_since
+                                            .get_or_insert(now_nvenc_stall);
+                                        let cooldown_clear =
+                                            nvenc_stall_reset_cooldown_until
+                                                .map(|until| now_nvenc_stall >= until)
+                                                .unwrap_or(true);
+                                        if cooldown_clear
+                                            && now_nvenc_stall.duration_since(started_at)
+                                                >= nvenc_stall_reset_threshold
+                                        {
+                                            eprintln!(
+                                                "[voice][screen] NVENC output starvation for {}ms (threshold={}ms, in_flight={}, sent=0), resetting encoder path",
+                                                now_nvenc_stall
+                                                    .duration_since(started_at)
+                                                    .as_millis(),
+                                                nvenc_starvation_reset_threshold_ms,
+                                                nvenc_backlog_count,
+                                            );
+                                            mft_encoder = None;
+                                            pending_nv12_submit.clear();
+                                            keyframe_request_enc.store(true, Ordering::Relaxed);
+                                            nvenc_starved_since = None;
+                                            nvenc_stall_reset_cooldown_until =
+                                                Some(now_nvenc_stall + Duration::from_secs(2));
+                                            mft_path_failed = false;
+                                            mft_hard_failed = false;
+                                            mft_retry_at = None;
+                                            mft_transient_timeouts = 0;
+                                            startup_keyframe_done = false;
+                                            frame_count = 0;
+                                            continue;
+                                        }
+                                    } else if n > 0 || nvenc_backlog_count == 0 {
+                                        nvenc_starved_since = None;
+                                    }
                                     if trace_this_tick {
                                         eprintln!(
                                             "[voice][screen][push][tick {}] encode ok direct_frames={} pipelined_frames={} total_frames={} encode_us={}",
@@ -7609,6 +8515,16 @@ fn start_screen_capture(
                                             .saturating_add(ef.data.len() as u64);
                                         encoded_frames_window =
                                             encoded_frames_window.saturating_add(1);
+                                        let push_now = std::time::Instant::now();
+                                        let push_gap_us = encoded_push_last_at
+                                            .replace(push_now)
+                                            .map(|prev| push_now.duration_since(prev).as_micros() as u64);
+                                        push_trace_stats.record_sent_frame(
+                                            ef.data.len() as u64,
+                                            ef.key_frame,
+                                            push_gap_us,
+                                            frame_interval_us,
+                                        );
                                         enc_src.push_frame(&ef.data, rtp_timestamp, capture_us, ef.key_frame);
                                         rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
                                     }
@@ -7970,6 +8886,7 @@ fn start_screen_capture(
                             std::thread::Builder::new()
                                 .name("livekit-capture-frame-fb".into())
                                 .spawn(move || {
+                                    apply_astrix_pipeline_thread_priority();
                                     while let Ok(vf) = fb_rx.recv() {
                                         native_src.capture_frame(&vf);
                                     }

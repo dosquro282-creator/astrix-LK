@@ -79,6 +79,84 @@ std::string AdapterNameFromDevice(ID3D11Device* device) {
   return name;
 }
 
+bool IsEnvDisabled(const char* value) {
+  return value != nullptr &&
+         (std::strcmp(value, "0") == 0 ||
+          std::strcmp(value, "false") == 0 ||
+          std::strcmp(value, "FALSE") == 0 ||
+          std::strcmp(value, "normal") == 0 ||
+          std::strcmp(value, "NORMAL") == 0);
+}
+
+void ApplyNvencWorkerPriority() {
+  const char* priority_env = std::getenv("ASTRIX_NVENC_WORKER_PRIORITY");
+  if (IsEnvDisabled(priority_env)) {
+    return;
+  }
+
+  int priority = THREAD_PRIORITY_HIGHEST;
+  if (priority_env != nullptr &&
+      (std::strcmp(priority_env, "highest") == 0 ||
+       std::strcmp(priority_env, "HIGHEST") == 0 ||
+       std::strcmp(priority_env, "2") == 0)) {
+    priority = THREAD_PRIORITY_HIGHEST;
+  }
+  SetThreadPriority(GetCurrentThread(), priority);
+}
+
+bool GuidEquals(const GUID& a, const GUID& b) {
+  return std::memcmp(&a, &b, sizeof(GUID)) == 0;
+}
+
+void LogH264LowLatencyConfig(const char* label,
+                             const NV_ENC_INITIALIZE_PARAMS& init,
+                             const NV_ENC_CONFIG& config) {
+  const auto& rc = config.rcParams;
+  const auto& h264 = config.encodeCodecConfig.h264Config;
+  std::fprintf(
+      stderr,
+      "[nvenc_d11] config: label=%s tuning=%u preset_p1=%u preset_p4=%u rc=%u multipass=%u "
+      "lookahead=%u depth=%u aq=%u aq_strength=%u temporal_aq=%u zero_reorder=%u "
+      "non_ref_p=%u strict_gop=%u frame_interval_p=%d gop=%u idr=%u vbv=%u/%u "
+      "h264_fast profile_baseline=%u entropy=%u adaptive_transform=%u deblock=%u "
+      "b_ref=%u bdirect=%u hier_p=%u hier_b=%u temporal_svc=%u intra_refresh=%u "
+      "ltr=%u refs_l0=%u refs_l1=%u max_ref=%u async=%u\n",
+      label,
+      static_cast<unsigned>(init.tuningInfo),
+      GuidEquals(init.presetGUID, NV_ENC_PRESET_P1_GUID) ? 1u : 0u,
+      GuidEquals(init.presetGUID, NV_ENC_PRESET_P4_GUID) ? 1u : 0u,
+      static_cast<unsigned>(rc.rateControlMode),
+      static_cast<unsigned>(rc.multiPass),
+      rc.enableLookahead,
+      static_cast<unsigned>(rc.lookaheadDepth),
+      rc.enableAQ,
+      rc.aqStrength,
+      rc.enableTemporalAQ,
+      rc.zeroReorderDelay,
+      rc.enableNonRefP,
+      rc.strictGOPTarget,
+      config.frameIntervalP,
+      config.gopLength,
+      h264.idrPeriod,
+      rc.vbvBufferSize,
+      rc.vbvInitialDelay,
+      GuidEquals(config.profileGUID, NV_ENC_H264_PROFILE_BASELINE_GUID) ? 1u : 0u,
+      static_cast<unsigned>(h264.entropyCodingMode),
+      static_cast<unsigned>(h264.adaptiveTransformMode),
+      h264.disableDeblockingFilterIDC,
+      static_cast<unsigned>(h264.useBFramesAsRef),
+      static_cast<unsigned>(h264.bdirectMode),
+      h264.hierarchicalPFrames,
+      h264.hierarchicalBFrames,
+      h264.enableTemporalSVC,
+      h264.enableIntraRefresh,
+      h264.enableLTR,
+      static_cast<unsigned>(h264.numRefL0),
+      static_cast<unsigned>(h264.numRefL1),
+      h264.maxNumRefFrames,
+      init.enableEncodeAsync);
+}
+
 uint32_t MaxSupportedVersion(HMODULE module) {
   using GetMaxVersionFn = NVENCSTATUS(NVENCAPI*)(uint32_t*);
   auto* get_max_version = reinterpret_cast<GetMaxVersionFn>(
@@ -489,13 +567,27 @@ struct NvencD3D11Session::Impl {
         encode_config_.rcParams.maxBitRate = bitrate_;
         encode_config_.rcParams.multiPass = NV_ENC_MULTI_PASS_DISABLED;
         encode_config_.rcParams.enableAQ = 0;
+        encode_config_.rcParams.aqStrength = 0;
         encode_config_.rcParams.enableLookahead = 0;
+        encode_config_.rcParams.lookaheadDepth = 0;
+        encode_config_.rcParams.disableIadapt = 1;
+        encode_config_.rcParams.disableBadapt = 1;
         encode_config_.rcParams.enableTemporalAQ = 0;
         encode_config_.rcParams.zeroReorderDelay = 1;
         encode_config_.rcParams.enableNonRefP = prefer_fast_preset ? 1 : 0;
         encode_config_.rcParams.strictGOPTarget = 1;
+        encode_config_.frameFieldMode = NV_ENC_PARAMS_FRAME_FIELD_MODE_FRAME;
         encode_config_.encodeCodecConfig.h264Config.outputBufferingPeriodSEI = 0;
         encode_config_.encodeCodecConfig.h264Config.outputPictureTimingSEI = 0;
+        encode_config_.encodeCodecConfig.h264Config.hierarchicalPFrames = 0;
+        encode_config_.encodeCodecConfig.h264Config.hierarchicalBFrames = 0;
+        encode_config_.encodeCodecConfig.h264Config.enableTemporalSVC = 0;
+        encode_config_.encodeCodecConfig.h264Config.enableIntraRefresh = 0;
+        encode_config_.encodeCodecConfig.h264Config.intraRefreshPeriod = 0;
+        encode_config_.encodeCodecConfig.h264Config.intraRefreshCnt = 0;
+        encode_config_.encodeCodecConfig.h264Config.enableLTR = 0;
+        encode_config_.encodeCodecConfig.h264Config.ltrNumFrames = 0;
+        encode_config_.encodeCodecConfig.h264Config.ltrTrustMode = 0;
         encode_config_.encodeCodecConfig.h264Config.maxNumRefFrames =
             prefer_fast_preset ? 1u : 0u;
         encode_config_.encodeCodecConfig.h264Config.numRefL0 =
@@ -505,6 +597,8 @@ struct NvencD3D11Session::Impl {
             NV_ENC_NUM_REF_FRAMES_AUTOSELECT;
         encode_config_.encodeCodecConfig.h264Config.useBFramesAsRef =
             NV_ENC_BFRAME_REF_MODE_DISABLED;
+        encode_config_.encodeCodecConfig.h264Config.bdirectMode =
+            NV_ENC_H264_BDIRECT_MODE_DISABLE;
       }
 
       if (prefer_fast_h264_mode && !attempt.minimal_preset) {
@@ -579,6 +673,14 @@ struct NvencD3D11Session::Impl {
             prefer_fast_preset ? "prefer-fast" : "balanced",
             input_format_label_,
             prefer_fast_h264_mode ? "on" : "off");
+        if (!attempt.null_config) {
+          LogH264LowLatencyConfig(attempt.label, init_params_, encode_config_);
+        } else {
+          std::fprintf(stderr,
+                       "[nvenc_d11] config: label=%s encodeConfig=null "
+                       "(driver preset only; low-latency fields not inspectable here)\n",
+                       attempt.label);
+        }
         return;
       }
 
@@ -746,9 +848,11 @@ struct NvencD3D11Session::Impl {
 
   void OutputWorkerLoop() {
     try {
+      ApplyNvencWorkerPriority();
       while (true) {
         PendingSubmission queued_submission;
         bool have_queued_submission = false;
+        bool have_ready_completion = false;
         HANDLE completion_event = nullptr;
         {
           std::unique_lock<std::mutex> lock(queue_mutex_);
@@ -758,13 +862,29 @@ struct NvencD3D11Session::Impl {
           if (stop_requested_ && submit_queue_.empty() && in_flight_.empty()) {
             return;
           }
-          if (!submit_queue_.empty() && in_flight_.size() < outputs_.size()) {
+
+          if (!in_flight_.empty()) {
+            completion_event = outputs_[in_flight_.front().output_slot].completion_event;
+            const DWORD ready_result = WaitForSingleObject(completion_event, 0);
+            if (ready_result == WAIT_OBJECT_0) {
+              have_ready_completion = true;
+            } else if (ready_result != WAIT_TIMEOUT) {
+              throw std::runtime_error(
+                  "WaitForSingleObject failed for NVENC completion event");
+            }
+          }
+
+          // Prefer harvesting a ready bitstream before feeding more input. Otherwise
+          // a 120fps submit stream can keep the worker enqueue-biased until the whole
+          // output ring is full, causing transient QueueFull spikes and extra latency.
+          if (!have_ready_completion && !submit_queue_.empty() &&
+              in_flight_.size() < outputs_.size()) {
             queued_submission = submit_queue_.front();
             submit_queue_.pop_front();
             have_queued_submission = true;
-          } else if (!in_flight_.empty()) {
+          } else if (!have_ready_completion && !in_flight_.empty()) {
             completion_event = outputs_[in_flight_.front().output_slot].completion_event;
-          } else {
+          } else if (!have_ready_completion) {
             continue;
           }
         }
@@ -847,18 +967,20 @@ struct NvencD3D11Session::Impl {
           continue;
         }
 
-        HANDLE wait_handles[3] = {stop_event_, submit_event_, completion_event};
-        const DWORD wait_result =
-            WaitForMultipleObjects(3, wait_handles, FALSE, INFINITE);
-        if (wait_result == WAIT_OBJECT_0) {
-          return;
-        }
-        if (wait_result == WAIT_OBJECT_0 + 1) {
-          continue;
-        }
-        if (wait_result != WAIT_OBJECT_0 + 2) {
-          throw std::runtime_error(
-              "WaitForMultipleObjects failed for NVENC completion event");
+        if (!have_ready_completion) {
+          HANDLE wait_handles[3] = {stop_event_, submit_event_, completion_event};
+          const DWORD wait_result =
+              WaitForMultipleObjects(3, wait_handles, FALSE, INFINITE);
+          if (wait_result == WAIT_OBJECT_0) {
+            return;
+          }
+          if (wait_result == WAIT_OBJECT_0 + 1) {
+            continue;
+          }
+          if (wait_result != WAIT_OBJECT_0 + 2) {
+            throw std::runtime_error(
+                "WaitForMultipleObjects failed for NVENC completion event");
+          }
         }
 
         PendingSubmission submission;
