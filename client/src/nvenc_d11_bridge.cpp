@@ -190,8 +190,12 @@ uint32_t ComputeVbvBufferBits(uint32_t bitrate, uint32_t fps) {
       static_cast<uint64_t>(bitrate) / safe_fps > 0
           ? static_cast<uint64_t>(bitrate) / safe_fps
           : 1u;
+  // Use a larger frame window to smooth bitrate bursts before VBV penalizes quality.
+  // At high FPS (>=90): 16 frames gives ~177ms of buffer headroom.
+  // At 60+ FPS: 12 frames gives ~200ms of buffer headroom.
+  // At <60 FPS: 8 frames gives ~133ms of buffer headroom.
   const uint64_t frame_window_bits =
-      frame_bits * (safe_fps >= 90 ? 12ull : safe_fps >= 60 ? 8ull : 6ull);
+      frame_bits * (safe_fps >= 90 ? 16ull : safe_fps >= 60 ? 12ull : 8ull);
   const uint64_t duration_window_bits =
       static_cast<uint64_t>(bitrate) / 4u > 0
           ? static_cast<uint64_t>(bitrate) / 4u
@@ -462,7 +466,8 @@ struct NvencD3D11Session::Impl {
     config.rcParams.maxBitRate = bitrate;
     const uint32_t vbv = ComputeVbvBufferBits(bitrate, fps_);
     config.rcParams.vbvBufferSize = vbv;
-    config.rcParams.vbvInitialDelay = vbv;
+    // vbvInitialDelay at 50% allows temporary burst room before VBV constraints bite.
+    config.rcParams.vbvInitialDelay = vbv / 2;
     reconfig.reInitEncodeParams = init;
     reconfig.reInitEncodeParams.encodeConfig = &config;
     // Bitrate-only reconfigurations should stay in-place; resetting the encoder
@@ -643,7 +648,9 @@ struct NvencD3D11Session::Impl {
         encode_config_.encodeCodecConfig.h264Config.disableSPSPPS = 0;
         const uint32_t vbv = ComputeVbvBufferBits(bitrate_, fps_);
         encode_config_.rcParams.vbvBufferSize = vbv;
-        encode_config_.rcParams.vbvInitialDelay = vbv;
+        // vbvInitialDelay at 50% allows temporary burst room before VBV constraints bite.
+        // This helps smooth high-FPS frame size variations without triggering quality drops.
+        encode_config_.rcParams.vbvInitialDelay = vbv / 2;
       }
 
       init_params_ = {};

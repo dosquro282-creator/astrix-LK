@@ -71,6 +71,29 @@ pub struct PipelineTelemetry {
     recv_conv_iter_peak_us: AtomicU64,
     /// Total `sleep` time in pacing branch this window (µs). Reset at print.
     recv_pacing_sleep_sum_us: AtomicU64,
+
+    // Sender-only: queue buildup diagnostics for LONG_STALL/NACK/PLI investigation.
+    /// Current outgoing queue depth (frames waiting to be sent).
+    sender_outgoing_queue_cur: AtomicU64,
+    /// Peak outgoing queue depth in window. Reset at print.
+    sender_outgoing_queue_peak: AtomicU64,
+    /// Average outgoing queue depth in window (EMA). Reset at print.
+    sender_outgoing_queue_avg: AtomicU64,
+
+    /// Current pacer queue depth (RTP packets buffered for pacing).
+    sender_pacer_queue_cur: AtomicU64,
+    /// Peak pacer queue depth in window. Reset at print.
+    sender_pacer_queue_peak: AtomicU64,
+
+    /// Current encoded frames pending (in encoder output queue).
+    sender_encoded_pending_cur: AtomicU64,
+    /// Peak encoded frames pending in window. Reset at print.
+    sender_encoded_pending_peak: AtomicU64,
+
+    /// Current RTP packets pending (queued for send).
+    sender_rtp_pending_cur: AtomicU64,
+    /// Peak RTP packets pending in window. Reset at print.
+    sender_rtp_pending_peak: AtomicU64,
 }
 
 impl PipelineTelemetry {
@@ -175,6 +198,35 @@ impl PipelineTelemetry {
             .fetch_add(us, Ordering::Relaxed);
     }
 
+    /// Sender: record queue depths for buildup diagnostics.
+    /// Call once per telemetry window with current values.
+    pub fn record_sender_queue_depths(
+        &self,
+        outgoing_queue: u64,
+        pacer_queue: u64,
+        encoded_pending: u64,
+        rtp_pending: u64,
+    ) {
+        self.sender_outgoing_queue_cur.store(outgoing_queue, Ordering::Release);
+        self.sender_outgoing_queue_peak.fetch_max(outgoing_queue, Ordering::Relaxed);
+        // EMA: avg = avg*0.9 + val*0.1
+        let _: u64 = self
+            .sender_outgoing_queue_avg
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                Some(if old == 0 { outgoing_queue } else { (old * 9 + outgoing_queue) / 10 })
+            })
+            .unwrap_or(0);
+
+        self.sender_pacer_queue_cur.store(pacer_queue, Ordering::Release);
+        self.sender_pacer_queue_peak.fetch_max(pacer_queue, Ordering::Relaxed);
+
+        self.sender_encoded_pending_cur.store(encoded_pending, Ordering::Release);
+        self.sender_encoded_pending_peak.fetch_max(encoded_pending, Ordering::Relaxed);
+
+        self.sender_rtp_pending_cur.store(rtp_pending, Ordering::Release);
+        self.sender_rtp_pending_peak.fetch_max(rtp_pending, Ordering::Relaxed);
+    }
+
     /// Reset receiver window stats (call at start of print for receiver).
     fn reset_receiver_window(&self) {
         self.recv_network_min_us.store(0, Ordering::Release);
@@ -210,6 +262,13 @@ impl PipelineTelemetry {
                 self.recv_coalesced_frames.swap(0, Ordering::AcqRel);
                 self.recv_conv_iter_peak_us.swap(0, Ordering::AcqRel);
                 self.recv_pacing_sleep_sum_us.swap(0, Ordering::AcqRel);
+            }
+            if prefix == "sender" {
+                self.sender_outgoing_queue_peak.swap(0, Ordering::AcqRel);
+                self.sender_outgoing_queue_avg.swap(0, Ordering::AcqRel);
+                self.sender_pacer_queue_peak.swap(0, Ordering::AcqRel);
+                self.sender_encoded_pending_peak.swap(0, Ordering::AcqRel);
+                self.sender_rtp_pending_peak.swap(0, Ordering::AcqRel);
             }
             return;
         }
@@ -274,6 +333,24 @@ impl PipelineTelemetry {
             "  gui_draw:     {}",
             Self::get_ms(self.gui_draw_us.load(Ordering::Acquire))
         );
+
+        // Sender queue buildup diagnostics (LONG_STALL/NACK/PLI investigation).
+        if prefix == "sender" {
+            let out_cur = self.sender_outgoing_queue_cur.load(Ordering::Acquire);
+            let out_peak = self.sender_outgoing_queue_peak.swap(0, Ordering::AcqRel);
+            let out_avg = self.sender_outgoing_queue_avg.swap(0, Ordering::AcqRel);
+            let pacer_cur = self.sender_pacer_queue_cur.load(Ordering::Acquire);
+            let pacer_peak = self.sender_pacer_queue_peak.swap(0, Ordering::AcqRel);
+            let enc_cur = self.sender_encoded_pending_cur.load(Ordering::Acquire);
+            let enc_peak = self.sender_encoded_pending_peak.swap(0, Ordering::AcqRel);
+            let rtp_cur = self.sender_rtp_pending_cur.load(Ordering::Acquire);
+            let rtp_peak = self.sender_rtp_pending_peak.swap(0, Ordering::AcqRel);
+            let _ = writeln!(buf, "  --- sender queue stats ---");
+            let _ = writeln!(buf, "  out_queue:    {} (current), peak={}, avg={:.1}", out_cur, out_peak, out_avg as f64);
+            let _ = writeln!(buf, "  pacer_queue:  {} (current), peak={}", pacer_cur, pacer_peak);
+            let _ = writeln!(buf, "  encoded_pend: {} (current), peak={}", enc_cur, enc_peak);
+            let _ = writeln!(buf, "  rtp_pending:  {} (current), peak={}", rtp_cur, rtp_peak);
+        }
 
         if prefix == "receiver" {
             let elapsed_secs = 1.0;

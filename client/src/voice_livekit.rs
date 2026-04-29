@@ -8792,6 +8792,17 @@ fn start_screen_capture(
                                             );
                                             last_startup_diag_sec = Some(startup_diag_sec);
                                         }
+                                        // Sender queue buildup diagnostics (LONG_STALL/NACK/PLI investigation).
+                                        let out_queue = pending_nv12_submit.len() as u64;
+                                        let encoded_pending = if let Some(ref m) = mft_encoder {
+                                            m.meta_queue_depth() as u64 + m.pending_outputs_depth() as u64
+                                        } else { 0 };
+                                        telemetry_enc.record_sender_queue_depths(
+                                            out_queue,
+                                            0, // pacer_queue: not exposed by WebRTC layer
+                                            encoded_pending,
+                                            0, // rtp_pending: not exposed by WebRTC layer
+                                        );
                                         telemetry_enc.print("sender");
                                         encoded_bytes_window = 0;
                                         encoded_frames_window = 0;
@@ -9102,6 +9113,12 @@ fn start_screen_capture(
                             st.frames_per_second = Some(actual_fps);
                         }
                         eprintln!("[voice][screen] capture_frame rate: {:.1} fps (target {})", actual_fps, max_fps);
+                        // Sender queue buildup diagnostics.
+                        if let Some(ref m) = mft_encoder {
+                            let out_queue = pending_nv12_submit.len() as u64;
+                            let encoded_pending = m.meta_queue_depth() as u64 + m.pending_outputs_depth() as u64;
+                            telemetry_enc.record_sender_queue_depths(out_queue, 0, encoded_pending, 0);
+                        }
                         telemetry_enc.print("sender");
                         fps_window_start = std::time::Instant::now();
                         fps_frame_count = 0;
@@ -9323,6 +9340,11 @@ fn start_screen_capture(
                             st.frames_per_second = Some(actual_fps);
                         }
                         eprintln!("[voice][screen] capture_frame rate (CPU): {:.1} fps (target {})", actual_fps, max_fps);
+                        // Sender queue buildup diagnostics (CPU path).
+                        if let Some(ref m) = mft_encoder {
+                            let encoded_pending = m.meta_queue_depth() as u64 + m.pending_outputs_depth() as u64;
+                            telemetry_enc.record_sender_queue_depths(0, 0, encoded_pending, 0);
+                        }
                         telemetry_enc.print("sender");
                         fps_window_start = std::time::Instant::now();
                         fps_frame_count = 0;

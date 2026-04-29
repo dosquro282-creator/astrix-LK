@@ -386,6 +386,24 @@ impl EncodedH264Encoder {
         self.config.fps
     }
 
+    /// Returns current meta_queue depth (frames submitted, not yet encoded).
+    /// Only available for MFT backend; returns 0 for NVENC.
+    pub fn meta_queue_depth(&self) -> usize {
+        match &self.inner {
+            EncodedH264EncoderImpl::Mft(enc) => enc.meta_queue_depth(),
+            EncodedH264EncoderImpl::Nvenc(_) => 0,
+        }
+    }
+
+    /// Returns current pending_outputs depth (encoded, not yet collected).
+    /// Only available for MFT backend; returns 0 for NVENC.
+    pub fn pending_outputs_depth(&self) -> usize {
+        match &self.inner {
+            EncodedH264EncoderImpl::Mft(enc) => enc.pending_outputs_depth(),
+            EncodedH264EncoderImpl::Nvenc(_) => 0,
+        }
+    }
+
     fn promote_nvenc_to_mft(
         &mut self,
         stage: &str,

@@ -1227,6 +1227,16 @@ impl MftH264Encoder {
         self.height
     }
 
+    /// Returns current meta_queue depth (frames submitted, not yet encoded).
+    pub fn meta_queue_depth(&self) -> usize {
+        self.meta_queue.len()
+    }
+
+    /// Returns current pending_outputs depth (encoded, not yet collected).
+    pub fn pending_outputs_depth(&self) -> usize {
+        self.pending_outputs.len()
+    }
+
     fn async_output_timeout_ms(&self, key_frame: bool) -> u32 {
         if self.frame_count < 3 || key_frame {
             120
