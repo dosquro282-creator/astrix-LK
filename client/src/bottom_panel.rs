@@ -86,6 +86,7 @@ pub struct BottomPanelVoiceSnapshot {
 pub struct BottomPanelParams<'a> {
     pub theme: &'a Theme,
     pub user_display: &'a str,
+    pub user_id: Option<i64>,
     pub voice: BottomPanelVoiceSnapshot,
     pub avatar_texture: Option<&'a egui::TextureHandle>,
     pub on_action: &'a mut dyn FnMut(BottomPanelAction),
@@ -95,6 +96,7 @@ pub fn show(ui: &mut egui::Ui, params: BottomPanelParams<'_>) {
     let BottomPanelParams {
         theme,
         user_display,
+        user_id,
         voice,
         avatar_texture,
         on_action,
@@ -112,7 +114,7 @@ pub fn show(ui: &mut egui::Ui, params: BottomPanelParams<'_>) {
 
     ui.allocate_ui_at_rect(base_row_rect, |ui| {
         ui.set_width(base_row_rect.width());
-        base_user_row(ui, theme, user_display, &voice, avatar_texture, on_action);
+        base_user_row(ui, theme, user_display, user_id, &voice, avatar_texture, on_action);
     });
 
     if voice.in_voice_channel {
@@ -146,6 +148,7 @@ fn base_user_row(
     ui: &mut egui::Ui,
     theme: &Theme,
     user_display: &str,
+    user_id: Option<i64>,
     voice: &BottomPanelVoiceSnapshot,
     avatar_texture: Option<&egui::TextureHandle>,
     on_action: &mut dyn FnMut(BottomPanelAction),
@@ -177,7 +180,13 @@ fn base_user_row(
                         .strong()
                         .color(theme.text_primary),
                 );
-                if !voice.in_voice_channel {
+                if let Some(uid) = user_id {
+                    ui.label(
+                        egui::RichText::new(uid.to_string())
+                            .size(11.0)
+                            .color(theme.text_muted),
+                    );
+                } else {
                     ui.label(
                         egui::RichText::new("В сети")
                             .size(11.0)

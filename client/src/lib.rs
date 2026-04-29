@@ -5,6 +5,7 @@ pub mod bottom_panel;
 pub mod channel_panel;
 pub mod chat_panel;
 pub mod components;
+pub mod console_panel;
 pub mod crypto;
 pub mod deep_links;
 pub mod denoise;

@@ -1028,6 +1028,7 @@ impl Default for ScreenSourceTab {
 pub(crate) enum SettingsSection {
     Account,
     VoiceVideo,
+    Application,
 }
 
 impl Default for SettingsSection {
@@ -1084,6 +1085,7 @@ pub(crate) struct MainState {
     pub(crate) show_invite_dialog: bool,
     pub(crate) show_settings_dialog: bool,
     pub(crate) show_server_settings_dialog: bool,
+    pub(crate) show_console_dialog: bool,
     pub(crate) settings_section: SettingsSection,
     pub(crate) server_settings_section: ServerSettingsSection,
     pub(crate) new_channel_name: String,
@@ -1196,6 +1198,7 @@ impl Clone for MainState {
             show_invite_dialog: self.show_invite_dialog,
             show_settings_dialog: self.show_settings_dialog,
             show_server_settings_dialog: self.show_server_settings_dialog,
+            show_console_dialog: self.show_console_dialog,
             settings_section: self.settings_section,
             server_settings_section: self.server_settings_section,
             new_channel_name: self.new_channel_name.clone(),
@@ -1299,6 +1302,7 @@ impl Default for MainState {
             show_invite_dialog: false,
             show_settings_dialog: false,
             show_server_settings_dialog: false,
+            show_console_dialog: false,
             settings_section: SettingsSection::default(),
             server_settings_section: ServerSettingsSection::default(),
             new_channel_name: String::new(),
@@ -4101,6 +4105,21 @@ pub(crate) fn main_screen(
                             {
                                 state.main.settings_section = SettingsSection::VoiceVideo;
                             }
+
+                            let app_selected =
+                                state.main.settings_section == SettingsSection::Application;
+                            if ui
+                                .add_sized(
+                                    [settings_menu_width - 10.0, 34.0],
+                                    egui::SelectableLabel::new(
+                                        app_selected,
+                                        "Приложение",
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                state.main.settings_section = SettingsSection::Application;
+                            }
                         });
 
                         ui.add_space(8.0);
@@ -4498,6 +4517,35 @@ pub(crate) fn main_screen(
                                         );
                                     });
                                 }
+                                SettingsSection::Application => {
+                                    ui.heading("Приложение");
+                                    ui.add_space(4.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Настройки приложения и инструменты разработки.",
+                                        )
+                                        .small()
+                                        .weak(),
+                                    );
+                                    ui.add_space(12.0);
+
+                                    ui.group(|ui| {
+                                        ui.set_min_width(settings_group_width);
+                                        ui.label(egui::RichText::new("Консоль").strong());
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Просмотр вывода консоли приложения.",
+                                            )
+                                            .small()
+                                            .weak(),
+                                        );
+                                        ui.add_space(8.0);
+                                        if ui.button("Открыть консоль").clicked() {
+                                            state.main.show_console_dialog = true;
+                                        }
+                                    });
+                                }
                                 });
                             });
                     });
@@ -4593,6 +4641,69 @@ pub(crate) fn main_screen(
             state.main.settings_avatar_path = None;
             state.main.settings_msg = None;
             state.settings.save();
+        }
+    }
+
+    // ── Dialog: console window ───────────────────────────────────────────
+    if state.main.show_console_dialog {
+        // Poll for new console messages
+        crate::console_panel::poll_console();
+
+        let mut console_open = true;
+        let console_rect = egui::Rect::from_min_size(
+            settings_overlay_rect.min + egui::vec2(50.0, 50.0),
+            egui::vec2(700.0, 500.0),
+        );
+
+        show_modal_backdrop(ctx, "console_backdrop", settings_overlay_rect);
+
+        egui::Window::new("Консоль")
+            .order(egui::Order::Foreground)
+            .open(&mut console_open)
+            .collapsible(true)
+            .resizable(true)
+            .fixed_pos(console_rect.min)
+            .fixed_size(egui::vec2(700.0, 500.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("Вывод консоли");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Очистить").clicked() {
+                            crate::console_panel::get_console_panel().lock().clear();
+                        }
+                    });
+                });
+                ui.separator();
+
+                let panel = crate::console_panel::get_console_panel().lock();
+                let lines = panel.lines().to_vec();
+                drop(panel);
+
+                egui::ScrollArea::vertical()
+                    .id_source("console_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for line in lines {
+                            let color = if line.is_stderr {
+                                egui::Color32::RED
+                            } else {
+                                egui::Color32::GRAY
+                            };
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "[{}] {}",
+                                    line.timestamp,
+                                    line.text
+                                ))
+                                .monospace()
+                                .color(color),
+                            );
+                        }
+                    });
+            });
+
+        if !console_open {
+            state.main.show_console_dialog = false;
         }
     }
 
@@ -5028,6 +5139,7 @@ pub(crate) fn main_screen(
                             BottomPanelParams {
                                 theme,
                                 user_display: &user_display,
+                                user_id: state.user_id,
                                 voice: voice_bar_snapshot,
                                 avatar_texture: state
                                     .user_id
@@ -5626,16 +5738,26 @@ pub(crate) fn main_screen(
                                                             egui::Color32::WHITE,
                                                         );
                                                     }
-                                                    // Stream tile: overlay with fullscreen + mute in corner
+                                                    // Stream tile: overlay with fullscreen + mute + disconnect in corner
                                                     if show_stream_controls {
                                                         let corner =
                                                             avatar_rect.max - egui::vec2(4.0, 4.0);
                                                         let btn_size = egui::vec2(28.0, 28.0);
+                                                        let btn_gap = 4.0;
+                                                        let disconnect_rect =
+                                                            egui::Rect::from_min_size(
+                                                                corner
+                                                                    - egui::vec2(
+                                                                        btn_size.x * 3.0 + btn_gap * 2.0,
+                                                                        0.0,
+                                                                    ),
+                                                                btn_size,
+                                                            );
                                                         let fullscreen_rect =
                                                             egui::Rect::from_min_size(
                                                                 corner
                                                                     - egui::vec2(
-                                                                        btn_size.x * 2.0 + 4.0,
+                                                                        btn_size.x * 2.0 + btn_gap,
                                                                         0.0,
                                                                     ),
                                                                 btn_size,
@@ -5643,6 +5765,21 @@ pub(crate) fn main_screen(
                                                         let mute_rect = egui::Rect::from_min_size(
                                                             corner - egui::vec2(btn_size.x, 0.0),
                                                             btn_size,
+                                                        );
+                                                        ui.allocate_ui_at_rect(
+                                                            disconnect_rect,
+                                                            |ui| {
+                                                                if ui
+                                                                    .button("✕")
+                                                                    .on_hover_text("Отключиться от трансляции")
+                                                                    .clicked()
+                                                                {
+                                                                    set_stream_subscription(
+                                                                        state, engine_tx, p.user_id,
+                                                                        false,
+                                                                    );
+                                                                }
+                                                            },
                                                         );
                                                         ui.allocate_ui_at_rect(
                                                             fullscreen_rect,
@@ -6190,6 +6327,11 @@ pub(crate) fn main_screen(
                 ui.allocate_ui_at_rect(controls_rect, |ui| {
                     ui.horizontal(|ui| {
                         show_stream_audio_button(ui, state, engine_tx, uid);
+                        if ui.button("✕ Отключиться").clicked()
+                        {
+                            set_stream_subscription(state, engine_tx, uid, false);
+                            state.main.fullscreen_stream_user = None;
+                        }
                         if ui.button("⛶ Закрыть полноэкранный режим").clicked()
                         {
                             state.main.fullscreen_stream_user = None;
@@ -6715,14 +6857,28 @@ fn paint_voice_tile_media(
         }
         if show_stream_controls {
             let button_size = egui::vec2(30.0, 30.0);
+            let button_gap = 6.0;
             let right = avatar_rect.right() - 6.0;
             let top = avatar_rect.top() + 6.0;
+            let disconnect_rect = egui::Rect::from_min_size(
+                egui::pos2(right - button_size.x * 3.0 - button_gap * 2.0, top),
+                button_size,
+            );
             let fullscreen_rect = egui::Rect::from_min_size(
-                egui::pos2(right - button_size.x * 2.0 - 6.0, top),
+                egui::pos2(right - button_size.x * 2.0 - button_gap, top),
                 button_size,
             );
             let audio_rect =
                 egui::Rect::from_min_size(egui::pos2(right - button_size.x, top), button_size);
+            ui.allocate_ui_at_rect(disconnect_rect, |ui| {
+                if ui
+                    .button("✕")
+                    .on_hover_text("Отключиться от трансляции")
+                    .clicked()
+                {
+                    set_stream_subscription(state, engine_tx, participant.user_id, false);
+                }
+            });
             ui.allocate_ui_at_rect(fullscreen_rect, |ui| {
                 if ui
                     .button("⛶")

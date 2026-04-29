@@ -2,8 +2,38 @@ use astrix_client::app;
 use astrix_client::deep_links;
 use eframe::egui;
 
+#[cfg(target_os = "windows")]
+#[cfg(not(debug_assertions))]
+fn hide_console_window() {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, ShowWindow, SW_HIDE};
+
+    unsafe {
+        let window_name: Vec<u16> = "ConsoleWindowClass\0".encode_utf16().collect();
+        if let Ok(hwnd) = FindWindowW(None, windows::core::PCWSTR(window_name.as_ptr())) {
+            if hwnd != HWND::default() {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[cfg(debug_assertions)]
+fn hide_console_window() {
+    // No-op in debug builds
+}
+
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
+    // Initialize console logging
+    astrix_client::console_panel::log("Astrix client starting...");
+
+    // Hide console window in release builds on Windows
+    #[cfg(target_os = "windows")]
+    hide_console_window();
+
+    astrix_client::console_panel::log("Registering protocol handler...");
     deep_links::register_protocol_handler();
     let invite_token = deep_links::extract_invite_token_from_args();
 

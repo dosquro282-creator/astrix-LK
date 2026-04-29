@@ -2,6 +2,12 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    // Set Windows subsystem to GUI (no console window) in release builds
+    if cfg!(target_os = "windows") && !cfg!(debug_assertions) {
+        println!("cargo:rustc-link-arg=/SUBSYSTEM:WINDOWS");
+        println!("cargo:rustc-link-arg=/ENTRY:mainCRTStartup");
+    }
+
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
