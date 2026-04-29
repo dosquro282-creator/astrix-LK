@@ -19,7 +19,9 @@ class NvencD3D11Session {
                     std::uint32_t height,
                     std::uint32_t fps,
                     std::uint32_t bitrate,
-                    rust::Vec<std::uintptr_t> texture_ptrs);
+                    rust::Vec<std::uintptr_t> texture_ptrs,
+                    std::uint32_t gir_period_frames = 0,
+                    std::uint32_t gir_duration_frames = 0);
   ~NvencD3D11Session();
 
   rust::String encoder_name() const;
@@ -45,6 +47,8 @@ std::unique_ptr<NvencD3D11Session> nvenc_d3d11_create(
     std::uint32_t height,
     std::uint32_t fps,
     std::uint32_t bitrate,
-    rust::Vec<std::uintptr_t> texture_ptrs);
+    rust::Vec<std::uintptr_t> texture_ptrs,
+    std::uint32_t gir_period_frames = 0,
+    std::uint32_t gir_duration_frames = 0);
 
 }  // namespace astrix_nvenc

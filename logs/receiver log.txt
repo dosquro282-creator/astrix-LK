@@ -14,7 +14,112 @@
 [voice][screen][viewer] TrackSubscribed: screenshare from identity=1
 [voice][screen][viewer] receive task started, waiting for first frame...
 [voice][screen][viewer] converter thread started (no pacing)
-[voice][screen][audio] received first non-silent remote chunk for user 1
-[voice][screen][viewer] converter thread ended after 0 frames
+[NativeVideoSink] OnFrame #0 rtp=3382963962 1920x1088
+[voice][screen][viewer] first raw frame 1920x1088
+[voice][screen][viewer] first frame converted 1920x1088 path=GPU zero-copy (WGL)
+[NativeVideoSink] OnFrame #1 rtp=3382965462 1920x1088
+[NativeVideoSink] OnFrame #2 rtp=3382974462 1920x1088
+[voice][screen][viewer] STALL recv_wait_ms=230 expected_us=13000 network_us=217718 ts_delta=13000
+[voice][screen][viewer] STALL recv_wait_ms=101 expected_us=58000 network_us=43008 ts_delta=58000
+[voice][screen][viewer] STALL recv_wait_ms=137 expected_us=157000 network_us=0 ts_delta=157000
+[voice][screen][viewer] STALL recv_wait_ms=205 expected_us=151000 network_us=54969 ts_delta=151000
+[voice][screen][viewer] STALL recv_wait_ms=135 expected_us=135000 network_us=405 ts_delta=135000
+[voice][screen][viewer] STALL recv_wait_ms=122 expected_us=122000 network_us=88 ts_delta=122000
+[voice][screen][viewer] STALL recv_wait_ms=115 expected_us=11000 network_us=104158 ts_delta=11000
+[voice][screen][viewer] STALL recv_wait_ms=393 expected_us=9000 network_us=384978 ts_delta=9000
+[voice][screen][viewer] STALL recv_wait_ms=101 expected_us=13000 network_us=88982 ts_delta=13000
+[voice][screen][viewer] STALL recv_wait_ms=116 expected_us=12000 network_us=104180 ts_delta=12000
+[voice][stream] requested keyframe from 1 (viewer stall 549ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=707 expected_us=10000 network_us=697420 ts_delta=10000
+[voice][screen][viewer] STALL recv_wait_ms=104 expected_us=9000 network_us=95167 ts_delta=9000
+[voice][stream] requested keyframe from 1 (viewer stall 537ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=657 expected_us=10000 network_us=647626 ts_delta=10000
+[voice][stream] requested keyframe from 1 (viewer stall 482ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=613 expected_us=10000 network_us=603974 ts_delta=10000
+[voice][stream] requested keyframe from 1 (viewer stall 476ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=582 expected_us=10000 network_us=572171 ts_delta=10000
+[voice][screen][viewer] converter thread ended after 16197 frames
+[voice][screen][viewer] TrackSubscribed: screenshare from identity=1
+[voice][screen][viewer] receive task started, waiting for first frame...
+[voice][screen][viewer] converter thread started (no pacing)
+[voice][stream] requested keyframe from 1 (subscription)
+[voice][screen][viewer] first raw frame 1280x720
+[voice][screen][viewer] first frame converted 1280x720 path=GPU zero-copy (WGL)
+[voice][screen][viewer] STALL recv_wait_ms=156 expected_us=13000 network_us=143272 ts_delta=13000
+[voice][screen][viewer] converter thread ended after 1840 frames
+[voice][screen][viewer] TrackSubscribed: screenshare from identity=1
+[voice][screen][viewer] receive task started, waiting for first frame...
+[voice][screen][viewer] converter thread started (no pacing)
+[voice][stream] requested keyframe from 1 (subscription)
+[voice][screen][viewer] first raw frame 2560x1440
+[voice][screen][viewer] first frame converted 2560x1440 path=GPU zero-copy (WGL)
+[voice][screen][viewer] STALL recv_wait_ms=111 expected_us=21000 network_us=90914 ts_delta=21000
+[voice][stream] requested keyframe from 1 (viewer stall 548ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=1245 expected_us=17000 network_us=1228231 ts_delta=17000
+[voice][stream] requested keyframe from 1 (viewer stall 514ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=1737 expected_us=17000 network_us=1720298 ts_delta=17000
+[voice][stream] requested keyframe from 1 (viewer stall 515ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=1849 expected_us=5000 network_us=1844607 ts_delta=5000
+[voice][stream] requested keyframe from 1 (viewer stall 507ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=1011 expected_us=14000 network_us=997655 ts_delta=14000
+[voice][stream] requested keyframe from 1 (viewer stall 504ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=909 expected_us=14000 network_us=895139 ts_delta=14000
+[voice][screen][viewer] STALL recv_wait_ms=345 expected_us=14000 network_us=331847 ts_delta=14000
+[voice][stream] requested keyframe from 1 (viewer stall 454ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=2126 expected_us=14000 network_us=2112471 ts_delta=14000
+[voice][screen][viewer] STALL recv_wait_ms=204 expected_us=1146000 network_us=0 ts_delta=1146000
+[voice][screen][viewer] STALL recv_wait_ms=216 expected_us=35000 network_us=181911 ts_delta=35000
+[voice][screen][viewer] STALL recv_wait_ms=110 expected_us=27000 network_us=83113 ts_delta=27000
+[voice][screen][viewer] STALL recv_wait_ms=108 expected_us=10000 network_us=98386 ts_delta=10000
+[voice][stream] requested keyframe from 1 (viewer stall 506ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=991 expected_us=14000 network_us=977945 ts_delta=14000
+[voice][stream] requested keyframe from 1 (viewer stall 468ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=1041 expected_us=14000 network_us=1027527 ts_delta=14000
+[voice][stream] requested keyframe from 1 (viewer stall 488ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=2092 expected_us=13000 network_us=2079363 ts_delta=13000
+[voice][stream] requested keyframe from 1 (viewer stall 542ms)
+[voice][screen][viewer] LONG_STALL recv_wait_ms=846 expected_us=15000 network_us=831030 ts_delta=15000
+[voice][screen][viewer] converter thread ended after 2369 frames
+[voice][screen][viewer] TrackSubscribed: screenshare from identity=1
+[voice][screen][viewer] receive task started, waiting for first frame...
+[voice][screen][viewer] converter thread started (no pacing)
+[voice][stream] requested keyframe from 1 (subscription)
+[voice][screen][viewer] first raw frame 2560x1440
+[voice][screen][viewer] first frame converted 2560x1440 path=GPU zero-copy (WGL)
+[voice][screen][viewer] STALL recv_wait_ms=108 expected_us=19000 network_us=89623 ts_delta=19000
+[voice][screen][viewer] STALL recv_wait_ms=155 expected_us=36000 network_us=119779 ts_delta=36000
+[voice][screen][viewer] converter thread ended after 1141 frames
+[voice][screen][viewer] TrackSubscribed: screenshare from identity=1
+[voice][screen][viewer] receive task started, waiting for first frame...
+[voice][screen][viewer] converter thread started (no pacing)
+[voice][stream] requested keyframe from 1 (subscription)
+[voice][screen][viewer] first raw frame 1920x1088
+[voice][screen][viewer] first frame converted 1920x1088 path=GPU zero-copy (WGL)
+[voice][screen][viewer] converter thread ended after 1470 frames
+[voice][screen][viewer] TrackSubscribed: screenshare from identity=1
+[voice][screen][viewer] receive task started, waiting for first frame...
+[voice][screen][viewer] converter thread started (no pacing)
+[voice][stream] requested keyframe from 1 (subscription)
+[voice][screen][viewer] first raw frame 1920x1088
+[voice][screen][viewer] first frame converted 1920x1088 path=GPU zero-copy (WGL)
+[voice][screen][viewer] STALL recv_wait_ms=198 expected_us=35000 network_us=163136 ts_delta=35000
+[voice][screen][viewer] converter thread ended after 781 frames
+[voice][screen][viewer] TrackSubscribed: screenshare from identity=1
+[voice][screen][viewer] receive task started, waiting for first frame...
+[voice][screen][viewer] converter thread started (no pacing)
+[voice][stream] requested keyframe from 1 (subscription)
+[voice][screen][viewer] first raw frame 1280x720
+[voice][screen][viewer] first frame converted 1280x720 path=GPU zero-copy (WGL)
+[voice][screen][viewer] STALL recv_wait_ms=113 expected_us=19000 network_us=94558 ts_delta=19000
+[voice][screen][viewer] STALL recv_wait_ms=105 expected_us=20000 network_us=85095 ts_delta=20000
+[voice][screen][viewer] converter thread ended after 1208 frames
+[voice][screen][viewer] TrackSubscribed: screenshare from identity=1
+[voice][screen][viewer] receive task started, waiting for first frame...
+[voice][screen][viewer] converter thread started (no pacing)
+[voice][stream] requested keyframe from 1 (subscription)
+[voice][screen][viewer] first raw frame 1280x720
+[voice][screen][viewer] first frame converted 1280x720 path=GPU zero-copy (WGL)
+[voice][screen][viewer] STALL recv_wait_ms=156 expected_us=33000 network_us=123597 ts_delta=33000
+[voice][screen][viewer] converter thread ended after 1655 frames
 [voice][livekit] session: VoiceCmd::Stop received
 [voice][livekit] engine stopped

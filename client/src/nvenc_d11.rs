@@ -8,6 +8,7 @@
 #![cfg(all(target_os = "windows", feature = "wgc-capture"))]
 
 use std::collections::VecDeque;
+use std::env;
 
 use cxx::UniquePtr;
 use thiserror::Error;
@@ -178,6 +179,10 @@ impl NvencD3d11Encoder {
         let uses_rgb_input = first_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM.into()
             || first_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM.into();
         let texture_ptrs: Vec<usize> = input_ring.iter().map(texture_raw_ptr).collect();
+
+        // Parse optional GIR (Gradual Intra Refresh) from environment variables
+        let (gir_period, gir_duration) = parse_gir_env_vars();
+
         let session = ffi::nvenc_d3d11_create(
             device.as_raw() as usize,
             width,
@@ -185,6 +190,8 @@ impl NvencD3d11Encoder {
             fps,
             bitrate,
             texture_ptrs,
+            gir_period,
+            gir_duration,
         )?;
         let session_ref = session
             .as_ref()
@@ -435,6 +442,42 @@ fn nvenc_runtime_present() -> bool {
         } else {
             false
         }
+    }
+}
+
+/// Parse optional GIR (Gradual Intra Refresh) parameters from environment variables.
+///
+/// GIR is disabled by default. To enable, set both:
+/// - `ASTRIX_NVENC_GIR_PERIOD_FRAMES` - Number of frames between GIR cycles
+/// - `ASTRIX_NVENC_GIR_DURATION_FRAMES` - Number of frames the refresh takes
+///
+/// Example: For 60fps with 2-second refresh cycle lasting 1 second:
+/// - `ASTRIX_NVENC_GIR_PERIOD_FRAMES=120`
+/// - `ASTRIX_NVENC_GIR_DURATION_FRAMES=60`
+///
+/// Returns `(period_frames, duration_frames)` - both 0 means GIR is disabled.
+fn parse_gir_env_vars() -> (u32, u32) {
+    let period: u32 = env::var("ASTRIX_NVENC_GIR_PERIOD_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let duration: u32 = env::var("ASTRIX_NVENC_GIR_DURATION_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
+    if period > 0 && duration > 0 {
+        if duration >= period {
+            eprintln!(
+                "[nvenc_d11] WARNING: GIR duration ({}) >= period ({}) is invalid, disabling GIR",
+                duration, period
+            );
+            (0, 0)
+        } else {
+            (period, duration)
+        }
+    } else {
+        (0, 0)
     }
 }
 

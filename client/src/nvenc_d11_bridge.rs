@@ -14,6 +14,8 @@ pub mod ffi {
             fps: u32,
             bitrate: u32,
             texture_ptrs: Vec<usize>,
+            gir_period_frames: u32,
+            gir_duration_frames: u32,
         ) -> Result<UniquePtr<NvencD3D11Session>>;
 
         fn encoder_name(self: &NvencD3D11Session) -> String;

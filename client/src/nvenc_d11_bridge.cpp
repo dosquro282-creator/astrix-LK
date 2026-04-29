@@ -268,12 +268,16 @@ struct NvencD3D11Session::Impl {
        std::uint32_t height,
        std::uint32_t fps,
        std::uint32_t bitrate,
-       rust::Vec<std::uintptr_t> texture_ptrs)
+       rust::Vec<std::uintptr_t> texture_ptrs,
+       std::uint32_t gir_period_frames,
+       std::uint32_t gir_duration_frames)
       : width_(width),
         height_(height),
         fps_(fps ? fps : 60),
         bitrate_(bitrate),
-        ring_size_(static_cast<uint32_t>(texture_ptrs.size())) {
+        ring_size_(static_cast<uint32_t>(texture_ptrs.size())),
+        gir_period_frames_(gir_period_frames),
+        gir_duration_frames_(gir_duration_frames) {
     if (ring_size_ == 0) {
       throw std::runtime_error("NVENC D3D11 requires at least one input texture");
     }
@@ -582,9 +586,29 @@ struct NvencD3D11Session::Impl {
         encode_config_.encodeCodecConfig.h264Config.hierarchicalPFrames = 0;
         encode_config_.encodeCodecConfig.h264Config.hierarchicalBFrames = 0;
         encode_config_.encodeCodecConfig.h264Config.enableTemporalSVC = 0;
-        encode_config_.encodeCodecConfig.h264Config.enableIntraRefresh = 0;
-        encode_config_.encodeCodecConfig.h264Config.intraRefreshPeriod = 0;
-        encode_config_.encodeCodecConfig.h264Config.intraRefreshCnt = 0;
+        // GIR (Gradual Intra Refresh) - OPTIONAL, disabled by default
+        // Only enabled via env vars: ASTRIX_NVENC_GIR_PERIOD_FRAMES, ASTRIX_NVENC_GIR_DURATION_FRAMES
+        if (gir_period_frames_ > 0 && gir_duration_frames_ > 0) {
+          const bool gir_supported = GetCapability(NV_ENC_CAPS_SUPPORT_INTRA_REFRESH) != 0;
+          if (gir_supported) {
+            encode_config_.encodeCodecConfig.h264Config.enableIntraRefresh = 1;
+            encode_config_.encodeCodecConfig.h264Config.intraRefreshPeriod = gir_period_frames_;
+            encode_config_.encodeCodecConfig.h264Config.intraRefreshCnt = gir_duration_frames_;
+            std::fprintf(stderr,
+                "[nvenc_d11] GIR enabled: period=%u frames, duration=%u frames\n",
+                gir_period_frames_, gir_duration_frames_);
+          } else {
+            std::fprintf(stderr,
+                "[nvenc_d11] GIR requested but not supported by GPU, continuing without GIR\n");
+            encode_config_.encodeCodecConfig.h264Config.enableIntraRefresh = 0;
+            encode_config_.encodeCodecConfig.h264Config.intraRefreshPeriod = 0;
+            encode_config_.encodeCodecConfig.h264Config.intraRefreshCnt = 0;
+          }
+        } else {
+          encode_config_.encodeCodecConfig.h264Config.enableIntraRefresh = 0;
+          encode_config_.encodeCodecConfig.h264Config.intraRefreshPeriod = 0;
+          encode_config_.encodeCodecConfig.h264Config.intraRefreshCnt = 0;
+        }
         encode_config_.encodeCodecConfig.h264Config.enableLTR = 0;
         encode_config_.encodeCodecConfig.h264Config.ltrNumFrames = 0;
         encode_config_.encodeCodecConfig.h264Config.ltrTrustMode = 0;
@@ -1101,6 +1125,8 @@ struct NvencD3D11Session::Impl {
   std::atomic<std::uint64_t> last_submit_map_us_{0};
   std::atomic<std::uint64_t> last_submit_encode_picture_us_{0};
   std::atomic<std::uint64_t> last_submit_total_us_{0};
+  uint32_t gir_period_frames_ = 0;
+  uint32_t gir_duration_frames_ = 0;
   NV_ENC_INITIALIZE_PARAMS init_params_ = {};
   NV_ENC_CONFIG encode_config_ = {};
 };
@@ -1110,13 +1136,17 @@ NvencD3D11Session::NvencD3D11Session(std::uintptr_t d3d11_device,
                                      std::uint32_t height,
                                      std::uint32_t fps,
                                      std::uint32_t bitrate,
-                                     rust::Vec<std::uintptr_t> texture_ptrs)
+                                     rust::Vec<std::uintptr_t> texture_ptrs,
+                                     std::uint32_t gir_period_frames,
+                                     std::uint32_t gir_duration_frames)
     : impl_(std::make_unique<Impl>(d3d11_device,
                                    width,
                                    height,
                                    fps,
                                    bitrate,
-                                   std::move(texture_ptrs))) {}
+                                   std::move(texture_ptrs),
+                                   gir_period_frames,
+                                   gir_duration_frames)) {}
 
 NvencD3D11Session::~NvencD3D11Session() = default;
 
@@ -1170,9 +1200,12 @@ std::unique_ptr<NvencD3D11Session> nvenc_d3d11_create(
     std::uint32_t height,
     std::uint32_t fps,
     std::uint32_t bitrate,
-    rust::Vec<std::uintptr_t> texture_ptrs) {
+    rust::Vec<std::uintptr_t> texture_ptrs,
+    std::uint32_t gir_period_frames,
+    std::uint32_t gir_duration_frames) {
   return std::make_unique<NvencD3D11Session>(
-      d3d11_device, width, height, fps, bitrate, std::move(texture_ptrs));
+      d3d11_device, width, height, fps, bitrate, std::move(texture_ptrs),
+      gir_period_frames, gir_duration_frames);
 }
 
 }  // namespace astrix_nvenc

@@ -1,0 +1,2 @@
+nvenc_d11_bridge.cpp
+c:\MyProjects\Astrix LK\astrix-LK\client\include\astrix/nvenc_d11_bridge.h(3): fatal error C1083: Не удается открыть файл включение: cstdint: No such file or directory,
