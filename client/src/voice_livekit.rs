@@ -213,8 +213,9 @@ fn wgc_min_update_interval(target_fps: f64) -> Duration {
 }
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-fn dxgi_acquire_timeout_ms(target_fps: f64) -> u32 {
-    ((1000.0 / target_fps.max(1.0)).ceil() as u32).clamp(1, 33)
+fn dxgi_acquire_timeout_ms(_target_fps: f64) -> u32 {
+    // Experimental: fixed 1ms timeout for lower latency capture
+    1
 }
 
 fn extract_rtt_ms_from_stats(stats: &[livekit::webrtc::stats::RtcStats]) -> Option<f32> {
@@ -4852,15 +4853,9 @@ fn start_screen_capture(
                 return Ok(());
             }
 
-            // CPU fallback path: push RGBA for encoder (only when GPU encode is not active).
-            let mut buf = frame.buffer()?;
-            let raw = buf.as_nopadding_buffer()?;
-            let new_frame = Box::into_raw(Box::new(RawFrame {
-                pixels: raw.to_vec(),
-                width: w,
-                height: h,
-            }));
-            self.ring.push(new_frame);
+            // Pool creation in progress — drop frame instead of CPU fallback.
+            // frame.buffer() does GPU→CPU readback that takes >16 ms at high resolutions
+            // and blocks the WGC capture thread, triggering half-rate throttle.
             Ok(())
         }
     }
@@ -5719,7 +5714,7 @@ fn start_screen_capture(
                 std::env::var("ASTRIX_DXGI_NVENC_LEAKY_MAX_IN_FLIGHT")
                     .ok()
                     .and_then(|s| s.parse::<usize>().ok())
-                    .unwrap_or(4)
+                    .unwrap_or(8)
                     .clamp(1, 16);
             let nvenc_starvation_reset_threshold_ms: u64 =
                 std::env::var("ASTRIX_DXGI_NVENC_STARVATION_RESET_MS")
@@ -5785,7 +5780,7 @@ fn start_screen_capture(
                 std::env::var("ASTRIX_DXGI_NVENC_LEAKY_PREENCODE")
                     .unwrap_or_else(|_| "<default:on>".to_string()),
                 std::env::var("ASTRIX_DXGI_NVENC_LEAKY_MAX_IN_FLIGHT")
-                    .unwrap_or_else(|_| "<default:4>".to_string()),
+                    .unwrap_or_else(|_| "<default:8>".to_string()),
             );
             eprintln!(
                 "[voice][screen] NVENC starvation reset threshold: {}ms (ASTRIX_DXGI_NVENC_STARVATION_RESET_MS={})",
