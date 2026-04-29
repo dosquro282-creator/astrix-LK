@@ -8250,6 +8250,13 @@ fn start_screen_capture(
                                                         }
                                                         last_send_in_batch = std::time::Instant::now();
                                                     }
+                                                    // Phase 4.8: Soft burst limiting for RTP packet flood prevention.
+                                                    // One H.264 frame (especially keyframe) can produce 50-100+ RTP packets.
+                                                    // After every 2 frames, yield to let UDP socket drain and prevent
+                                                    // network buffer overflow that causes NACK/PLI/LONG_STALL.
+                                                    if collected_this % 2 == 0 {
+                                                        std::thread::yield_now();
+                                                    }
                                                 }
                                                 if sent_keyframe {
                                                     keyframe_request_enc
