@@ -1,0 +1,20 @@
+[gpu_device] D3D11 multithread protection ENABLED
+[gpu_device] Selected GPU: NVIDIA GeForce RTX 3080 (discrete; 12091 MB VRAM)
+[mft_device] Shared D3D11 device initialized for hardware decode
+[voice][livekit] connecting to ws://193.233.251.173:7880 ...
+[Phase 3.5] WGL_NV_DX_interop2 initialized successfully
+[Phase 3.5] WGL_NV_DX_interop2 ready — GPU zero-copy path enabled by default
+[voice][livekit] connected to room
+[voice][livekit] mic: 48000 Hz
+[voice][livekit] speaker output at 48000 Hz
+[voice][livekit] mic capture: 48000 Hz, 2 ch
+[voice][livekit] speaker: 48000 Hz, 2 channel(s)
+[denoise] DeepFilterNet active for sender-microphone using DeepFilterNet3_onnx.tar.gz (frame_len=480 @ 48000 Hz, atten_lim=42.0 dB, post_filter_beta=0.010, thresholds=[-15.0, 35.0, 35.0], reduce_mask=max)
+[voice][stream] requested keyframe from 1 (subscription)
+[voice][screen][viewer] TrackSubscribed: screenshare from identity=1
+[voice][screen][viewer] receive task started, waiting for first frame...
+[voice][screen][viewer] converter thread started (no pacing)
+[voice][screen][audio] received first non-silent remote chunk for user 1
+[voice][screen][viewer] converter thread ended after 0 frames
+[voice][livekit] session: VoiceCmd::Stop received
+[voice][livekit] engine stopped

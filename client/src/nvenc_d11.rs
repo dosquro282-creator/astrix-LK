@@ -262,9 +262,18 @@ impl NvencD3d11Encoder {
     ) -> Result<Vec<EncodedFrame>, NvencD3d11Error> {
         let timeout_ms = self.output_timeout_ms(key_frame);
         self.submit(texture, ts_us, key_frame, 0, ts_us, timeout_ms)?;
-        match self.collect_blocking(timeout_ms)? {
-            Some((frames, _, _, _)) => Ok(frames),
-            None => Ok(Vec::new()),
+        // Use blocking collect only for keyframes (startup), non-blocking for P-frames.
+        // Keyframes are critical for stream startup - receiver needs the first IDR before decoding.
+        if key_frame {
+            match self.collect_blocking(timeout_ms)? {
+                Some((frames, _, _, _)) => Ok(frames),
+                None => Ok(Vec::new()),
+            }
+        } else {
+            match self.collect()? {
+                Some((frames, _, _, _)) => Ok(frames),
+                None => Ok(Vec::new()),
+            }
         }
     }
 

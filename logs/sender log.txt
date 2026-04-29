@@ -1,0 +1,227 @@
+[gpu_device] D3D11 multithread protection ENABLED
+[gpu_device] Selected GPU: NVIDIA GeForce RTX 3080 (discrete; 12091 MB VRAM)
+[mft_device] Shared D3D11 device initialized for hardware decode
+[voice][livekit] connecting to ws://193.233.251.173:7880 ...
+[Phase 3.5] WGL_NV_DX_interop2 initialized successfully
+[Phase 3.5] WGL_NV_DX_interop2 ready — GPU zero-copy path enabled by default
+[voice][livekit] connected to room
+[voice][livekit] mic: 48000 Hz
+[voice][livekit] speaker output at 48000 Hz
+[voice][livekit] mic capture: 48000 Hz, 2 ch
+[voice][livekit] speaker: 48000 Hz, 2 channel(s)
+[denoise] DeepFilterNet active for sender-microphone using DeepFilterNet3_onnx.tar.gz (frame_len=480 @ 48000 Hz, atten_lim=42.0 dB, post_filter_beta=0.010, thresholds=[-15.0, 35.0, 35.0], reduce_mask=max)
+[voice][screen] Astrix process priority: HIGH_PRIORITY_CLASS (screen pipeline start, ASTRIX_HIGH_PRIORITY_PIPELINE=<default:on>)
+[voice][screen] capture backend default: dxgi
+[voice][screen] DXGI build marker: hardfail-fallback-v2
+[voice][screen] WARNING: P1080F120 is demanding (high res/fps). If FPS drops, consider lower preset (e.g. P1080F60 or P1440F30). Hardware encoder (NVENC/AMF) support is planned.
+[voice][screen] WebRTC track mode: motion (is_screencast=false, content_hint=Fluid, ASTRIX_SCREEN_WEBRTC_MOTION_MODE=<default:on>)
+[voice][screen] encode path: encoded GPU path (push_frame -> ExternalH264Encoder -> RTP)
+[voice][screen] preset FPS lock: enabled (ASTRIX_DXGI_LOCK_PRESET_FPS=<default:on>, backend=dxgi)
+[voice][screen] locked-source follow: disabled
+[voice][screen] NVENC submit delay: 3 frame(s) (ASTRIX_DXGI_NVENC_SUBMIT_DELAY_FRAMES=<default:3>)
+[voice][screen] NVENC direct RGB: enabled (ring 12 surface(s), ASTRIX_DXGI_NVENC_DIRECT_RGB=<default:on>, ASTRIX_DXGI_NVENC_RGB_RING=<default:12>)
+[voice][screen] NV12 second D3D11 device: disabled (ASTRIX_DXGI_NV12_SECOND_DEVICE=<default:off>)
+[voice][screen] NVENC send coalescing: disabled (ASTRIX_DXGI_NVENC_COALESCE_SEND=<default:off>)
+[voice][screen] NVENC pre-encode leaky queue: enabled max_in_flight=4 (ASTRIX_DXGI_NVENC_LEAKY_PREENCODE=<default:on>, ASTRIX_DXGI_NVENC_LEAKY_MAX_IN_FLIGHT=<default:4>)
+[voice][screen] NVENC starvation reset threshold: 1000ms (ASTRIX_DXGI_NVENC_STARVATION_RESET_MS=<default:1000>)
+[voice][screen] encoder: cpu
+[voice][screen] video codec encoder: cpu
+[gpu_device] D3D11 multithread protection ENABLED
+[gpu_device] Selected GPU: NVIDIA GeForce RTX 3080 (discrete; 12091 MB VRAM)
+[voice][screen] DXGI capturing monitor 0 '\\.\DISPLAY2' via adapter 0 'NVIDIA GeForce RTX 3080' / output 0 '\\.\DISPLAY2' (2560x1440 at 0,0)
+[voice][screen][audio] process loopback activated for ExcludeCurrentProcessTree
+[voice][screen][audio] process loopback format: 48000 Hz, 2 ch, 16-bit PCM
+[gpu_device] D3D11 multithread protection ENABLED
+[gpu_device] Selected GPU: NVIDIA GeForce RTX 3080 (discrete; 12091 MB VRAM)
+[voice][screen] DXGI direct RGB shared ring: separate D3D11 device enabled (ASTRIX_DXGI_RGB_SECOND_DEVICE="<default:on>", ASTRIX_DXGI_NV12_SECOND_DEVICE="<default:off>", adapter 0, 6 slot(s))
+[voice][screen] DXGI texture pool created: 2560x1440 format DXGI_FORMAT(87) (6 slots, latest-frame)
+[voice][screen] DXGI first frame copied into latest-slot
+[d3d11_nv12] Creating converter: 2560x1440 → 1920x1080 @ 120 fps
+[d3d11_nv12] Flush policy: startup-only (3 frame(s))
+[d3d11_nv12] NV12 output ring: 16 surface(s)
+[d3d11_nv12] VideoProcessor usage: optimal-speed (ASTRIX_DXGI_NV12_OPTIMAL_SPEED=<default:on>)
+[voice][screen][audio] excluding sibling Astrix processes from monitor stream: [32204]
+[voice][screen][audio] process loopback activated for IncludeProcessTree(32204)
+[voice][screen][audio] process loopback format: 48000 Hz, 2 ch, 16-bit PCM
+[d3d11_nv12] ContentDesc: 2560x1440 -> 1920x1080 fps=120/1
+[d3d11_nv12] BGRA format flags: 0x3
+[d3d11_nv12] RGBA format flags: 0x3
+[d3d11_nv12] NV12 format flags: 0x3
+[d3d11_nv12] VideoProcessorCaps: RateConversionCapsCount=1, MaxInputStreams=5, InputFormatCaps=0x4, FeatureCaps=0x3ef
+[d3d11_nv12] Using rate conversion index: 0 (RateConversionCapsCount=1)
+[d3d11_nv12] NV12Tex desc: 1920x1080 format=DXGI_FORMAT(103) mip=1 array=1 sample=1 bind=0x28 ring=16
+[d3d11_nv12] Creating RGB scaler: 2560x1440 -> 1920x1080 @ 120 fps
+[d3d11_nv12] RGB scaler usage: optimal-speed (ASTRIX_DXGI_NV12_OPTIMAL_SPEED=<default:on>)
+[d3d11_nv12] RGB scaler formats: BGRA=0x3 RGBA=0x3
+[d3d11_nv12] RGB scaler compute CB ring: 16 buffer(s)
+[d3d11_nv12] RGB scaler path: compute bilinear BGRA (ASTRIX_DXGI_RGB_SCALE_COMPUTE=<default:on>)
+[voice][screen] NVENC direct RGB scaler created: 2560x1440 -> 1920x1080 (16 surface(s))
+[voice][screen] NVENC direct RGB scaler: separate D3D11 device via shared keyed ring
+[nvenc_d11] init: custom async p1 (fps=120, async=on, low_latency=prefer-fast, input=ARGB/BGRA, h264_fast=on)
+[nvenc_d11] config: label=custom async p1 tuning=3 preset_p1=1 preset_p4=0 rc=2 multipass=0 lookahead=0 depth=0 aq=0 aq_strength=0 temporal_aq=0 zero_reorder=1 non_ref_p=1 strict_gop=1 frame_interval_p=1 gop=4294967295 idr=4294967295 vbv=8750000/8750000 h264_fast profile_baseline=1 entropy=2 adaptive_transform=1 deblock=2 b_ref=0 bdirect=1 hier_p=0 hier_b=0 temporal_svc=0 intra_refresh=0 ltr=0 refs_l0=1 refs_l1=0 max_ref=1 async=1
+[encoded_h264] selected NVENC D3D11 backend: NVIDIA GeForce RTX 3080
+[voice][screen] Screen capture: NVENC D3D11 (NVIDIA GeForce RTX 3080, hardware)
+[voice][screen] NVENC tuning: preset bitrate cap 35.0 Mbps, periodic IDR default 20s
+[voice][screen] NVENC input path: direct RGB scale ring
+[voice][screen] encoded backend steady-state: pipelined submit+collect mode
+[voice][screen] async GPU convert worker: enabled (direct RGB scale)
+[voice][screen] async GPU convert worker: waiting for first scaled frame
+[voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=0
+[voice][screen] encoded backend startup: encode() returned 0 frame(s) in 212 us
+[voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[voice][screen] encoded backend startup keyframe: first 3 frames as IDR
+[voice][screen] NVENC active submit delay: 3 frame(s) (ring 16, rgb_scale=on)
+[EncodedVideoTrackSource] first encoded frame delivered (144896 bytes, keyframe=1)
+[voice][screen][audio] captured first non-silent loopback chunk
+[voice][screen][startup] t=0s src=0.0 caps=120/10/60/10 bwe_req=2.50 enc=2.50 pre_rtp=2.33 rtp=0.63 avail=2.52 ql=bandwidth loss=- nack=0 pli=0 path=udp srflx -> udp host (succeeded, nominated) rtt=33ms
+[voice][screen] DXGI rate: callback 53.1 fps, compositor 52.1 fps, accumulated_est 56.1 fps (avg 1.06x max 3x)
+[voice][screen][push][summary] tick=1269.3 slot_ready=1263.0 slot_miss=6.4 pool_miss=0 late_ticks=0 drop_frames=0 need_init=1 new_content=1381 reuse_content=6 static_reuse=0 empty=1353 sent=33.7 target=120 schedule=10 mode=pipelined
+[voice][screen][push][timing] convert=38/0 avg=8us ctx_avg=0us gpu_avg=8us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=2us blt_avg=0us bp_skip=0 flush=38/0 avg=7us ctx_avg=0us call_avg=7us ready=imm:0 wait:0 timeout:0 avg=0us submit=37/0 avg=3us map_avg=11us pic_avg=269us collect=some:37 none:45 err:0 frames=33.7 avg=15us encode=46/0 avg=55us send_calls=34.6 avg_send=14us
+[voice][screen][push][burst] sent_frames=37 key=3 avg_frame=7KB max_frame=141KB gap_avg=24984us gap_max=100005us burst_gaps=4 stall_gaps=1
+[voice][screen][push][nvenc] map_p95=17us map_max=21us pic_p95=275us pic_max=5624us encode_time_p95=6951us encode_time_max=8107us in_flight_p95=2 in_flight_max=4 frame_p95=59KB frame_max=141KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][audio] subtracting sibling Astrix playback from monitor stream
+[voice][screen][startup] t=2s src=52.1 caps=120/120/90/90 bwe_req=2.65 enc=3.58 pre_rtp=1.05 rtp=1.92 avail=2.65 ql=bandwidth loss=0.00 nack=0 pli=1 path=udp srflx -> udp host (succeeded, nominated) rtt=33ms
+[voice][screen] DXGI rate: callback 53.9 fps, compositor 52.9 fps, accumulated_est 53.9 fps (avg 1.00x max 1x)
+[voice][screen][push][summary] tick=74.2 slot_ready=74.2 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=51 reuse_content=24 static_reuse=0 empty=28 sent=46.5 target=120 schedule=90 mode=pipelined
+[voice][screen][push][timing] convert=46/0 avg=9us ctx_avg=0us gpu_avg=9us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=1us state_avg=1us shader_avg=0us cb_bind_avg=0us sampler_avg=1us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=3us blt_avg=0us bp_skip=0 flush=46/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=46/0 avg=3us map_avg=11us pic_avg=107us collect=some:47 none:75 err:0 frames=46.5 avg=6us encode=75/0 avg=15us send_calls=46.5 avg_send=2us
+[voice][screen][push][burst] sent_frames=47 key=4 avg_frame=3KB max_frame=14KB gap_avg=23521us gap_max=105734us burst_gaps=0 stall_gaps=1
+[voice][screen][push][nvenc] map_p95=20us map_max=49us pic_p95=168us pic_max=228us encode_time_p95=3289us encode_time_max=4279us in_flight_p95=1 in_flight_max=1 frame_p95=14KB frame_max=14KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=3s src=52.9 caps=120/120/90/90 bwe_req=2.71 enc=3.58 pre_rtp=1.89 rtp=1.44 avail=2.75 ql=bandwidth loss=0.00 nack=0 pli=2 path=udp srflx -> udp host (succeeded, nominated) rtt=33ms
+[voice][screen] DXGI rate: callback 54.2 fps, compositor 53.2 fps, accumulated_est 54.2 fps (avg 1.00x max 1x)
+[voice][screen][push][summary] tick=90.6 slot_ready=90.6 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=61 reuse_content=30 static_reuse=0 empty=37 sent=53.8 target=120 schedule=90 mode=pipelined
+[voice][screen][push][timing] convert=55/0 avg=9us ctx_avg=0us gpu_avg=9us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=1us state_avg=1us shader_avg=1us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=55/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=55/0 avg=3us map_avg=11us pic_avg=113us collect=some:54 none:91 err:0 frames=53.8 avg=8us encode=91/0 avg=20us send_calls=53.8 avg_send=3us
+[voice][screen][push][burst] sent_frames=54 key=0 avg_frame=4KB max_frame=16KB gap_avg=18518us gap_max=33281us burst_gaps=0 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=22us map_max=67us pic_p95=163us pic_max=216us encode_time_p95=3095us encode_time_max=3713us in_flight_p95=1 in_flight_max=1 frame_p95=12KB frame_max=16KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=4s src=53.2 caps=120/120/120/120 bwe_req=2.77 enc=3.82 pre_rtp=1.68 rtp=2.02 avail=2.83 ql=bandwidth loss=0.00 nack=0 pli=4 path=udp srflx -> udp host (succeeded, nominated) rtt=34ms
+[voice][screen] DXGI rate: callback 55.5 fps, compositor 54.5 fps, accumulated_est 55.5 fps (avg 1.00x max 1x)
+[voice][screen][push][summary] tick=94.5 slot_ready=94.5 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=59 reuse_content=36 static_reuse=0 empty=38 sent=56.7 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=55/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=55/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=56/0 avg=3us map_avg=10us pic_avg=110us collect=some:57 none:95 err:0 frames=56.7 avg=7us encode=95/0 avg=16us send_calls=56.7 avg_send=3us
+[voice][screen][push][burst] sent_frames=57 key=0 avg_frame=3KB max_frame=13KB gap_avg=17981us gap_max=28128us burst_gaps=1 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=16us map_max=19us pic_p95=155us pic_max=200us encode_time_p95=3668us encode_time_max=4240us in_flight_p95=1 in_flight_max=1 frame_p95=10KB frame_max=13KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=5s src=54.5 caps=120/120/120/120 bwe_req=2.90 enc=3.82 pre_rtp=2.45 rtp=1.99 avail=2.85 ql=bandwidth loss=0.00 nack=0 pli=6 path=udp srflx -> udp host (succeeded, nominated) rtt=34ms
+[voice][screen] DXGI rate: callback 64.4 fps, compositor 63.4 fps, accumulated_est 66.4 fps (avg 1.03x max 3x)
+[voice][screen][push][summary] tick=120.8 slot_ready=120.8 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=71 reuse_content=50 static_reuse=0 empty=50 sent=70.9 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=67/0 avg=6us ctx_avg=0us gpu_avg=6us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=67/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=72/0 avg=3us map_avg=9us pic_avg=103us collect=some:71 none:121 err:0 frames=70.9 avg=8us encode=121/0 avg=19us send_calls=70.9 avg_send=4us
+[voice][screen][push][burst] sent_frames=71 key=0 avg_frame=4KB max_frame=19KB gap_avg=14201us gap_max=33322us burst_gaps=0 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=16us map_max=28us pic_p95=170us pic_max=236us encode_time_p95=6704us encode_time_max=12832us in_flight_p95=1 in_flight_max=1 frame_p95=9KB frame_max=19KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=6s src=63.4 caps=120/120/120/120 bwe_req=3.15 enc=4.09 pre_rtp=3.09 rtp=2.32 avail=3.03 ql=bandwidth loss=0.00 nack=0 pli=7 path=udp srflx -> udp host (succeeded, nominated) rtt=34ms
+[voice][screen] DXGI rate: callback 112.7 fps, compositor 111.7 fps, accumulated_est 120.7 fps (avg 1.07x max 2x)
+[voice][screen][push][summary] tick=120.9 slot_ready=120.9 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=106 reuse_content=15 static_reuse=0 empty=25 sent=101.9 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=102/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=102/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=102/0 avg=3us map_avg=8us pic_avg=103us collect=some:102 none:121 err:0 frames=101.9 avg=10us encode=121/0 avg=29us send_calls=101.9 avg_send=6us
+[voice][screen][push][burst] sent_frames=102 key=0 avg_frame=4KB max_frame=22KB gap_avg=9885us gap_max=25005us burst_gaps=6 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=14us map_max=26us pic_p95=158us pic_max=231us encode_time_p95=8496us encode_time_max=14370us in_flight_p95=1 in_flight_max=2 frame_p95=10KB frame_max=22KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=7s src=111.7 caps=120/120/120/120 bwe_req=3.36 enc=4.46 pre_rtp=3.64 rtp=3.19 avail=3.30 ql=bandwidth loss=0.00 nack=0 pli=9 path=udp srflx -> udp host (succeeded, nominated) rtt=35ms
+[voice][screen] DXGI rate: callback 107.0 fps, compositor 106.0 fps, accumulated_est 108.0 fps (avg 1.01x max 2x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=106 reuse_content=15 static_reuse=0 empty=19 sent=102.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=102/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=1us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=102/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=102/0 avg=2us map_avg=8us pic_avg=102us collect=some:103 none:121 err:0 frames=102.8 avg=13us encode=121/0 avg=31us send_calls=102.8 avg_send=3us
+[voice][screen][push][burst] sent_frames=103 key=0 avg_frame=4KB max_frame=22KB gap_avg=9788us gap_max=16752us burst_gaps=1 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=15us map_max=26us pic_p95=160us pic_max=297us encode_time_p95=6700us encode_time_max=7032us in_flight_p95=1 in_flight_max=2 frame_p95=14KB frame_max=22KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=8s src=106.0 caps=120/120/120/120 bwe_req=3.65 enc=4.77 pre_rtp=3.90 rtp=3.71 avail=3.53 ql=bandwidth loss=0.00 nack=0 pli=11 path=udp srflx -> udp host (succeeded, nominated) rtt=35ms
+[voice][screen] DXGI rate: callback 106.6 fps, compositor 105.6 fps, accumulated_est 107.6 fps (avg 1.01x max 2x)
+[voice][screen][push][summary] tick=120.6 slot_ready=120.6 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=107 reuse_content=14 static_reuse=0 empty=20 sent=100.7 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=102/0 avg=6us ctx_avg=0us gpu_avg=6us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=102/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=102/0 avg=2us map_avg=7us pic_avg=89us collect=some:101 none:121 err:0 frames=100.7 avg=10us encode=121/0 avg=25us send_calls=100.7 avg_send=3us
+[voice][screen][push][burst] sent_frames=101 key=0 avg_frame=3KB max_frame=28KB gap_avg=9983us gap_max=16690us burst_gaps=0 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=13us map_max=16us pic_p95=117us pic_max=161us encode_time_p95=7103us encode_time_max=11327us in_flight_p95=1 in_flight_max=1 frame_p95=13KB frame_max=28KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=9s src=105.6 caps=120/120/120/120 bwe_req=3.92 enc=5.21 pre_rtp=4.19 rtp=3.99 avail=3.86 ql=bandwidth loss=0.00 nack=0 pli=12 path=udp srflx -> udp host (succeeded, nominated) rtt=33ms
+[voice][screen] DXGI rate: callback 111.1 fps, compositor 110.1 fps, accumulated_est 116.1 fps (avg 1.04x max 3x)
+[voice][screen][push][summary] tick=120.8 slot_ready=120.8 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=109 reuse_content=12 static_reuse=0 empty=18 sent=104.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=104/0 avg=6us ctx_avg=0us gpu_avg=6us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=104/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=105/0 avg=3us map_avg=10us pic_avg=100us collect=some:105 none:121 err:0 frames=104.8 avg=13us encode=121/0 avg=33us send_calls=104.8 avg_send=4us
+[voice][screen][push][burst] sent_frames=105 key=0 avg_frame=5KB max_frame=12KB gap_avg=9602us gap_max=16710us burst_gaps=2 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=14us map_max=123us pic_p95=154us pic_max=285us encode_time_p95=7236us encode_time_max=8357us in_flight_p95=1 in_flight_max=2 frame_p95=9KB frame_max=12KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=10s src=110.1 caps=120/120/120/120 bwe_req=4.24 enc=5.58 pre_rtp=5.05 rtp=4.38 avail=4.14 ql=bandwidth loss=0.00 nack=0 pli=14 path=udp srflx -> udp host (succeeded, nominated) rtt=33ms
+[voice][screen] DXGI rate: callback 112.9 fps, compositor 111.9 fps, accumulated_est 116.9 fps (avg 1.04x max 2x)
+[voice][screen][push][summary] tick=120.8 slot_ready=120.8 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=108 reuse_content=13 static_reuse=0 empty=19 sent=102.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=103/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=1us state_avg=1us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=103/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=102/0 avg=2us map_avg=7us pic_avg=92us collect=some:103 none:121 err:0 frames=102.8 avg=14us encode=121/0 avg=35us send_calls=102.8 avg_send=4us
+[voice][screen][push][burst] sent_frames=103 key=0 avg_frame=5KB max_frame=21KB gap_avg=9789us gap_max=16708us burst_gaps=1 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=13us map_max=21us pic_p95=128us pic_max=235us encode_time_p95=7005us encode_time_max=9913us in_flight_p95=1 in_flight_max=2 frame_p95=14KB frame_max=21KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=11s src=111.9 caps=120/120/120/120 bwe_req=4.57 enc=6.09 pre_rtp=4.85 rtp=4.63 avail=4.51 ql=bandwidth loss=0.00 nack=0 pli=16 path=udp srflx -> udp host (succeeded, nominated) rtt=33ms
+[voice][screen] DXGI rate: callback 106.0 fps, compositor 105.0 fps, accumulated_est 109.0 fps (avg 1.03x max 3x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=108 reuse_content=13 static_reuse=0 empty=23 sent=98.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=100/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=100/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=100/0 avg=3us map_avg=8us pic_avg=95us collect=some:99 none:121 err:0 frames=98.8 avg=14us encode=121/0 avg=33us send_calls=98.8 avg_send=4us
+[voice][screen][push][burst] sent_frames=99 key=0 avg_frame=5KB max_frame=18KB gap_avg=10100us gap_max=16717us burst_gaps=1 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=15us map_max=45us pic_p95=157us pic_max=248us encode_time_p95=6964us encode_time_max=11617us in_flight_p95=1 in_flight_max=2 frame_p95=10KB frame_max=18KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=12s src=105.0 caps=120/120/120/120 bwe_req=4.97 enc=6.50 pre_rtp=5.96 rtp=5.04 avail=4.82 ql=bandwidth loss=0.00 nack=0 pli=17 path=udp srflx -> udp host (succeeded, nominated) rtt=34ms
+[voice][screen] DXGI rate: callback 118.9 fps, compositor 117.9 fps, accumulated_est 125.9 fps (avg 1.06x max 2x)
+[voice][screen][push][summary] tick=120.6 slot_ready=120.6 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=110 reuse_content=11 static_reuse=0 empty=20 sent=101.7 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=102/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=1us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=102/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=102/0 avg=3us map_avg=8us pic_avg=110us collect=some:102 none:121 err:0 frames=101.7 avg=19us encode=121/0 avg=44us send_calls=101.7 avg_send=5us
+[voice][screen][push][burst] sent_frames=102 key=0 avg_frame=7KB max_frame=21KB gap_avg=9966us gap_max=21864us burst_gaps=2 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=15us map_max=37us pic_p95=189us pic_max=410us encode_time_p95=6601us encode_time_max=10873us in_flight_p95=1 in_flight_max=2 frame_p95=12KB frame_max=21KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=13s src=117.9 caps=120/120/120/120 bwe_req=5.43 enc=7.09 pre_rtp=4.83 rtp=5.47 avail=5.25 ql=bandwidth loss=0.00 nack=0 pli=19 path=udp srflx -> udp host (succeeded, nominated) rtt=34ms
+[voice][screen] DXGI rate: callback 112.7 fps, compositor 112.4 fps, accumulated_est 123.7 fps (avg 1.10x max 4x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=102 reuse_content=19 static_reuse=0 empty=26 sent=99.7 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=98/0 avg=5us ctx_avg=0us gpu_avg=5us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=98/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=100/0 avg=2us map_avg=8us pic_avg=96us collect=some:100 none:121 err:0 frames=99.7 avg=18us encode=121/0 avg=42us send_calls=99.7 avg_send=6us
+[voice][screen][push][burst] sent_frames=100 key=0 avg_frame=7KB max_frame=104KB gap_avg=9999us gap_max=41649us burst_gaps=5 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=13us map_max=34us pic_p95=164us pic_max=227us encode_time_p95=8812us encode_time_max=36643us in_flight_p95=2 in_flight_max=4 frame_p95=21KB frame_max=104KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen][startup] t=14s src=112.4 caps=120/120/120/120 bwe_req=5.81 enc=7.56 pre_rtp=6.38 rtp=5.88 avail=5.60 ql=bandwidth loss=0.00 nack=0 pli=21 path=udp srflx -> udp host (succeeded, nominated) rtt=35ms
+[voice][screen] DXGI rate: callback 109.4 fps, compositor 107.8 fps, accumulated_est 146.3 fps (avg 1.34x max 3x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=110 reuse_content=11 static_reuse=0 empty=35 sent=102.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=103/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=1us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=103/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=103/0 avg=3us map_avg=8us pic_avg=99us collect=some:103 none:121 err:0 frames=102.8 avg=15us encode=121/0 avg=38us send_calls=102.8 avg_send=6us
+[voice][screen][push][burst] sent_frames=103 key=0 avg_frame=6KB max_frame=22KB gap_avg=9871us gap_max=33343us burst_gaps=18 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=14us map_max=32us pic_p95=202us pic_max=229us encode_time_p95=12640us encode_time_max=18201us in_flight_p95=2 in_flight_max=3 frame_p95=15KB frame_max=22KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 102.0 fps, compositor 101.0 fps, accumulated_est 114.0 fps (avg 1.12x max 4x)
+[voice][screen][startup] t=15s src=101.0 caps=120/120/120/120 bwe_req=6.34 enc=8.27 pre_rtp=6.69 rtp=6.38 avail=6.13 ql=bandwidth loss=0.00 nack=0 pli=22 path=udp srflx -> udp host (succeeded, nominated) rtt=35ms
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=104 reuse_content=17 static_reuse=0 empty=29 sent=97.7 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=97/0 avg=6us ctx_avg=0us gpu_avg=6us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=97/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=97/0 avg=2us map_avg=7us pic_avg=101us collect=some:98 none:121 err:0 frames=97.7 avg=21us encode=121/0 avg=48us send_calls=97.7 avg_send=6us
+[voice][screen][push][burst] sent_frames=98 key=0 avg_frame=8KB max_frame=32KB gap_avg=10287us gap_max=33341us burst_gaps=6 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=13us map_max=15us pic_p95=149us pic_max=223us encode_time_p95=12525us encode_time_max=17922us in_flight_p95=2 in_flight_max=2 frame_p95=21KB frame_max=32KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 106.9 fps, compositor 105.9 fps, accumulated_est 106.9 fps (avg 1.00x max 1x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=105 reuse_content=16 static_reuse=0 empty=23 sent=99.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=100/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=1us state_avg=1us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=100/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=100/0 avg=2us map_avg=8us pic_avg=94us collect=some:100 none:121 err:0 frames=99.8 avg=21us encode=121/0 avg=47us send_calls=99.8 avg_send=5us
+[voice][screen][push][burst] sent_frames=100 key=0 avg_frame=8KB max_frame=26KB gap_avg=10082us gap_max=25015us burst_gaps=2 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=15us map_max=41us pic_p95=132us pic_max=194us encode_time_p95=7404us encode_time_max=11716us in_flight_p95=1 in_flight_max=2 frame_p95=18KB frame_max=26KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 112.7 fps, compositor 111.8 fps, accumulated_est 114.7 fps (avg 1.02x max 2x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=111 reuse_content=10 static_reuse=0 empty=20 sent=101.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=103/0 avg=6us ctx_avg=0us gpu_avg=6us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=103/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=103/0 avg=3us map_avg=7us pic_avg=103us collect=some:102 none:121 err:0 frames=101.8 avg=25us encode=121/0 avg=56us send_calls=101.8 avg_send=5us
+[voice][screen][push][burst] sent_frames=102 key=0 avg_frame=9KB max_frame=35KB gap_avg=9885us gap_max=16727us burst_gaps=1 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=14us map_max=15us pic_p95=137us pic_max=269us encode_time_p95=6974us encode_time_max=11708us in_flight_p95=1 in_flight_max=2 frame_p95=29KB frame_max=35KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 99.8 fps, compositor 98.9 fps, accumulated_est 99.8 fps (avg 1.00x max 1x)
+[voice][screen][push][summary] tick=120.8 slot_ready=120.8 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=111 reuse_content=10 static_reuse=0 empty=21 sent=100.9 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=101/0 avg=6us ctx_avg=0us gpu_avg=6us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=101/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=101/0 avg=2us map_avg=7us pic_avg=93us collect=some:101 none:121 err:0 frames=100.9 avg=27us encode=121/0 avg=59us send_calls=100.9 avg_send=5us
+[voice][screen][push][burst] sent_frames=101 key=0 avg_frame=11KB max_frame=47KB gap_avg=9983us gap_max=16760us burst_gaps=1 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=14us map_max=22us pic_p95=125us pic_max=319us encode_time_p95=6786us encode_time_max=7849us in_flight_p95=1 in_flight_max=2 frame_p95=30KB frame_max=47KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 103.0 fps, compositor 102.0 fps, accumulated_est 107.0 fps (avg 1.04x max 3x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=102 reuse_content=19 static_reuse=0 empty=25 sent=98.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=98/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=1us state_avg=1us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=98/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=99/0 avg=2us map_avg=7us pic_avg=97us collect=some:99 none:121 err:0 frames=98.8 avg=27us encode=121/0 avg=58us send_calls=98.8 avg_send=6us
+[voice][screen][push][burst] sent_frames=99 key=0 avg_frame=10KB max_frame=50KB gap_avg=10184us gap_max=16919us burst_gaps=3 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=14us map_max=15us pic_p95=129us pic_max=163us encode_time_p95=7017us encode_time_max=8625us in_flight_p95=1 in_flight_max=2 frame_p95=32KB frame_max=50KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] periodic IDR (GIR recovery, every 20s)
+[voice][screen] DXGI rate: callback 114.0 fps, compositor 113.0 fps, accumulated_est 117.0 fps (avg 1.03x max 2x)
+[voice][screen][push][summary] tick=120.8 slot_ready=120.8 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=110 reuse_content=11 static_reuse=0 empty=19 sent=103.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=104/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=1us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=104/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=103/0 avg=3us map_avg=7us pic_avg=96us collect=some:104 none:121 err:0 frames=103.8 avg=26us encode=121/0 avg=58us send_calls=103.8 avg_send=5us
+[voice][screen][push][burst] sent_frames=104 key=1 avg_frame=10KB max_frame=54KB gap_avg=9695us gap_max=16948us burst_gaps=2 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=14us map_max=19us pic_p95=140us pic_max=209us encode_time_p95=7375us encode_time_max=10027us in_flight_p95=1 in_flight_max=2 frame_p95=37KB frame_max=54KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 109.2 fps, compositor 108.3 fps, accumulated_est 119.2 fps (avg 1.09x max 3x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=91 reuse_content=30 static_reuse=0 empty=32 sent=89.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=85/0 avg=5us ctx_avg=0us gpu_avg=5us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=85/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=91/0 avg=2us map_avg=8us pic_avg=96us collect=some:90 none:121 err:0 frames=89.8 avg=28us encode=121/0 avg=58us send_calls=89.8 avg_send=5us
+[voice][screen][push][burst] sent_frames=90 key=0 avg_frame=13KB max_frame=131KB gap_avg=11110us gap_max=25038us burst_gaps=1 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=17us map_max=27us pic_p95=162us pic_max=240us encode_time_p95=7876us encode_time_max=8373us in_flight_p95=1 in_flight_max=2 frame_p95=29KB frame_max=131KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 57.3 fps, compositor 56.3 fps, accumulated_est 59.3 fps (avg 1.03x max 2x)
+[voice][screen][push][summary] tick=120.9 slot_ready=120.9 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=62 reuse_content=59 static_reuse=0 empty=51 sent=69.9 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=56/0 avg=8us ctx_avg=0us gpu_avg=8us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=56/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=69/0 avg=3us map_avg=11us pic_avg=110us collect=some:70 none:121 err:0 frames=69.9 avg=17us encode=121/0 avg=34us send_calls=69.9 avg_send=5us
+[voice][screen][push][burst] sent_frames=70 key=0 avg_frame=8KB max_frame=27KB gap_avg=14523us gap_max=33253us burst_gaps=0 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=20us map_max=77us pic_p95=152us pic_max=163us encode_time_p95=3231us encode_time_max=3522us in_flight_p95=1 in_flight_max=1 frame_p95=16KB frame_max=27KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 48.2 fps, compositor 47.2 fps, accumulated_est 48.2 fps (avg 1.00x max 1x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=53 reuse_content=68 static_reuse=0 empty=48 sent=72.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=48/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=48/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=73/0 avg=3us map_avg=9us pic_avg=95us collect=some:73 none:121 err:0 frames=72.8 avg=12us encode=121/0 avg=25us send_calls=72.8 avg_send=4us
+[voice][screen][push][burst] sent_frames=73 key=0 avg_frame=6KB max_frame=16KB gap_avg=13811us gap_max=16764us burst_gaps=0 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=16us map_max=33us pic_p95=136us pic_max=187us encode_time_p95=3314us encode_time_max=4301us in_flight_p95=1 in_flight_max=1 frame_p95=12KB frame_max=16KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 50.8 fps, compositor 49.8 fps, accumulated_est 50.8 fps (avg 1.00x max 1x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=59 reuse_content=62 static_reuse=0 empty=52 sent=68.8 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=52/0 avg=7us ctx_avg=0us gpu_avg=7us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=52/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=69/0 avg=3us map_avg=9us pic_avg=101us collect=some:69 none:121 err:0 frames=68.8 avg=11us encode=121/0 avg=24us send_calls=68.8 avg_send=4us
+[voice][screen][push][burst] sent_frames=69 key=0 avg_frame=5KB max_frame=29KB gap_avg=14615us gap_max=33345us burst_gaps=0 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=19us map_max=42us pic_p95=144us pic_max=199us encode_time_p95=2813us encode_time_max=3088us in_flight_p95=1 in_flight_max=1 frame_p95=11KB frame_max=29KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 51.7 fps, compositor 50.7 fps, accumulated_est 51.7 fps (avg 1.00x max 1x)
+[voice][screen][push][summary] tick=120.7 slot_ready=120.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=58 reuse_content=63 static_reuse=0 empty=53 sent=67.9 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=52/0 avg=9us ctx_avg=0us gpu_avg=9us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=3us blt_avg=0us bp_skip=0 flush=52/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=69/0 avg=3us map_avg=10us pic_avg=105us collect=some:68 none:121 err:0 frames=67.9 avg=12us encode=121/0 avg=25us send_calls=67.9 avg_send=4us
+[voice][screen][push][burst] sent_frames=68 key=0 avg_frame=6KB max_frame=16KB gap_avg=14704us gap_max=25062us burst_gaps=0 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=20us map_max=55us pic_p95=162us pic_max=261us encode_time_p95=2976us encode_time_max=3777us in_flight_p95=1 in_flight_max=1 frame_p95=12KB frame_max=16KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] DXGI rate: callback 51.6 fps, compositor 50.6 fps, accumulated_est 51.6 fps (avg 1.00x max 1x)
+[voice][screen][push][summary] tick=120.8 slot_ready=120.8 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=57 reuse_content=64 static_reuse=0 empty=50 sent=70.9 target=120 schedule=120 mode=pipelined
+[voice][screen][push][timing] convert=51/0 avg=6us ctx_avg=0us gpu_avg=6us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=1us blt_avg=0us bp_skip=0 flush=51/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=70/0 avg=2us map_avg=9us pic_avg=91us collect=some:71 none:121 err:0 frames=70.9 avg=11us encode=121/0 avg=23us send_calls=70.9 avg_send=4us
+[voice][screen][push][burst] sent_frames=71 key=0 avg_frame=5KB max_frame=15KB gap_avg=14318us gap_max=23725us burst_gaps=0 stall_gaps=0
+[voice][screen][push][nvenc] map_p95=17us map_max=31us pic_p95=132us pic_max=137us encode_time_p95=2003us encode_time_max=2092us in_flight_p95=1 in_flight_max=1 frame_p95=9KB frame_max=15KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[voice][screen] async GPU convert worker stopped
+[voice][screen] encoder thread stopped
+[voice][screen] DXGI capture thread stopped
+[voice][livekit] session: VoiceCmd::Stop received
+[voice][livekit] engine stopped
