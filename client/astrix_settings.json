@@ -18,8 +18,8 @@
   ],
   "api_base": "http://193.233.251.173:8080",
   "last_server": {
-    "2": 1,
-    "1": 1
+    "1": 1,
+    "2": 1
   },
   "dark_mode": true,
   "voice_volume_by_user": {},
@@ -35,7 +35,7 @@
   "input_volume": 1.0,
   "input_sensitivity": 0.55,
   "output_volume": 1.0,
-  "screen_preset": "P720F30",
+  "screen_preset": "P1080F60",
   "decode_path": "mft",
   "video_decoder_gamma": 0.0,
   "video_decoder_gamma_migrated_v2": true

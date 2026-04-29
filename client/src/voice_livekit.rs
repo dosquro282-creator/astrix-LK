@@ -8121,13 +8121,12 @@ fn start_screen_capture(
                                     let mut coalesced_send: Option<(EncodedFrame, u32, i64, u64)> =
                                         None;
                                     let mut coalesced_drop: u64 = 0;
-                                    let max_collect_drains = match mft.backend_kind() {
-                                        EncodedBackendKind::NvencD3d11 => mft
-                                            .nvenc_input_ring_size()
-                                            .unwrap_or(8)
-                                            .clamp(2, 16),
-                                        _ => 4,
-                                    };
+                                    // Phase 4.7: Limit collect/send per tick to prevent network bursts.
+                                    // After async NVENC switch, collect() could return multiple frames
+                                    // per tick causing RTP/UDP bursts → NACK/PLI/LONG_STALL.
+                                    // Allow max 2 collects (1-2 frames) per tick — enough to handle
+                                    // encoder pipeline depth while spreading load across ticks.
+                                    let max_collect_drains = 2;
                                     loop {
                                         let collect_start = std::time::Instant::now();
                                         let collect_res = if startup_collect_blocking
