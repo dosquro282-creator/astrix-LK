@@ -8201,6 +8201,13 @@ fn start_screen_capture(
                                                 let mut sent_keyframe = false;
                                                 let mut push_rtp_timestamp = rtp_prev;
                                                 let sent_before = collected_this;
+                                                let frames_in_batch = frames.len() as u64;
+                                                let batch_frame_interval_us = if frames_in_batch > 0 {
+                                                    frame_interval_us.saturating_div(frames_in_batch)
+                                                } else {
+                                                    frame_interval_us
+                                                };
+                                                let mut last_send_in_batch = std::time::Instant::now();
                                                 for ef in frames {
                                                     sent_keyframe |= ef.key_frame;
                                                     encoded_bytes_window = encoded_bytes_window
@@ -8229,6 +8236,20 @@ fn start_screen_capture(
                                                     collected_this += 1;
                                                     push_rtp_timestamp = push_rtp_timestamp
                                                         .wrapping_add(current_rtp_step);
+                                                    // Phase 4.7 pacing: spread frames across batch interval
+                                                    // to prevent burst send causing receiver jitter buffer overflow.
+                                                    // Calculate when next frame should be sent based on batch interval.
+                                                    if frames_in_batch > 1 {
+                                                        let batch_elapsed = last_send_in_batch.elapsed().as_micros() as u64;
+                                                        if batch_elapsed < batch_frame_interval_us {
+                                                            let sleep_us = batch_frame_interval_us - batch_elapsed;
+                                                            // Use sleep for non-blocking pacing; skip micro sleeps < 500µs
+                                                            if sleep_us > 500 {
+                                                                std::thread::sleep(std::time::Duration::from_micros(sleep_us));
+                                                            }
+                                                        }
+                                                        last_send_in_batch = std::time::Instant::now();
+                                                    }
                                                 }
                                                 if sent_keyframe {
                                                     keyframe_request_enc
@@ -8496,6 +8517,13 @@ fn start_screen_capture(
                                     let direct_frame_count = frames.len() as u64;
                                     let send_start = std::time::Instant::now();
                                     let mut sent_keyframe = false;
+                                    let frames_in_batch = direct_frame_count;
+                                    let batch_frame_interval_us = if frames_in_batch > 0 {
+                                        frame_interval_us.saturating_div(frames_in_batch)
+                                    } else {
+                                        frame_interval_us
+                                    };
+                                    let mut last_send_in_batch = std::time::Instant::now();
                                     for ef in frames.into_iter() {
                                         sent_keyframe |= ef.key_frame;
                                         if !startup_keyframe_done {
@@ -8521,6 +8549,17 @@ fn start_screen_capture(
                                         );
                                         enc_src.push_frame(&ef.data, rtp_timestamp, capture_us, ef.key_frame);
                                         rtp_timestamp = rtp_timestamp.wrapping_add(current_rtp_step);
+                                        // Phase 4.7 pacing: spread frames across batch interval
+                                        if frames_in_batch > 1 {
+                                            let batch_elapsed = last_send_in_batch.elapsed().as_micros() as u64;
+                                            if batch_elapsed < batch_frame_interval_us {
+                                                let sleep_us = batch_frame_interval_us - batch_elapsed;
+                                                if sleep_us > 500 {
+                                                    std::thread::sleep(std::time::Duration::from_micros(sleep_us));
+                                                }
+                                            }
+                                            last_send_in_batch = std::time::Instant::now();
+                                        }
                                     }
                                     if sent_keyframe {
                                         keyframe_request_enc.store(false, Ordering::Relaxed);

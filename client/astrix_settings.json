@@ -35,7 +35,7 @@
   "input_volume": 1.0,
   "input_sensitivity": 0.55,
   "output_volume": 1.0,
-  "screen_preset": "P1080F60",
+  "screen_preset": "P1080F120",
   "decode_path": "mft",
   "video_decoder_gamma": 0.0,
   "video_decoder_gamma_migrated_v2": true
