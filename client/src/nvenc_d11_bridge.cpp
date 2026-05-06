@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdarg>
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -88,6 +89,34 @@ bool IsEnvDisabled(const char* value) {
           std::strcmp(value, "NORMAL") == 0);
 }
 
+void LogStderr(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  va_list args_copy;
+  va_copy(args_copy, args);
+  std::vfprintf(stderr, format, args);
+
+  std::vector<char> buffer(2048);
+  int len = std::vsnprintf(buffer.data(), buffer.size(), format, args_copy);
+  va_end(args_copy);
+  va_end(args);
+
+  if (len < 0) {
+    return;
+  }
+  if (static_cast<std::size_t>(len) >= buffer.size()) {
+    buffer.resize(static_cast<std::size_t>(len) + 1);
+    va_start(args, format);
+    len = std::vsnprintf(buffer.data(), buffer.size(), format, args);
+    va_end(args);
+    if (len < 0) {
+      return;
+    }
+  }
+
+  nvenc_bridge_log_stderr(rust::Str(buffer.data(), static_cast<std::size_t>(len)));
+}
+
 void ApplyNvencWorkerPriority() {
   const char* priority_env = std::getenv("ASTRIX_NVENC_WORKER_PRIORITY");
   if (IsEnvDisabled(priority_env)) {
@@ -113,8 +142,7 @@ void LogH264LowLatencyConfig(const char* label,
                              const NV_ENC_CONFIG& config) {
   const auto& rc = config.rcParams;
   const auto& h264 = config.encodeCodecConfig.h264Config;
-  std::fprintf(
-      stderr,
+  LogStderr(
       "[nvenc_d11] config: label=%s tuning=%u preset_p1=%u preset_p4=%u rc=%u multipass=%u "
       "lookahead=%u depth=%u aq=%u aq_strength=%u temporal_aq=%u zero_reorder=%u "
       "non_ref_p=%u strict_gop=%u frame_interval_p=%d gop=%u idr=%u vbv=%u/%u "
@@ -591,19 +619,19 @@ struct NvencD3D11Session::Impl {
         encode_config_.encodeCodecConfig.h264Config.hierarchicalPFrames = 0;
         encode_config_.encodeCodecConfig.h264Config.hierarchicalBFrames = 0;
         encode_config_.encodeCodecConfig.h264Config.enableTemporalSVC = 0;
-        // GIR (Gradual Intra Refresh) - OPTIONAL, disabled by default
-        // Only enabled via env vars: ASTRIX_NVENC_GIR_PERIOD_FRAMES, ASTRIX_NVENC_GIR_DURATION_FRAMES
+        // GIR (Gradual Intra Refresh) - enabled by Rust defaults and overridable
+        // via env vars: ASTRIX_NVENC_GIR_PERIOD_FRAMES, ASTRIX_NVENC_GIR_DURATION_FRAMES.
         if (gir_period_frames_ > 0 && gir_duration_frames_ > 0) {
           const bool gir_supported = GetCapability(NV_ENC_CAPS_SUPPORT_INTRA_REFRESH) != 0;
           if (gir_supported) {
             encode_config_.encodeCodecConfig.h264Config.enableIntraRefresh = 1;
             encode_config_.encodeCodecConfig.h264Config.intraRefreshPeriod = gir_period_frames_;
             encode_config_.encodeCodecConfig.h264Config.intraRefreshCnt = gir_duration_frames_;
-            std::fprintf(stderr,
+            LogStderr(
                 "[nvenc_d11] GIR enabled: period=%u frames, duration=%u frames\n",
                 gir_period_frames_, gir_duration_frames_);
           } else {
-            std::fprintf(stderr,
+            LogStderr(
                 "[nvenc_d11] GIR requested but not supported by GPU, continuing without GIR\n");
             encode_config_.encodeCodecConfig.h264Config.enableIntraRefresh = 0;
             encode_config_.encodeCodecConfig.h264Config.intraRefreshPeriod = 0;
@@ -695,8 +723,7 @@ struct NvencD3D11Session::Impl {
           api_.nvEncInitializeEncoder(encoder_, &init_params_);
       if (status == NV_ENC_SUCCESS) {
         async_encode_ = attempt.enable_async;
-        std::fprintf(
-            stderr,
+        LogStderr(
             "[nvenc_d11] init: %s (fps=%u, async=%s, low_latency=%s, input=%s, h264_fast=%s)\n",
             attempt.label,
             fps_,
@@ -707,7 +734,7 @@ struct NvencD3D11Session::Impl {
         if (!attempt.null_config) {
           LogH264LowLatencyConfig(attempt.label, init_params_, encode_config_);
         } else {
-          std::fprintf(stderr,
+          LogStderr(
                        "[nvenc_d11] config: label=%s encodeConfig=null "
                        "(driver preset only; low-latency fields not inspectable here)\n",
                        attempt.label);

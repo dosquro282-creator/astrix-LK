@@ -27,6 +27,7 @@ fn hide_console_window() {
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
     // Initialize console logging
+    astrix_client::console_panel::init();
     astrix_client::console_panel::log("Astrix client starting...");
 
     // Hide console window in release builds on Windows

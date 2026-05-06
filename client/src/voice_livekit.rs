@@ -51,7 +51,9 @@ use crate::mft_encoder::EncodedFrame;
 use crate::nvenc_d11::NvencD3d11Error;
 use crate::screen_encoder::box_scale_rgba;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-use crate::screen_encoder::{select_screen_encoder, EncoderOutput, RawFrame};
+use crate::screen_encoder::EncoderOutput;
+#[cfg(all(target_os = "windows", feature = "wgc-capture", feature = "cpu-fallback"))]
+use crate::screen_encoder::{select_screen_encoder, RawFrame};
 use crate::telemetry::{is_telemetry_enabled, PipelineTelemetry};
 use crate::voice::{
     decoder_threads_for_resolution, encoder_threads_for_resolution, video_frame_key,
@@ -4478,9 +4480,17 @@ fn start_screen_capture(
         Cpu,
         Auto,
     }
+    #[cfg(feature = "cpu-fallback")]
     let encode_path: EncodePath = match std::env::var("ASTRIX_SCREEN_CAPTURE_PATH").as_deref() {
         Ok("mft") => EncodePath::Mft,
         Ok("cpu") => EncodePath::Cpu,
+        Ok("auto") | _ => EncodePath::Auto,
+    };
+    #[cfg(not(feature = "cpu-fallback"))]
+    let encode_path: EncodePath = match std::env::var("ASTRIX_SCREEN_CAPTURE_PATH").as_deref() {
+        Ok("mft") => EncodePath::Mft,
+        // CPU path is not available without cpu-fallback feature
+        Ok("cpu") => EncodePath::Mft,
         Ok("auto") | _ => EncodePath::Auto,
     };
 
@@ -4514,11 +4524,14 @@ fn start_screen_capture(
     }
 
     /// SPSC ring buffer: RING_SIZE slots, WGC pushes (drops oldest when full), encoder pops.
+    /// **NOTE**: Only used by CPU fallback path.
+    #[cfg(feature = "cpu-fallback")]
     struct RawFrameRing {
         slots: [AtomicPtr<RawFrame>; RING_SIZE],
         write_idx: AtomicUsize,
         read_idx: AtomicUsize,
     }
+    #[cfg(feature = "cpu-fallback")]
     impl RawFrameRing {
         fn new() -> Self {
             Self {
@@ -4573,6 +4586,7 @@ fn start_screen_capture(
             }
         }
     }
+    #[cfg(feature = "cpu-fallback")]
     let ring: Arc<RawFrameRing> = Arc::new(RawFrameRing::new());
     let latest_slot: Arc<LatestSlot> = Arc::new(LatestSlot::new());
     let latest_slot_signal: Arc<(parking_lot::Mutex<u64>, parking_lot::Condvar)> =
@@ -4595,6 +4609,7 @@ fn start_screen_capture(
     let pool_creation_started: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let pool_creation_failed: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     struct WgcFlags {
+        #[cfg(feature = "cpu-fallback")]
         ring: Arc<RawFrameRing>,
         stop_flag: Arc<AtomicBool>,
         latest_slot: Arc<LatestSlot>,
@@ -4609,6 +4624,7 @@ fn start_screen_capture(
         telemetry: Arc<PipelineTelemetry>,
     }
     struct ScreenHandler {
+        #[cfg(feature = "cpu-fallback")]
         ring: Arc<RawFrameRing>,
         stop_flag: Arc<AtomicBool>,
         latest_slot: Arc<LatestSlot>,
@@ -4629,6 +4645,7 @@ fn start_screen_capture(
 
         fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
             Ok(Self {
+                #[cfg(feature = "cpu-fallback")]
                 ring: ctx.flags.ring,
                 stop_flag: ctx.flags.stop_flag,
                 latest_slot: ctx.flags.latest_slot,
@@ -5410,6 +5427,7 @@ fn start_screen_capture(
         );
 
         let flags = WgcFlags {
+            #[cfg(feature = "cpu-fallback")]
             ring: Arc::clone(&ring),
             stop_flag: Arc::clone(&stop_flag),
             latest_slot: Arc::clone(&latest_slot),
@@ -5468,6 +5486,7 @@ fn start_screen_capture(
         );
 
         let flags = WgcFlags {
+            #[cfg(feature = "cpu-fallback")]
             ring: Arc::clone(&ring),
             stop_flag: Arc::clone(&stop_flag),
             latest_slot: Arc::clone(&latest_slot),
@@ -5532,6 +5551,7 @@ fn start_screen_capture(
     let tokio_handle = tokio::runtime::Handle::current();
     let mut mft_fallback_tx = fallback_tx_opt;
     let stop_enc = Arc::clone(&stop_flag);
+    #[cfg(feature = "cpu-fallback")]
     let ring_enc = Arc::clone(&ring);
     let latest_slot_enc = Arc::clone(&latest_slot);
     let pool_ref_enc = Arc::clone(&pool_ref);
@@ -5894,7 +5914,9 @@ fn start_screen_capture(
             let mut instr_total_ns:   u64 = 0;
             let frame_budget_ns = current_frame_interval_ns;
 
+            #[cfg(feature = "cpu-fallback")]
             let mut encoder = select_screen_encoder();
+            #[cfg(feature = "cpu-fallback")]
             eprintln!("[voice][screen] video codec encoder: {}", encoder.name());
 
             // Phase 4: GPU path — cache D3D11 RGBA→I420 converter per capture size.
@@ -9163,8 +9185,10 @@ fn start_screen_capture(
                     continue;
                 }
 
-                // CPU path: pop RawFrame from ring.
-                let raw_ptr = match ring_enc.pop() {
+                // CPU path: pop RawFrame from ring (only when cpu-fallback feature is enabled).
+                #[cfg(feature = "cpu-fallback")]
+                {
+                    let raw_ptr = match ring_enc.pop() {
                     Some(p) => p,
                     None => {
                         // Constant FPS: re-send last frame when WGC has no new content (static screen).
@@ -9215,6 +9239,7 @@ fn start_screen_capture(
                         continue;
                     }
                 };
+                #[cfg(feature = "cpu-fallback")]
                 let frame = unsafe { Box::from_raw(raw_ptr) };
                 // Use same threshold as GPU path: drop only when more than 2 intervals late.
                 // At 60 fps one interval is ~16.7 ms; CPU encode often takes ~15–20 ms, so
@@ -9351,6 +9376,8 @@ fn start_screen_capture(
                     }
                 }
 
+                } // end #[cfg(feature = "cpu-fallback")]
+
                 if frame_count > 0 && frame_count % INSTR_WINDOW == 0 {
                     let avg_scale_us   = instr_scale_ns   / INSTR_WINDOW as u64 / 1000;
                     let avg_convert_us = instr_convert_ns / INSTR_WINDOW as u64 / 1000;
@@ -9391,6 +9418,7 @@ fn start_screen_capture(
             }
 
             // Phase 5.3: drain rings on stop so no frames/slots are leaked.
+            #[cfg(feature = "cpu-fallback")]
             ring_enc.drain_drop();
 
             // Signal capture_frame thread to exit and wait for it (I420 path only).

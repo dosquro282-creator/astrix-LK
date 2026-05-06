@@ -5,6 +5,10 @@ unsafe extern "C" {}
 
 #[cxx::bridge(namespace = "astrix_nvenc")]
 pub mod ffi {
+    extern "Rust" {
+        fn nvenc_bridge_log_stderr(message: &str);
+    }
+
     unsafe extern "C++" {
         include!("astrix/nvenc_d11_bridge.h");
 
@@ -40,3 +44,5 @@ pub mod ffi {
 }
 
 fn main() {}
+
+fn nvenc_bridge_log_stderr(_message: &str) {}

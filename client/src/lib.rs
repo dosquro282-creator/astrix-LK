@@ -1,5 +1,31 @@
 //! Astrix client library.
 
+#[macro_export]
+macro_rules! eprint {
+    () => {{
+        $crate::console_panel::log_error("");
+        ::std::eprint!();
+    }};
+    ($($arg:tt)*) => {{
+        let message = ::std::format!($($arg)*);
+        $crate::console_panel::log_error(&message);
+        ::std::eprint!("{}", message);
+    }};
+}
+
+#[macro_export]
+macro_rules! eprintln {
+    () => {{
+        $crate::console_panel::log_error("");
+        ::std::eprintln!();
+    }};
+    ($($arg:tt)*) => {{
+        let message = ::std::format!($($arg)*);
+        $crate::console_panel::log_error(&message);
+        ::std::eprintln!("{}", message);
+    }};
+}
+
 pub mod app;
 pub mod bottom_panel;
 pub mod channel_panel;
@@ -12,6 +38,7 @@ pub mod denoise;
 pub mod guild_panel;
 pub mod member_panel;
 pub mod net;
+pub mod raw_frame;
 pub mod screen_encoder;
 pub mod state;
 pub mod telemetry;
@@ -37,6 +64,8 @@ pub mod dxgi_duplication;
 pub mod encoded_h264;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod gpu_device;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+pub mod gpu_timeline;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod mft_device;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]

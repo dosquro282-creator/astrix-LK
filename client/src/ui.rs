@@ -2967,6 +2967,8 @@ pub(crate) fn main_screen(
     // Phase 3.5: eframe Frame for register_native_glow_texture().
     #[cfg(all(target_os = "windows", feature = "wgc-capture"))] eframe_frame: &mut eframe::Frame,
 ) -> bool {
+    crate::console_panel::poll_console();
+
     // Загрузка серверов/каналов/сообщений — в process_background_loads (app.rs), без block_on.
 
     // ── Delete/Leave server ───────────────────────────────────────────────
@@ -4485,10 +4487,10 @@ pub(crate) fn main_screen(
                                         );
                                         let mut dp: String = state.settings.decode_path.clone();
                                         egui::ComboBox::from_id_source("decode_path")
-                                            .selected_text(if dp == "mft" {
-                                                "MFT (Media Foundation)"
-                                            } else {
-                                                "CPU (OpenH264)"
+                                            .selected_text(match dp.as_str() {
+                                                "nvenc" => "NVIDIA (NVENC)".to_string(),
+                                                "mft" => "MFT (Media Foundation)".to_string(),
+                                                _ => "CPU (OpenH264)".to_string(),
                                             })
                                             .show_ui(ui, |ui| {
                                                 let _ = ui.selectable_value(
@@ -4500,6 +4502,11 @@ pub(crate) fn main_screen(
                                                     &mut dp,
                                                     "mft".to_string(),
                                                     "MFT (Media Foundation)",
+                                                );
+                                                let _ = ui.selectable_value(
+                                                    &mut dp,
+                                                    "nvenc".to_string(),
+                                                    "NVIDIA (NVENC)",
                                                 );
                                             });
                                         if dp != state.settings.decode_path {
@@ -4668,6 +4675,20 @@ pub(crate) fn main_screen(
                 ui.horizontal(|ui| {
                     ui.heading("Вывод консоли");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let panel = crate::console_panel::get_console_panel().lock();
+                        let lines = panel.lines();
+                        let copy_text = lines
+                            .iter()
+                            .map(|l| format!("[{}] {}", l.timestamp, l.text))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        drop(panel);
+
+                        if ui.button("Копировать").clicked() {
+                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                let _ = clipboard.set_text(&copy_text);
+                            }
+                        }
                         if ui.button("Очистить").clicked() {
                             crate::console_panel::get_console_panel().lock().clear();
                         }
@@ -5703,6 +5724,45 @@ pub(crate) fn main_screen(
                                                             ),
                                                         );
                                                     }
+                                                    // Hover overlay: show nickname and LIVE badge on thumbnail when hovered
+                                                    let is_hovered = resp.hovered();
+                                                    if is_hovered && p.streaming {
+                                                        ui.painter().rect_filled(
+                                                            avatar_rect,
+                                                            egui::Rounding::same(ROUNDING),
+                                                            egui::Color32::from_black_alpha(140),
+                                                        );
+                                                        // LIVE badge
+                                                        let live_badge_rect = egui::Rect::from_min_size(
+                                                            egui::pos2(avatar_rect.left() + 6.0, avatar_rect.top() + 6.0),
+                                                            egui::vec2(40.0, 18.0),
+                                                        );
+                                                        ui.painter().rect_filled(
+                                                            live_badge_rect,
+                                                            egui::Rounding::same(4.0),
+                                                            egui::Color32::from_rgb(255, 80, 80),
+                                                        );
+                                                        ui.painter().text(
+                                                            live_badge_rect.center(),
+                                                            egui::Align2::CENTER_CENTER,
+                                                            "LIVE",
+                                                            egui::FontId::proportional(10.0),
+                                                            egui::Color32::WHITE,
+                                                        );
+                                                        // Nickname
+                                                        let name_text: String = if p.username.is_empty() { "Гость".to_string() } else { p.username.clone() };
+                                                        let galley = ui.painter().layout(
+                                                            name_text,
+                                                            egui::FontId::proportional(14.0),
+                                                            egui::Color32::WHITE,
+                                                            f32::INFINITY,
+                                                        );
+                                                        let name_pos = egui::pos2(
+                                                            avatar_rect.center().x - galley.size().x / 2.0,
+                                                            avatar_rect.center().y + 4.0,
+                                                        );
+                                                        ui.painter().galley(name_pos, galley, egui::Color32::WHITE);
+                                                    }
                                                     if show_stream_preview {
                                                         ui.painter().rect_filled(
                                                             avatar_rect,
@@ -5802,39 +5862,6 @@ pub(crate) fn main_screen(
                                                             );
                                                         });
                                                     }
-                                                    // FPS overlay: отрисованные кадры/сек (не полученные/декодированные)
-                                                    if show_stream_controls {
-                                                        let fps = state
-                                                            .main
-                                                            .voice_render_fps
-                                                            .get_mut(&key)
-                                                            .map(|t| t.update_and_get())
-                                                            .unwrap_or(0.0);
-                                                        if fps > 0.0 {
-                                                            let fps_text =
-                                                                format!("{:.0} fps", fps);
-                                                            let pos = avatar_rect.left_bottom()
-                                                                + egui::vec2(4.0, -18.0);
-                                                            let size = egui::vec2(36.0, 16.0);
-                                                            let bg_rect = egui::Rect::from_min_size(
-                                                                pos, size,
-                                                            );
-                                                            ui.painter().rect_filled(
-                                                                bg_rect,
-                                                                egui::Rounding::same(2.0),
-                                                                egui::Color32::from_black_alpha(
-                                                                    180,
-                                                                ),
-                                                            );
-                                                            ui.painter().text(
-                                                                pos + egui::vec2(4.0, 2.0),
-                                                                egui::Align2::LEFT_TOP,
-                                                                fps_text,
-                                                                egui::FontId::proportional(11.0),
-                                                                egui::Color32::WHITE,
-                                                            );
-                                                        }
-                                                    }
                                                 }
                                                 if tex_key.is_none() {
                                                     // No video texture — show rounded rect avatar (letter)
@@ -5876,6 +5903,45 @@ pub(crate) fn main_screen(
                                                         galley,
                                                         egui::Color32::WHITE,
                                                     );
+                                                    // Hover overlay: show nickname and LIVE badge on thumbnail when hovered
+                                                    let is_hovered = resp.hovered();
+                                                    if is_hovered && p.streaming {
+                                                        ui.painter().rect_filled(
+                                                            avatar_rect,
+                                                            egui::Rounding::same(ROUNDING),
+                                                            egui::Color32::from_black_alpha(140),
+                                                        );
+                                                        // LIVE badge
+                                                        let live_badge_rect = egui::Rect::from_min_size(
+                                                            egui::pos2(avatar_rect.left() + 6.0, avatar_rect.top() + 6.0),
+                                                            egui::vec2(40.0, 18.0),
+                                                        );
+                                                        ui.painter().rect_filled(
+                                                            live_badge_rect,
+                                                            egui::Rounding::same(4.0),
+                                                            egui::Color32::from_rgb(255, 80, 80),
+                                                        );
+                                                        ui.painter().text(
+                                                            live_badge_rect.center(),
+                                                            egui::Align2::CENTER_CENTER,
+                                                            "LIVE",
+                                                            egui::FontId::proportional(10.0),
+                                                            egui::Color32::WHITE,
+                                                        );
+                                                        // Nickname
+                                                        let name_text: String = if p.username.is_empty() { "Гость".to_string() } else { p.username.clone() };
+                                                        let galley = ui.painter().layout(
+                                                            name_text,
+                                                            egui::FontId::proportional(14.0),
+                                                            egui::Color32::WHITE,
+                                                            f32::INFINITY,
+                                                        );
+                                                        let name_pos = egui::pos2(
+                                                            avatar_rect.center().x - galley.size().x / 2.0,
+                                                            avatar_rect.center().y + 4.0,
+                                                        );
+                                                        ui.painter().galley(name_pos, galley, egui::Color32::WHITE);
+                                                    }
                                                     if show_stream_preview {
                                                         ui.painter().rect_filled(
                                                             avatar_rect,
@@ -5975,7 +6041,7 @@ pub(crate) fn main_screen(
                                                     );
                                                 }
 
-                                                if in_this_voice {
+                                                if in_this_voice && Some(p.user_id) != state.user_id {
                                                     resp.context_menu(|ui| {
                                                         let mute_label = if is_locally_muted {
                                                             "Снять локальный мут"
@@ -6038,6 +6104,7 @@ pub(crate) fn main_screen(
                                                                     &mut vol,
                                                                     0.0..=3.0,
                                                                 )
+                                                                .step_by(0.01)
                                                                 .custom_formatter(|v, _| {
                                                                     format!("{:.0}%", v * 100.0)
                                                                 })
@@ -6293,32 +6360,6 @@ pub(crate) fn main_screen(
                     ui.centered_and_justified(|ui| {
                         ui.label("Трансляция недоступна");
                     });
-                } else {
-                    // FPS overlay: отрисованные кадры/сек (не полученные/декодированные)
-                    let fps = state
-                        .main
-                        .voice_render_fps
-                        .get_mut(&stream_key)
-                        .map(|t| t.update_and_get())
-                        .unwrap_or(0.0);
-                    if fps > 0.0 {
-                        let fps_text = format!("{:.0} fps", fps);
-                        let pos = screen.left_bottom() + egui::vec2(16.0, -28.0);
-                        let size = egui::vec2(48.0, 22.0);
-                        let bg_rect = egui::Rect::from_min_size(pos, size);
-                        ui.painter().rect_filled(
-                            bg_rect,
-                            egui::Rounding::same(4.0),
-                            egui::Color32::from_black_alpha(200),
-                        );
-                        ui.painter().text(
-                            pos + egui::vec2(8.0, 4.0),
-                            egui::Align2::LEFT_TOP,
-                            fps_text,
-                            egui::FontId::proportional(14.0),
-                            egui::Color32::WHITE,
-                        );
-                    }
                 }
                 let controls_rect = egui::Rect::from_min_size(
                     screen.left_top() + egui::vec2(16.0, 16.0),
@@ -7017,6 +7058,7 @@ fn show_voice_participant_context_menu(
     if ui
         .add(
             egui::Slider::new(&mut volume, 0.0..=3.0)
+                .step_by(0.01)
                 .custom_formatter(|value, _| format!("{:.0}%", value * 100.0))
                 .text(""),
         )
@@ -7442,6 +7484,7 @@ fn show_stream_audio_button(
         if ui
             .add(
                 egui::Slider::new(&mut volume, 0.0..=4.0)
+                    .step_by(0.01)
                     .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                     .text(""),
             )

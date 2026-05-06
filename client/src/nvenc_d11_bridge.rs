@@ -2,6 +2,10 @@
 
 #[cxx::bridge(namespace = "astrix_nvenc")]
 pub mod ffi {
+    extern "Rust" {
+        fn nvenc_bridge_log_stderr(message: &str);
+    }
+
     unsafe extern "C++" {
         include!("astrix/nvenc_d11_bridge.h");
 
@@ -34,4 +38,8 @@ pub mod ffi {
         ) -> Result<()>;
         fn set_bitrate(self: Pin<&mut NvencD3D11Session>, bitrate: u32) -> Result<()>;
     }
+}
+
+fn nvenc_bridge_log_stderr(message: &str) {
+    crate::console_panel::log_error(message);
 }

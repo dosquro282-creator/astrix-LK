@@ -1,0 +1,16 @@
+Command:
+  MSBuild.exe KMDOD.sln /p:Configuration=Debug /p:Platform=x64 /m
+
+Local result on 2026-05-06:
+  MSBuild was found:
+    C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\MSBuild.exe
+
+  Windows SDK include version was present:
+    10.0.26100.0
+
+  Build failed because the WDK kernel-mode platform toolset is missing:
+    error MSB8020: Не удается найти средства сборки для WindowsKernelModeDriver10.0
+
+Interpretation:
+  Install the Windows Driver Kit / Visual Studio driver build tools that provide
+  PlatformToolset=WindowsKernelModeDriver10.0, then rerun the same command.

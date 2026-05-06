@@ -71,7 +71,7 @@ static CONSOLE_PANEL: OnceLock<Mutex<ConsolePanel>> = OnceLock::new();
 static CONSOLE_SENDER: OnceLock<Sender<ConsoleLine>> = OnceLock::new();
 
 /// Initialize the console globals. Called once at startup.
-fn ensure_initialized() {
+pub fn init() {
     let _ = CONSOLE_PANEL.get_or_init(|| {
         let (panel, sender) = ConsolePanel::new();
         // Also initialize the sender
@@ -86,13 +86,13 @@ fn ensure_initialized() {
 
 /// Get a reference to the global console panel.
 pub fn get_console_panel() -> &'static Mutex<ConsolePanel> {
-    ensure_initialized();
+    init();
     CONSOLE_PANEL.get().unwrap()
 }
 
 /// Get a reference to the global console sender.
 pub fn get_console_sender() -> &'static Sender<ConsoleLine> {
-    ensure_initialized();
+    init();
     CONSOLE_SENDER.get().unwrap()
 }
 
@@ -106,25 +106,36 @@ pub fn poll_console() {
 
 /// Log a message to the console.
 pub fn log(message: &str) {
-    let line = ConsoleLine {
-        timestamp: current_timestamp(),
-        text: message.to_string(),
-        is_stderr: false,
-    };
-    if let Some(sender) = CONSOLE_SENDER.get() {
-        let _ = sender.send(line);
-    }
+    enqueue_message(message, false);
 }
 
 /// Log an error message to the console.
 pub fn log_error(message: &str) {
-    let line = ConsoleLine {
-        timestamp: current_timestamp(),
-        text: message.to_string(),
-        is_stderr: true,
+    enqueue_message(message, true);
+}
+
+fn enqueue_message(message: &str, is_stderr: bool) {
+    init();
+    let Some(sender) = CONSOLE_SENDER.get() else {
+        return;
     };
-    if let Some(sender) = CONSOLE_SENDER.get() {
-        let _ = sender.send(line);
+
+    let mut sent_any = false;
+    for text in message.lines() {
+        sent_any = true;
+        let _ = sender.send(ConsoleLine {
+            timestamp: current_timestamp(),
+            text: text.to_string(),
+            is_stderr,
+        });
+    }
+
+    if !sent_any {
+        let _ = sender.send(ConsoleLine {
+            timestamp: current_timestamp(),
+            text: String::new(),
+            is_stderr,
+        });
     }
 }
 

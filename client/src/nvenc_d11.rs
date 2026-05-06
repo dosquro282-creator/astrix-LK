@@ -445,13 +445,17 @@ fn nvenc_runtime_present() -> bool {
     }
 }
 
-/// Parse optional GIR (Gradual Intra Refresh) parameters from environment variables.
+const DEFAULT_NVENC_GIR_PERIOD_FRAMES: u32 = 120;
+const DEFAULT_NVENC_GIR_DURATION_FRAMES: u32 = 60;
+
+/// Parse GIR (Gradual Intra Refresh) parameters from environment variables.
 ///
-/// GIR is disabled by default. To enable, set both:
+/// GIR is enabled by default for release builds with a 120-frame cycle and
+/// 60-frame refresh. To override, set:
 /// - `ASTRIX_NVENC_GIR_PERIOD_FRAMES` - Number of frames between GIR cycles
 /// - `ASTRIX_NVENC_GIR_DURATION_FRAMES` - Number of frames the refresh takes
 ///
-/// Example: For 60fps with 2-second refresh cycle lasting 1 second:
+/// Default: For 60fps with a 2-second refresh cycle lasting 1 second:
 /// - `ASTRIX_NVENC_GIR_PERIOD_FRAMES=120`
 /// - `ASTRIX_NVENC_GIR_DURATION_FRAMES=60`
 ///
@@ -460,11 +464,11 @@ fn parse_gir_env_vars() -> (u32, u32) {
     let period: u32 = env::var("ASTRIX_NVENC_GIR_PERIOD_FRAMES")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+        .unwrap_or(DEFAULT_NVENC_GIR_PERIOD_FRAMES);
     let duration: u32 = env::var("ASTRIX_NVENC_GIR_DURATION_FRAMES")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+        .unwrap_or(DEFAULT_NVENC_GIR_DURATION_FRAMES);
 
     if period > 0 && duration > 0 {
         if duration >= period {

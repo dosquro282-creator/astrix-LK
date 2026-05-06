@@ -240,7 +240,7 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                         for participant in participants {
                             let is_locally_muted =
                                 voice.locally_muted.contains(&participant.user_id);
-                            let row = voice_participant_row(
+                            let row_response = voice_participant_row(
                                 ui,
                                 theme,
                                 participant,
@@ -253,16 +253,22 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                             {
                                 let receiver_denoise =
                                     voice.receiver_denoise_users.contains(&participant.user_id);
-                                row.context_menu(|ui| {
-                                    let mute_label = if is_locally_muted {
+                                let participant_user_id = participant.user_id;
+                                let volume = *voice
+                                    .local_volumes
+                                    .get(&participant_user_id)
+                                    .unwrap_or(&1.0);
+                                let is_locally_muted_flag = is_locally_muted;
+                                row_response.context_menu(|ui| {
+                                    let mute_label = if is_locally_muted_flag {
                                         "Снять локальный мут"
                                     } else {
                                         "Локально заглушить"
                                     };
                                     if ui.button(mute_label).clicked() {
                                         (*on_action)(ChannelPanelAction::SetParticipantMuted {
-                                            user_id: participant.user_id,
-                                            muted: !is_locally_muted,
+                                            user_id: participant_user_id,
+                                            muted: !is_locally_muted_flag,
                                         });
                                         ui.close_menu();
                                     }
@@ -274,20 +280,17 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                                     };
                                     if ui.button(denoise_label).clicked() {
                                         (*on_action)(ChannelPanelAction::SetParticipantDenoise {
-                                            user_id: participant.user_id,
+                                            user_id: participant_user_id,
                                             enabled: !receiver_denoise,
                                         });
                                         ui.close_menu();
                                     }
 
-                                    let mut volume = voice
-                                        .local_volumes
-                                        .get(&participant.user_id)
-                                        .copied()
-                                        .unwrap_or(1.0);
+                                    let mut vol = volume;
                                     if ui
                                         .add(
-                                            egui::Slider::new(&mut volume, 0.0..=3.0)
+                                            egui::Slider::new(&mut vol, 0.0..=3.0)
+                                                .step_by(0.01)
                                                 .text("Громкость")
                                                 .custom_formatter(|value, _| {
                                                     format!("{:.0}%", value * 100.0)
@@ -296,8 +299,8 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                                         .changed()
                                     {
                                         (*on_action)(ChannelPanelAction::SetParticipantVolume {
-                                            user_id: participant.user_id,
-                                            volume,
+                                            user_id: participant_user_id,
+                                            volume: vol,
                                         });
                                     }
                                 });
@@ -449,37 +452,39 @@ fn voice_participant_row(
         participant.username.as_str()
     };
 
-    let row = ui
-        .horizontal(|ui| {
-            ui.add_space(20.0);
-            crate::components::avatar::avatar(ui, theme, name, 12.0, is_speaking, None);
-            ui.add_space(6.0);
+    let id = ui.make_persistent_id(("voice_participant", participant.user_id));
+    let rect = ui.available_rect_before_wrap();
+    let interact_response = ui.interact(rect, id, egui::Sense::click());
+    
+    ui.horizontal(|ui| {
+        ui.add_space(20.0);
+        crate::components::avatar::avatar(ui, theme, name, 12.0, is_speaking, None);
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(name)
+                .size(13.0)
+                .color(theme.text_secondary),
+        );
+        if is_locally_muted {
             ui.label(
-                egui::RichText::new(name)
-                    .size(13.0)
-                    .color(theme.text_secondary),
+                egui::RichText::new("mute local")
+                    .size(12.0)
+                    .color(theme.warning),
             );
-            if is_locally_muted {
-                ui.label(
-                    egui::RichText::new("mute local")
-                        .size(12.0)
-                        .color(theme.warning),
-                );
-            } else if is_full_muted {
-                ui.label(
-                    egui::RichText::new("Полный мут")
-                        .size(12.0)
-                        .color(theme.error),
-                );
-            } else if participant.mic_muted || (is_self && participant.mic_muted) {
-                ui.label(
-                    egui::RichText::new("Микрофон выключен")
-                        .size(12.0)
-                        .color(theme.error),
-                );
-            }
-        })
-        .response;
+        } else if is_full_muted {
+            ui.label(
+                egui::RichText::new("Полный мут")
+                    .size(12.0)
+                    .color(theme.error),
+            );
+        } else if participant.mic_muted || (is_self && participant.mic_muted) {
+            ui.label(
+                egui::RichText::new("Микрофон выключен")
+                    .size(12.0)
+                    .color(theme.error),
+            );
+        }
+    });
     ui.add_space(2.0);
-    row
+    interact_response
 }

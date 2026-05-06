@@ -18,12 +18,14 @@
   ],
   "api_base": "http://193.233.251.173:8080",
   "last_server": {
-    "1": 1,
-    "2": 1
+    "2": 1,
+    "1": 1
   },
   "dark_mode": true,
   "voice_volume_by_user": {},
-  "stream_volume_by_user": {},
+  "stream_volume_by_user": {
+    "1": 1.0
+  },
   "receiver_denoise_by_user": [],
   "denoise_model_id": "DeepFilterNet3_onnx.tar.gz",
   "denoise_atten_lim_db": 42.0,

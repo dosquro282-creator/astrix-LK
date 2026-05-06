@@ -1,0 +1,25 @@
+[driver_probe][KMDOD] DriverEntry driverObject=0xffffbc8f12340000 registryPath=0xffffbc8f12341000 registryLength=112
+[driver_probe][KMDOD] DriverEntry registering display-only DDIs; SetVidPnSourceAddress/MPO callbacks are not registered by KMDOD
+[driver_probe][KMDOD] DriverEntry success status=0x00000000
+[driver_probe][KMDOD] AddDevice pdo=0xffffbc8f22440060 ppDeviceContext=0xfffff80011112222
+[driver_probe][KMDOD] AddDevice created context=0xffffbc8f22550000 for pdo=0xffffbc8f22440060
+[driver_probe][KMDOD] StartDevice ddi context=0xffffbc8f22550000 startInfo=0xfffff80011113000 dxgkInterface=0xfffff80011114000 deviceHandle=0xffffbc8f22660000
+[driver_probe][KMDOD] StartDevice core pdo=0xffffbc8f22440060 dxgkDeviceHandle=0xffffbc8f22660000 interfaceVersion=0x5023
+[driver_probe][KMDOD] StartDevice got device information deviceHandle=0xffffbc8f22660000 pdo=0xffffbc8f22440060
+[driver_probe][KMDOD] StartDevice acquired POST display target=0 1024x768 pitch=4096 format=22
+[driver_probe][KMDOD] StartDevice POST framebuffer physical=0x00000000d0000000 cpuMappedPtr=0x0000000000000000
+[driver_probe][KMDOD] QueryAdapterInfo ddi adapter=0xffffbc8f22550000 type=1 inputBytes=0 outputBytes=256
+[driver_probe][KMDOD] QueryAdapterInfo DRIVER_CAPS wddmVersion=0x1200 highestAddress=0xffffffffffffffff
+[driver_probe][KMDOD] CommitVidPn ddi adapter=0xffffbc8f22550000 functionalVidPn=0xffffbc8f33000000 affectedSource=0
+[driver_probe][KMDOD] CommitVidPn core hFunctionalVidPn=0xffffbc8f33000000 affectedSource=0 pathPoweredOff=0 monitorChecks=0
+[driver_probe][KMDOD] CommitVidPn primary allocation ignored by display-only driver hPrimaryAllocation=0x0000000000000000
+[driver_probe][KMDOD] CommitVidPn topology paths=1 pathsFromAffectedSource=1
+[driver_probe][KMDOD] CommitVidPn path source=0 target=0 rotation=1 scaling=1 importance=0
+[driver_probe][KMDOD] MapFrameBuffer request physical=0x00000000d0000000 bytes=3145728
+[driver_probe][KMDOD] MapFrameBuffer success cpuPtr=0xfffff900c0000000
+[driver_probe][KMDOD] SetSourceModeAndPath map framebuffer status=0x00000000 cpuPtr=0xfffff900c0000000 bytes=3145728
+[driver_probe][KMDOD] SetSourceModeAndPath result status=0x00000000 frameBufferActive=1
+[driver_probe][KMDOD] PresentDisplayOnly ddi adapter=0xffffbc8f22550000 sourceId=0 source=0xffffe70111100000 pitch=4096
+[driver_probe][KMDOD] PresentDisplayOnly core sourceId=0 source=0xffffe70111100000 bytesPerPixel=4 pitch=4096 dirtyRects=4
+[driver_probe][KMDOD] PresentDisplayOnly core moves=0 rotate=0 dstCpuPtr=0xfffff900c0000000 dstPhysical=0x00000000d0000000 belongsToThisDriver=1
+[driver_probe][KMDOD] PresentDisplayOnly source pointer is CPU-readable by display-only DDI contract; it is not another vendor adapter VRAM pointer

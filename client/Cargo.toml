@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 eframe = { version = "0.28", default-features = false, features = ["glow"] }
 egui = "0.28"
+arboard = "3.4"
 egui_glow = "0.28"
 egui_extras = { version = "0.28", features = ["image"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -54,6 +55,10 @@ windows = { version = "0.61", optional = true, features = [
 [features]
 default = ["wgc-capture"]
 wgc-capture = ["dep:windows-capture", "dep:windows", "dep:windows-core", "dep:webrtc-sys", "dep:cxx"]
+# CPU fallback for development/debugging. Production builds should NOT enable this.
+# When enabled: RawFrame.pixels uses Vec<u8> (CPU memory), CpuH264Encoder is available.
+# When disabled: pure GPU path only, no CPU frame copies in hot path.
+cpu-fallback = []
 
 [build-dependencies]
 cxx-build = "1.0"

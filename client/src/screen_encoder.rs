@@ -1,34 +1,22 @@
 //! Screen share encoding abstraction: CPU vs hardware (NVENC, AMF, QuickSync).
 //!
-//! LiveKit's `NativeVideoSource` currently accepts only raw I420 frames; the actual
-//! H264 encoding is done inside the WebRTC stack (OpenH264 by default). This module
-//! provides a unified encoder abstraction that:
-//! - **CPU path**: scales RGBA → I420 (libyuv) and returns I420 for `capture_frame()`.
-//! - **HW path (stub)**: When LiveKit gains encoded-frame API, NVENC/AMF can return
-//!   pre-encoded H264; until then HW implementations fall back to CPU pipeline.
+//! **Phase 5.1: Encoded frame path is now production-ready.**
+//! - `NativeEncodedVideoSource::push_frame()` delivers H.264 directly to WebRTC RTP
+//!   without CPU decode/re-encode (uses `ExternalH264Encoder` → `EncodedImageCallback`).
+//! - NVENC D3D11 → H.264 Annex B → `push_frame()` → SFU: this is the production path.
+//! - CPU path (libyuv RGBA→I420): available for debugging via `cpu-fallback` feature.
 //!
 //! Lock-free frame swap (AtomicPtr<RawFrame>), warmup, and instrumentation remain
 //! in the capture/encoder thread in voice_livekit.
 
 use livekit::webrtc::prelude::VideoBuffer;
 
-/// Raw RGBA frame from capture (e.g. WGC). Lock-free slot holds `Box<RawFrame>`.
-#[derive(Clone)]
-pub struct RawFrame {
-    pub pixels: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl RawFrame {
-    pub fn new(pixels: Vec<u8>, width: u32, height: u32) -> Self {
-        Self {
-            pixels,
-            width,
-            height,
-        }
-    }
-}
+/// Raw RGBA frame from capture (e.g. WGC).
+///
+/// **NOTE**: Only available when `cpu-fallback` feature is enabled.
+/// Re-exported from `raw_frame` module.
+#[cfg(feature = "cpu-fallback")]
+pub use crate::raw_frame::RawFrame;
 
 /// Timing for one encoded/prepared frame (for instrumentation and BOTTLENECK).
 #[derive(Default, Clone, Copy)]
@@ -42,6 +30,7 @@ pub struct FrameTiming {
 /// When the SDK supports injecting encoded H264, add `EncodedH264(EncodedFrame)`.
 pub enum EncoderOutput {
     /// I420 frame to push to NativeVideoSource::capture_frame (CPU or HW fallback).
+    #[cfg(feature = "cpu-fallback")]
     RawI420 {
         frame: livekit::webrtc::video_frame::VideoFrame<livekit::webrtc::video_frame::I420Buffer>,
         timing: FrameTiming,
@@ -73,6 +62,10 @@ pub enum EncoderError {
 /// encoded H264 (when supported). Used by the screen encoder thread.
 /// Buffer reuse: pass the buffer from the previous frame (after capture_frame + mem::replace)
 /// as `returned_buffer`; the encoder fills it and returns it in the output (no per-frame alloc).
+///
+/// **NOTE**: This trait is only available when `cpu-fallback` feature is enabled.
+/// GPU-only builds use D3D11 textures directly.
+#[cfg(feature = "cpu-fallback")]
 pub trait VideoEncoder: Send {
     /// Prepare or encode one frame. Target resolution must match preset.
     /// `returned_buffer`: buffer from the previous frame to reuse (caller does mem::replace after capture_frame).
@@ -91,6 +84,9 @@ pub trait VideoEncoder: Send {
 
 /// Persistent buffers for CPU encoder: reuse to avoid 120+ allocs/sec and cache thrash.
 /// No mem::replace: caller passes buffer back; we fill it (no-scale) or use full_i420 + scale() (scale path).
+///
+/// **NOTE**: Only available with `cpu-fallback` feature.
+#[cfg(feature = "cpu-fallback")]
 pub struct CpuEncoderBuffers {
     src_w: u32,
     src_h: u32,
@@ -100,6 +96,7 @@ pub struct CpuEncoderBuffers {
     full_i420: livekit::webrtc::video_frame::I420Buffer,
 }
 
+#[cfg(feature = "cpu-fallback")]
 impl CpuEncoderBuffers {
     fn new(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Self {
         use livekit::webrtc::video_frame::I420Buffer;
@@ -126,22 +123,28 @@ impl CpuEncoderBuffers {
 }
 
 /// CPU path: scale (libyuv) + RGBA→I420 with persistent buffers. H264 by LiveKit/OpenH264.
+///
+/// **NOTE**: Only available with `cpu-fallback` feature.
+#[cfg(feature = "cpu-fallback")]
 pub struct CpuH264Encoder {
     buffers: Option<CpuEncoderBuffers>,
 }
 
+#[cfg(feature = "cpu-fallback")]
 impl CpuH264Encoder {
     pub fn new() -> Self {
         Self { buffers: None }
     }
 }
 
+#[cfg(feature = "cpu-fallback")]
 impl Default for CpuH264Encoder {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "cpu-fallback")]
 impl VideoEncoder for CpuH264Encoder {
     fn encode_frame(
         &mut self,
@@ -226,6 +229,7 @@ pub fn box_scale_rgba(src: &[u8], src_w: u32, src_h: u32, dst: &mut [u8], dst_w:
 }
 
 /// CPU encode with persistent buffers: caller passes buffer back; we fill it (no-scale) or use full_i420 + scale() (scale path).
+#[cfg(feature = "cpu-fallback")]
 fn cpu_encode_frame_reuse(
     buffers: &mut CpuEncoderBuffers,
     rgba: &[u8],
@@ -295,14 +299,15 @@ fn cpu_encode_frame_reuse(
 // When LiveKit supports publishing pre-encoded H264, implement real encode here.
 // Until then, HW encoders fall back to CPU pipeline so the same I420 path is used
 // (and if the LiveKit webrtc build uses NVENC internally, it may still use GPU).
-
+//
+// **NOTE**: These are only available when `cpu-fallback` feature is enabled.
 /// NVIDIA NVENC. Fallback: use CPU pipeline until encoded-frame API exists.
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "cpu-fallback"))]
 pub struct NvencH264Encoder {
     fallback: CpuH264Encoder,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "cpu-fallback"))]
 impl NvencH264Encoder {
     /// Returns Some when NVIDIA GPU with NVENC is detected; until then use CPU.
     pub fn try_new() -> Option<Self> {
@@ -312,7 +317,7 @@ impl NvencH264Encoder {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "cpu-fallback"))]
 impl VideoEncoder for NvencH264Encoder {
     fn encode_frame(
         &mut self,
@@ -337,12 +342,12 @@ impl VideoEncoder for NvencH264Encoder {
 }
 
 /// AMD AMF. Fallback: use CPU pipeline until encoded-frame API exists.
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "cpu-fallback"))]
 pub struct AmfH264Encoder {
     fallback: CpuH264Encoder,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "cpu-fallback"))]
 impl AmfH264Encoder {
     /// Returns Some when AMD GPU with AMF is detected.
     pub fn try_new() -> Option<Self> {
@@ -351,7 +356,7 @@ impl AmfH264Encoder {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "cpu-fallback"))]
 impl VideoEncoder for AmfH264Encoder {
     fn encode_frame(
         &mut self,
@@ -376,12 +381,12 @@ impl VideoEncoder for AmfH264Encoder {
 }
 
 /// Intel QuickSync. Fallback: use CPU pipeline until encoded-frame API exists.
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "cpu-fallback"))]
 pub struct QsvH264Encoder {
     fallback: CpuH264Encoder,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "cpu-fallback"))]
 impl QsvH264Encoder {
     /// Returns Some when Intel GPU with QuickSync is detected.
     pub fn try_new() -> Option<Self> {
@@ -390,7 +395,7 @@ impl QsvH264Encoder {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "cpu-fallback"))]
 impl VideoEncoder for QsvH264Encoder {
     fn encode_frame(
         &mut self,
@@ -416,7 +421,10 @@ impl VideoEncoder for QsvH264Encoder {
 
 /// Select best available encoder: try NVENC (NVIDIA) → AMF (AMD) → QSV (Intel) → CPU.
 /// Preserves cross-GPU/CPU compatibility and fallback.
-#[cfg(target_os = "windows")]
+///
+/// **NOTE**: Only available when `cpu-fallback` feature is enabled.
+/// In GPU-only mode, use `NvencD3d11Encoder` directly.
+#[cfg(all(target_os = "windows", feature = "cpu-fallback"))]
 pub fn select_screen_encoder() -> Box<dyn VideoEncoder> {
     if let Some(enc) = NvencH264Encoder::try_new() {
         eprintln!("[voice][screen] encoder: nvenc (NVIDIA, CPU fallback for capture_frame path)");
@@ -435,7 +443,7 @@ pub fn select_screen_encoder() -> Box<dyn VideoEncoder> {
 }
 
 /// Non-Windows: CPU only.
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), feature = "cpu-fallback"))]
 pub fn select_screen_encoder() -> Box<dyn VideoEncoder> {
     eprintln!("[voice][screen] encoder: cpu (no HW encoder on this platform)");
     Box::new(CpuH264Encoder::new())
