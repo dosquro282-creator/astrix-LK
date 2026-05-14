@@ -145,7 +145,8 @@ pub fn show(ctx: &egui::Context, ui: &mut egui::Ui, params: ChannelPanelParams<'
                     if header_button(ui, theme, "@", "Invite").clicked() {
                         (*on_action)(ChannelPanelAction::Invite);
                     }
-                    if header_button(ui, theme, "⚙", "Настройки сервера").clicked() {
+                    if header_button(ui, theme, "⚙", "Настройки сервера").clicked()
+                    {
                         (*on_action)(ChannelPanelAction::OpenServerSettings);
                     }
                 });
@@ -455,7 +456,7 @@ fn voice_participant_row(
     let id = ui.make_persistent_id(("voice_participant", participant.user_id));
     let rect = ui.available_rect_before_wrap();
     let interact_response = ui.interact(rect, id, egui::Sense::click());
-    
+
     ui.horizontal(|ui| {
         ui.add_space(20.0);
         crate::components::avatar::avatar(ui, theme, name, 12.0, is_speaking, None);

@@ -84,6 +84,8 @@ const STREAM_PREVIEW_JPEG_QUALITY: u8 = 55;
 const SCREEN_RECOVERY_STALL_MS_ENV: &str = "ASTRIX_SCREEN_RECOVERY_STALL_MS";
 const SCREEN_RECOVERY_REQUEST_COOLDOWN_MS_ENV: &str = "ASTRIX_SCREEN_RECOVERY_REQUEST_COOLDOWN_MS";
 const SCREEN_RECOVERY_POLL_MS_ENV: &str = "ASTRIX_SCREEN_RECOVERY_POLL_MS";
+const SCREEN_ADAPTIVE_CAP_ENV: &str = "ASTRIX_SCREEN_ADAPTIVE_CAP";
+const SCREEN_MIN_SCHEDULE_FPS_ENV: &str = "ASTRIX_SCREEN_MIN_SCHEDULE_FPS";
 const LOCAL_AUDIO_QUEUE_MS: u32 = 40;
 const SCREEN_AUDIO_QUEUE_MS: u32 = 500;
 const SCREEN_WEBRTC_MOTION_MODE_ENV: &str = "ASTRIX_SCREEN_WEBRTC_MOTION_MODE";
@@ -93,6 +95,10 @@ const DXGI_RGB_SECOND_DEVICE_ENV: &str = "ASTRIX_DXGI_RGB_SECOND_DEVICE";
 const DXGI_NV12_SECOND_DEVICE_ENV: &str = "ASTRIX_DXGI_NV12_SECOND_DEVICE";
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 const DXGI_LATEST_ONLY_ENV: &str = "ASTRIX_DXGI_LATEST_ONLY";
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+const DXGI_PROBE_LIKE_ENV: &str = "ASTRIX_DXGI_PROBE_LIKE";
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+const DXGI_CAPTURE_ONLY_PROBE_ENV: &str = "ASTRIX_DXGI_CAPTURE_ONLY_PROBE";
 const REMOTE_MIX_QUEUE_MAX_FRAMES: usize = 6;
 const SCREEN_AUDIO_SIGNAL_THRESHOLD: i16 = 32;
 const MIC_RING_CAPTURE_MAX_FRAMES: usize = 12;
@@ -106,6 +112,22 @@ fn screen_webrtc_motion_mode_enabled() -> bool {
     std::env::var(SCREEN_WEBRTC_MOTION_MODE_ENV)
         .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
         .unwrap_or(true)
+}
+
+fn screen_adaptive_cap_enabled() -> bool {
+    std::env::var(SCREEN_ADAPTIVE_CAP_ENV)
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off")))
+        .unwrap_or(true)
+}
+
+fn screen_min_schedule_fps(max_fps: f64) -> f64 {
+    std::env::var(SCREEN_MIN_SCHEDULE_FPS_ENV)
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1.0)
+        .clamp(1.0, max_fps.max(1.0))
+        .round()
 }
 
 fn screen_preview_publisher_enabled() -> bool {
@@ -142,6 +164,20 @@ fn dxgi_nv12_second_device_enabled() -> bool {
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 fn dxgi_latest_only_enabled() -> bool {
     std::env::var(DXGI_LATEST_ONLY_ENV)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
+        .unwrap_or(false)
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn dxgi_probe_like_enabled() -> bool {
+    std::env::var(DXGI_PROBE_LIKE_ENV)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
+        .unwrap_or(false)
+}
+
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+fn dxgi_capture_only_probe_enabled() -> bool {
+    std::env::var(DXGI_CAPTURE_ONLY_PROBE_ENV)
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
         .unwrap_or(false)
 }
@@ -4548,6 +4584,211 @@ fn start_screen_capture(
     }
 
     const RING_SIZE: usize = 6;
+    let adaptive_cap_enabled = screen_adaptive_cap_enabled();
+    let min_schedule_fps = screen_min_schedule_fps(max_fps);
+    let capture_only_probe_requested = dxgi_capture_only_probe_enabled();
+    let capture_only_probe = use_dxgi && capture_only_probe_requested;
+    eprintln!(
+        "[voice][screen] scheduler controls: adaptive_cap_enabled={} ({}={}) min_schedule_fps={:.1} ({}={}) capture_only_probe={} ({}={})",
+        adaptive_cap_enabled,
+        SCREEN_ADAPTIVE_CAP_ENV,
+        std::env::var(SCREEN_ADAPTIVE_CAP_ENV).unwrap_or_else(|_| "<default:on>".to_string()),
+        min_schedule_fps,
+        SCREEN_MIN_SCHEDULE_FPS_ENV,
+        std::env::var(SCREEN_MIN_SCHEDULE_FPS_ENV).unwrap_or_else(|_| "<default:1>".to_string()),
+        capture_only_probe,
+        DXGI_CAPTURE_ONLY_PROBE_ENV,
+        std::env::var(DXGI_CAPTURE_ONLY_PROBE_ENV).unwrap_or_else(|_| "<default:off>".to_string()),
+    );
+    if capture_only_probe_requested && !use_dxgi {
+        eprintln!(
+            "[voice][screen] {} ignored: capture-only probe requires DXGI monitor capture",
+            DXGI_CAPTURE_ONLY_PROBE_ENV
+        );
+    }
+
+    if capture_only_probe {
+        let stop_dxgi = Arc::clone(&stop_flag);
+        let dxgi_timeout_ms = dxgi_acquire_timeout_ms(max_fps);
+        std::thread::Builder::new()
+            .name("livekit-screen-dxgi-capture-only".into())
+            .spawn(move || {
+                apply_astrix_process_priority("DXGI capture-only probe thread");
+                apply_astrix_pipeline_thread_priority();
+
+                struct CaptureOnlyCopyStage {
+                    ring: Vec<ID3D11Texture2D>,
+                    next_slot: usize,
+                    ring_size: usize,
+                }
+
+                impl CaptureOnlyCopyStage {
+                    fn new(ring_size: usize) -> Self {
+                        Self {
+                            ring: Vec::new(),
+                            next_slot: 0,
+                            ring_size: ring_size.max(1),
+                        }
+                    }
+
+                    fn copy(
+                        &mut self,
+                        capture: &DxgiDuplicationCapture,
+                        source: &ID3D11Texture2D,
+                    ) -> Result<(), windows::core::Error> {
+                        self.ensure_ring(capture, source)?;
+                        let slot = self.next_slot;
+                        self.next_slot = (self.next_slot + 1) % self.ring.len();
+                        unsafe {
+                            capture.context.CopyResource(&self.ring[slot], source);
+                        }
+                        Ok(())
+                    }
+
+                    fn ensure_ring(
+                        &mut self,
+                        capture: &DxgiDuplicationCapture,
+                        source: &ID3D11Texture2D,
+                    ) -> Result<(), windows::core::Error> {
+                        if !self.ring.is_empty() {
+                            return Ok(());
+                        }
+
+                        let mut desc = D3D11_TEXTURE2D_DESC::default();
+                        unsafe { source.GetDesc(&mut desc) };
+                        desc.BindFlags = 0;
+                        desc.CPUAccessFlags = 0;
+                        desc.MiscFlags = 0;
+
+                        for i in 0..self.ring_size {
+                            let mut texture: Option<ID3D11Texture2D> = None;
+                            unsafe {
+                                capture.device.CreateTexture2D(
+                                    &desc,
+                                    None,
+                                    Some(std::ptr::from_mut(&mut texture)),
+                                )?;
+                            }
+                            let Some(texture) = texture else {
+                                return Err(windows::core::Error::from_win32());
+                            };
+                            if i == 0 {
+                                eprintln!(
+                                    "[voice][screen] DXGI capture-only private ring created: {}x{} format {:?} ({} slots)",
+                                    desc.Width, desc.Height, desc.Format, self.ring_size
+                                );
+                            }
+                            self.ring.push(texture);
+                        }
+                        Ok(())
+                    }
+                }
+
+                let mut capture = match DxgiDuplicationCapture::new(screen_index) {
+                    Ok(capture) => capture,
+                    Err(e) => {
+                        eprintln!("[voice][screen] DXGI capture-only init failed: {e}");
+                        return;
+                    }
+                };
+                let mut copy_stage = CaptureOnlyCopyStage::new(4);
+                let mut heartbeat = PipelineHeartbeat::new("capture-dxgi");
+                let mut window_start = std::time::Instant::now();
+                let mut acquire_ok = 0u64;
+                let mut wait_timeout_count = 0u64;
+                let mut access_lost_count = 0u64;
+                let mut acquire_errors = 0u64;
+                let mut copy_fail_count = 0u64;
+
+                while !stop_dxgi.load(Ordering::Relaxed) {
+                    match capture.acquire_next_frame_without_metadata(dxgi_timeout_ms) {
+                        Ok(Some(mut frame)) => {
+                            acquire_ok = acquire_ok.saturating_add(1);
+                            match frame.texture() {
+                                Ok(texture) => {
+                                    if let Err(err) = copy_stage.copy(&capture, &texture) {
+                                        copy_fail_count = copy_fail_count.saturating_add(1);
+                                        eprintln!(
+                                            "[voice][screen] DXGI capture-only CopyResource failed: {:?}",
+                                            err
+                                        );
+                                    }
+                                }
+                                Err(err) => {
+                                    copy_fail_count = copy_fail_count.saturating_add(1);
+                                    eprintln!(
+                                        "[voice][screen] DXGI capture-only texture cast failed: {:?}",
+                                        err
+                                    );
+                                }
+                            }
+                            if let Err(err) = frame.release() {
+                                eprintln!(
+                                    "[voice][screen] DXGI capture-only ReleaseFrame failed: {:?}",
+                                    err
+                                );
+                            }
+                        }
+                        Ok(None) => {
+                            wait_timeout_count = wait_timeout_count.saturating_add(1);
+                        }
+                        Err(DxgiDuplicationError::AccessLost) => {
+                            access_lost_count = access_lost_count.saturating_add(1);
+                            eprintln!(
+                                "[voice][screen] DXGI capture-only access lost, reinitializing duplication"
+                            );
+                            match DxgiDuplicationCapture::new(screen_index) {
+                                Ok(next_capture) => {
+                                    capture = next_capture;
+                                    copy_stage = CaptureOnlyCopyStage::new(4);
+                                }
+                                Err(e) => {
+                                    acquire_errors = acquire_errors.saturating_add(1);
+                                    eprintln!(
+                                        "[voice][screen] DXGI capture-only reinit failed: {e}"
+                                    );
+                                    std::thread::sleep(Duration::from_millis(100));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            acquire_errors = acquire_errors.saturating_add(1);
+                            eprintln!("[voice][screen] DXGI capture-only acquire error: {e}");
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                    }
+
+                    let now = std::time::Instant::now();
+                    if now.duration_since(window_start) >= Duration::from_secs(1) {
+                        let elapsed_sec =
+                            now.duration_since(window_start).as_secs_f32().max(0.001);
+                        let capture_fps = acquire_ok as f32 / elapsed_sec;
+                        heartbeat.tick(|| {
+                            format!(
+                                "capture_only=1 capture_fps={:.1} acquire_ok={} wait_timeout_count={} access_lost_count={} acquire_errors={} copy_fail_count={}",
+                                capture_fps,
+                                acquire_ok,
+                                wait_timeout_count,
+                                access_lost_count,
+                                acquire_errors,
+                                copy_fail_count,
+                            )
+                        });
+                        window_start = now;
+                        acquire_ok = 0;
+                        wait_timeout_count = 0;
+                        access_lost_count = 0;
+                        acquire_errors = 0;
+                        copy_fail_count = 0;
+                    }
+                }
+
+                eprintln!("[voice][screen] DXGI capture-only probe thread stopped");
+            })
+            .ok();
+
+        return (None, None);
+    }
 
     // Warn early for demanding presets — software path may not sustain target fps.
     if matches!(
@@ -4991,12 +5232,16 @@ fn start_screen_capture(
     let telemetry_sender = Arc::new(PipelineTelemetry::new());
     let dxgi_timeout_ms = dxgi_acquire_timeout_ms(max_fps);
     let dxgi_latest_only = use_dxgi && dxgi_latest_only_enabled();
+    let dxgi_probe_like = dxgi_latest_only && dxgi_probe_like_enabled();
     if use_dxgi {
         eprintln!(
-            "[voice][screen] dxgi_latest_only={} ({}={})",
+            "[voice][screen] dxgi_latest_only={} ({}={}) dxgi_probe_like={} ({}={})",
             dxgi_latest_only,
             DXGI_LATEST_ONLY_ENV,
             std::env::var(DXGI_LATEST_ONLY_ENV).unwrap_or_else(|_| "<default:off>".to_string()),
+            dxgi_probe_like,
+            DXGI_PROBE_LIKE_ENV,
+            std::env::var(DXGI_PROBE_LIKE_ENV).unwrap_or_else(|_| "<default:off>".to_string()),
         );
     }
 
@@ -5029,6 +5274,96 @@ fn start_screen_capture(
                 let mut dxgi_latest_published_frames = 0u64;
                 let mut dxgi_latest_dropped_stale_frames = 0u64;
                 let mut capture_heartbeat = PipelineHeartbeat::new("capture-dxgi");
+
+                #[derive(Default)]
+                struct DxgiLatestDiagnostics {
+                    acquire_ok: u64,
+                    wait_timeout_count: u64,
+                    access_lost_count: u64,
+                    acquire_errors: u64,
+                    lock_fail_count: u64,
+                    copy_fail_count: u64,
+                    publish_skipped_count: u64,
+                    backpressure_drop_count: u64,
+                }
+
+                impl DxgiLatestDiagnostics {
+                    fn reset(&mut self) {
+                        *self = Self::default();
+                    }
+                }
+
+                struct DxgiProbeLikeCopyStage {
+                    ring: Vec<ID3D11Texture2D>,
+                    next_slot: usize,
+                    ring_size: usize,
+                }
+
+                impl DxgiProbeLikeCopyStage {
+                    fn new(ring_size: usize) -> Self {
+                        Self {
+                            ring: Vec::new(),
+                            next_slot: 0,
+                            ring_size: ring_size.max(1),
+                        }
+                    }
+
+                    fn copy_latest(
+                        &mut self,
+                        capture: &DxgiDuplicationCapture,
+                        source: &ID3D11Texture2D,
+                    ) -> Result<ID3D11Texture2D, windows::core::Error> {
+                        self.ensure_ring(capture, source)?;
+                        let slot = self.next_slot;
+                        self.next_slot = (self.next_slot + 1) % self.ring.len();
+                        let target = self.ring[slot].clone();
+                        unsafe {
+                            capture.context.CopyResource(&target, source);
+                        }
+                        Ok(target)
+                    }
+
+                    fn ensure_ring(
+                        &mut self,
+                        capture: &DxgiDuplicationCapture,
+                        source: &ID3D11Texture2D,
+                    ) -> Result<(), windows::core::Error> {
+                        if !self.ring.is_empty() {
+                            return Ok(());
+                        }
+                        let mut desc = D3D11_TEXTURE2D_DESC::default();
+                        unsafe { source.GetDesc(&mut desc) };
+                        desc.BindFlags = 0;
+                        desc.CPUAccessFlags = 0;
+                        desc.MiscFlags = 0;
+
+                        for i in 0..self.ring_size {
+                            let mut texture: Option<ID3D11Texture2D> = None;
+                            unsafe {
+                                capture.device.CreateTexture2D(
+                                    &desc,
+                                    None,
+                                    Some(std::ptr::from_mut(&mut texture)),
+                                )?;
+                            }
+                            let Some(texture) = texture else {
+                                return Err(windows::core::Error::from_win32());
+                            };
+                            if i == 0 {
+                                eprintln!(
+                                    "[voice][screen] DXGI probe-like private copy ring created: {}x{} format {:?} ({} slots)",
+                                    desc.Width, desc.Height, desc.Format, self.ring_size
+                                );
+                            }
+                            self.ring.push(texture);
+                        }
+                        Ok(())
+                    }
+                }
+
+                let mut dxgi_latest_diag = DxgiLatestDiagnostics::default();
+                let mut dxgi_probe_like_copy_stage =
+                    dxgi_probe_like.then(|| DxgiProbeLikeCopyStage::new(4));
 
                 loop {
                     if stop_dxgi.load(Ordering::Relaxed) {
@@ -5149,31 +5484,66 @@ fn start_screen_capture(
                             pool_ref: &Arc<Mutex<Option<GpuTexturePool>>>,
                             latest_slot: &LatestSlot,
                             telemetry: &PipelineTelemetry,
+                            diag: &mut DxgiLatestDiagnostics,
                         ) -> Option<PendingDxgiLatestCopy> {
                             let texture = match frame.texture() {
                                 Ok(texture) => texture,
                                 Err(e) => {
                                     eprintln!("[voice][screen] DXGI latest-only frame cast failed: {:?}", e);
+                                    diag.copy_fail_count =
+                                        diag.copy_fail_count.saturating_add(1);
                                     let _ = frame.release();
                                     return None;
                                 }
                             };
+                            let pending = publish_dxgi_latest_texture(
+                                capture,
+                                &texture,
+                                pool_ref,
+                                latest_slot,
+                                telemetry,
+                                diag,
+                            );
+                            if let Err(err) = frame.release() {
+                                eprintln!(
+                                    "[voice][screen] DXGI latest-only early ReleaseFrame failed: {:?}",
+                                    err
+                                );
+                            }
+                            pending
+                        }
+
+                        fn publish_dxgi_latest_texture(
+                            capture: &DxgiDuplicationCapture,
+                            texture: &ID3D11Texture2D,
+                            pool_ref: &Arc<Mutex<Option<GpuTexturePool>>>,
+                            latest_slot: &LatestSlot,
+                            telemetry: &PipelineTelemetry,
+                            diag: &mut DxgiLatestDiagnostics,
+                        ) -> Option<PendingDxgiLatestCopy> {
                             let mut desc = D3D11_TEXTURE2D_DESC::default();
                             unsafe { texture.GetDesc(&mut desc) };
 
                             if !ensure_dxgi_latest_pool(capture, &desc, pool_ref) {
-                                let _ = frame.release();
+                                diag.lock_fail_count =
+                                    diag.lock_fail_count.saturating_add(1);
+                                diag.publish_skipped_count =
+                                    diag.publish_skipped_count.saturating_add(1);
                                 return None;
                             }
 
                             let (our_tex_clone, context_mutex_clone, capture_keyed_mutex, write_slot) = {
                                 let Some(guard) = pool_ref.try_lock() else {
-                                    let _ = frame.release();
+                                    diag.lock_fail_count =
+                                        diag.lock_fail_count.saturating_add(1);
+                                    diag.publish_skipped_count =
+                                        diag.publish_skipped_count.saturating_add(1);
                                     return None;
                                 };
                                 match guard.as_ref() {
                                     None => {
-                                        let _ = frame.release();
+                                        diag.publish_skipped_count =
+                                            diag.publish_skipped_count.saturating_add(1);
                                         return None;
                                     }
                                     Some(pool) => match select_pool_write_target(pool, latest_slot) {
@@ -5192,11 +5562,18 @@ fn start_screen_capture(
                             let (Some(our_tex), Some(ctx_mutex)) =
                                 (our_tex_clone, context_mutex_clone)
                             else {
-                                let _ = frame.release();
+                                diag.backpressure_drop_count =
+                                    diag.backpressure_drop_count.saturating_add(1);
+                                diag.publish_skipped_count =
+                                    diag.publish_skipped_count.saturating_add(1);
                                 return None;
                             };
 
                             let Some(_ctx_guard) = ctx_mutex.try_lock() else {
+                                diag.lock_fail_count =
+                                    diag.lock_fail_count.saturating_add(1);
+                                diag.publish_skipped_count =
+                                    diag.publish_skipped_count.saturating_add(1);
                                 if let Some(keyed_mutex) = capture_keyed_mutex.as_ref() {
                                     if let Err(err) = unsafe { keyed_mutex.ReleaseSync(0) } {
                                         eprintln!(
@@ -5205,21 +5582,14 @@ fn start_screen_capture(
                                         );
                                     }
                                 }
-                                let _ = frame.release();
                                 return None;
                             };
 
                             let capture_start = std::time::Instant::now();
                             unsafe {
-                                capture.context.CopyResource(&our_tex, &texture);
+                                capture.context.CopyResource(&our_tex, texture);
                             }
                             drop(_ctx_guard);
-                            if let Err(err) = frame.release() {
-                                eprintln!(
-                                    "[voice][screen] DXGI latest-only early ReleaseFrame failed: {:?}",
-                                    err
-                                );
-                            }
                             let capture_us = capture_start.elapsed().as_micros() as u64;
                             telemetry.set_capture(capture_us);
                             Some(PendingDxgiLatestCopy {
@@ -5229,14 +5599,212 @@ fn start_screen_capture(
                             })
                         }
 
+                        if dxgi_probe_like {
+                            let mut timeout_ms = dxgi_timeout_ms;
+                            let mut last_texture: Option<ID3D11Texture2D> = None;
+                            let mut pending_publish: Option<PendingDxgiLatestCopy> = None;
+
+                            loop {
+                                let mut frame = match capture
+                                    .acquire_next_frame_without_metadata(timeout_ms)
+                                {
+                                    Ok(Some(frame)) => frame,
+                                    Ok(None) => {
+                                        dxgi_latest_diag.wait_timeout_count =
+                                            dxgi_latest_diag.wait_timeout_count.saturating_add(1);
+                                        break;
+                                    }
+                                    Err(DxgiDuplicationError::AccessLost) => {
+                                        dxgi_latest_diag.access_lost_count =
+                                            dxgi_latest_diag.access_lost_count.saturating_add(1);
+                                        eprintln!(
+                                            "[voice][screen] DXGI access lost, reinitializing duplication"
+                                        );
+                                        capture = match DxgiDuplicationCapture::new(screen_index) {
+                                            Ok(capture) => capture,
+                                            Err(e) => {
+                                                eprintln!("[voice][screen] DXGI reinit failed: {e}");
+                                                return;
+                                            }
+                                        };
+                                        dxgi_probe_like_copy_stage =
+                                            Some(DxgiProbeLikeCopyStage::new(4));
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        dxgi_latest_diag.acquire_errors =
+                                            dxgi_latest_diag.acquire_errors.saturating_add(1);
+                                        eprintln!("[voice][screen] DXGI error: {e}");
+                                        return;
+                                    }
+                                };
+
+                                dxgi_latest_diag.acquire_ok =
+                                    dxgi_latest_diag.acquire_ok.saturating_add(1);
+                                dxgi_latest_captured_frames =
+                                    dxgi_latest_captured_frames.saturating_add(1);
+
+                                let total =
+                                    wgc_frame_count_dxgi.fetch_add(1, Ordering::Relaxed) + 1;
+                                let accumulated_frames = frame.info.AccumulatedFrames.max(1);
+                                dxgi_accumulated_frames_sum = dxgi_accumulated_frames_sum
+                                    .saturating_add(accumulated_frames as u64);
+                                dxgi_accumulated_frames_max =
+                                    dxgi_accumulated_frames_max.max(accumulated_frames);
+
+                                match frame.texture() {
+                                    Ok(texture) => {
+                                        last_texture = Some(texture);
+                                    }
+                                    Err(err) => {
+                                        dxgi_latest_diag.copy_fail_count = dxgi_latest_diag
+                                            .copy_fail_count
+                                            .saturating_add(1);
+                                        eprintln!(
+                                            "[voice][screen] DXGI probe-like frame cast failed: {:?}",
+                                            err
+                                        );
+                                    }
+                                }
+                                if let Err(err) = frame.release() {
+                                    eprintln!(
+                                        "[voice][screen] DXGI probe-like early ReleaseFrame failed: {:?}",
+                                        err
+                                    );
+                                }
+                                if total == 1 {
+                                    eprintln!(
+                                        "[voice][screen] DXGI first frame acquired in probe-like latest-only mode"
+                                    );
+                                }
+                                timeout_ms = 0;
+                            }
+
+                            if let Some(texture) = last_texture.as_ref() {
+                                let Some(copy_stage) = dxgi_probe_like_copy_stage.as_mut() else {
+                                    dxgi_latest_diag.copy_fail_count = dxgi_latest_diag
+                                        .copy_fail_count
+                                        .saturating_add(1);
+                                    continue;
+                                };
+                                match copy_stage.copy_latest(&capture, texture) {
+                                    Ok(copied_texture) => {
+                                        dxgi_latest_copied_frames =
+                                            dxgi_latest_copied_frames.saturating_add(1);
+                                        match publish_dxgi_latest_texture(
+                                            &capture,
+                                            &copied_texture,
+                                            &pool_ref_dxgi,
+                                            &latest_slot_dxgi,
+                                            &telemetry_dxgi,
+                                            &mut dxgi_latest_diag,
+                                        ) {
+                                            Some(copied) => {
+                                                pending_publish = Some(copied);
+                                            }
+                                            None => {
+                                                dxgi_latest_dropped_stale_frames =
+                                                    dxgi_latest_dropped_stale_frames
+                                                        .saturating_add(1);
+                                            }
+                                        }
+                                    }
+                                    Err(err) => {
+                                        dxgi_latest_diag.copy_fail_count = dxgi_latest_diag
+                                            .copy_fail_count
+                                            .saturating_add(1);
+                                        eprintln!(
+                                            "[voice][screen] DXGI probe-like private CopyResource failed: {:?}",
+                                            err
+                                        );
+                                    }
+                                }
+                            }
+
+                            if let Some(pending) = pending_publish.take() {
+                                telemetry_dxgi.set_capture(pending.capture_us);
+                                if release_pending_dxgi_latest_copy(
+                                    pending,
+                                    true,
+                                    &latest_slot_dxgi,
+                                    &latest_slot_signal_dxgi,
+                                ) {
+                                    dxgi_latest_published_frames =
+                                        dxgi_latest_published_frames.saturating_add(1);
+                                } else {
+                                    dxgi_latest_dropped_stale_frames =
+                                        dxgi_latest_dropped_stale_frames.saturating_add(1);
+                                    dxgi_latest_diag.publish_skipped_count = dxgi_latest_diag
+                                        .publish_skipped_count
+                                        .saturating_add(1);
+                                }
+                            }
+
+                            let now = std::time::Instant::now();
+                            if now.duration_since(dxgi_latest_log_start)
+                                >= std::time::Duration::from_secs(1)
+                            {
+                                let elapsed_sec = now
+                                    .duration_since(dxgi_latest_log_start)
+                                    .as_secs_f32()
+                                    .max(0.001);
+                                let capture_fps =
+                                    dxgi_latest_captured_frames as f32 / elapsed_sec;
+                                let publish_fps =
+                                    dxgi_latest_published_frames as f32 / elapsed_sec;
+                                wgc_source_fps_milli_dxgi
+                                    .store((capture_fps * 1000.0) as u64, Ordering::Relaxed);
+                                eprintln!(
+                                    "[voice][screen] dxgi_latest_only=true probe_like=true copied_frames={} dropped_stale_frames={} capture_fps={:.1} publish_fps={:.1}",
+                                    dxgi_latest_copied_frames,
+                                    dxgi_latest_dropped_stale_frames,
+                                    capture_fps,
+                                    publish_fps,
+                                );
+                                capture_heartbeat.tick(|| {
+                                    format!(
+                                        "latest_only=1 probe_like=1 capture_fps={:.1} publish_fps={:.1} copied={} dropped_stale={} acquire_ok={} wait_timeout_count={} access_lost_count={} acquire_errors={} lock_fail_count={} copy_fail_count={} publish_skipped_count={} backpressure_drop_count={}",
+                                        capture_fps,
+                                        publish_fps,
+                                        dxgi_latest_copied_frames,
+                                        dxgi_latest_dropped_stale_frames,
+                                        dxgi_latest_diag.acquire_ok,
+                                        dxgi_latest_diag.wait_timeout_count,
+                                        dxgi_latest_diag.access_lost_count,
+                                        dxgi_latest_diag.acquire_errors,
+                                        dxgi_latest_diag.lock_fail_count,
+                                        dxgi_latest_diag.copy_fail_count,
+                                        dxgi_latest_diag.publish_skipped_count,
+                                        dxgi_latest_diag.backpressure_drop_count,
+                                    )
+                                });
+                                dxgi_latest_log_start = now;
+                                dxgi_latest_captured_frames = 0;
+                                dxgi_latest_copied_frames = 0;
+                                dxgi_latest_published_frames = 0;
+                                dxgi_latest_dropped_stale_frames = 0;
+                                dxgi_accumulated_frames_sum = 0;
+                                dxgi_accumulated_frames_max = 0;
+                                dxgi_latest_diag.reset();
+                            }
+
+                            continue;
+                        }
+
                         let mut timeout_ms = dxgi_timeout_ms;
                         let mut pending_publish: Option<PendingDxgiLatestCopy> = None;
 
                         loop {
                             let mut frame = match capture.acquire_next_frame_without_metadata(timeout_ms) {
                                 Ok(Some(frame)) => frame,
-                                Ok(None) => break,
+                                Ok(None) => {
+                                    dxgi_latest_diag.wait_timeout_count =
+                                        dxgi_latest_diag.wait_timeout_count.saturating_add(1);
+                                    break;
+                                }
                                 Err(DxgiDuplicationError::AccessLost) => {
+                                    dxgi_latest_diag.access_lost_count =
+                                        dxgi_latest_diag.access_lost_count.saturating_add(1);
                                     eprintln!(
                                         "[voice][screen] DXGI access lost, reinitializing duplication"
                                     );
@@ -5258,6 +5826,8 @@ fn start_screen_capture(
                                     break;
                                 }
                                 Err(e) => {
+                                    dxgi_latest_diag.acquire_errors =
+                                        dxgi_latest_diag.acquire_errors.saturating_add(1);
                                     eprintln!("[voice][screen] DXGI error: {e}");
                                     if let Some(pending) = pending_publish.take() {
                                         let _ = release_pending_dxgi_latest_copy(
@@ -5273,6 +5843,8 @@ fn start_screen_capture(
 
                             dxgi_latest_captured_frames =
                                 dxgi_latest_captured_frames.saturating_add(1);
+                            dxgi_latest_diag.acquire_ok =
+                                dxgi_latest_diag.acquire_ok.saturating_add(1);
 
                             let total = wgc_frame_count_dxgi.fetch_add(1, Ordering::Relaxed) + 1;
                             let accumulated_frames = frame.info.AccumulatedFrames.max(1);
@@ -5287,6 +5859,7 @@ fn start_screen_capture(
                                 &pool_ref_dxgi,
                                 &latest_slot_dxgi,
                                 &telemetry_dxgi,
+                                &mut dxgi_latest_diag,
                             ) {
                                 Some(copied) => {
                                     dxgi_latest_copied_frames =
@@ -5300,6 +5873,10 @@ fn start_screen_capture(
                                         ) {
                                             dxgi_latest_dropped_stale_frames =
                                                 dxgi_latest_dropped_stale_frames.saturating_add(1);
+                                            dxgi_latest_diag.backpressure_drop_count =
+                                                dxgi_latest_diag
+                                                    .backpressure_drop_count
+                                                    .saturating_add(1);
                                         }
                                     }
                                     if total == 1 {
@@ -5330,6 +5907,8 @@ fn start_screen_capture(
                             } else {
                                 dxgi_latest_dropped_stale_frames =
                                     dxgi_latest_dropped_stale_frames.saturating_add(1);
+                                dxgi_latest_diag.publish_skipped_count =
+                                    dxgi_latest_diag.publish_skipped_count.saturating_add(1);
                             }
                         }
                         let now = std::time::Instant::now();
@@ -5353,11 +5932,19 @@ fn start_screen_capture(
                             );
                             capture_heartbeat.tick(|| {
                                 format!(
-                                    "latest_only=1 capture_fps={:.1} publish_fps={:.1} copied={} dropped_stale={}",
+                                    "latest_only=1 probe_like=0 capture_fps={:.1} publish_fps={:.1} copied={} dropped_stale={} acquire_ok={} wait_timeout_count={} access_lost_count={} acquire_errors={} lock_fail_count={} copy_fail_count={} publish_skipped_count={} backpressure_drop_count={}",
                                     capture_fps,
                                     publish_fps,
                                     dxgi_latest_copied_frames,
-                                    dxgi_latest_dropped_stale_frames
+                                    dxgi_latest_dropped_stale_frames,
+                                    dxgi_latest_diag.acquire_ok,
+                                    dxgi_latest_diag.wait_timeout_count,
+                                    dxgi_latest_diag.access_lost_count,
+                                    dxgi_latest_diag.acquire_errors,
+                                    dxgi_latest_diag.lock_fail_count,
+                                    dxgi_latest_diag.copy_fail_count,
+                                    dxgi_latest_diag.publish_skipped_count,
+                                    dxgi_latest_diag.backpressure_drop_count,
                                 )
                             });
                             dxgi_latest_log_start = now;
@@ -5367,6 +5954,7 @@ fn start_screen_capture(
                             dxgi_latest_dropped_stale_frames = 0;
                             dxgi_accumulated_frames_sum = 0;
                             dxgi_accumulated_frames_max = 0;
+                            dxgi_latest_diag.reset();
                         }
 
                         continue;
@@ -6643,17 +7231,21 @@ fn start_screen_capture(
                             None if encode_path_enc == EncodePath::Auto => true,
                             _ => false,
                         };
-                let effective_webrtc_cap_fps = guarded_screen_share_webrtc_fps_cap(
-                    raw_webrtc_cap_fps,
-                    source_fps,
-                    max_fps_f64,
-                    guard_packet_loss_pct,
-                    guard_transport_path.as_deref(),
-                    guard_transport_rtt_ms,
-                    guard_quality_limitation_reason.as_deref(),
-                    dxgi_nvenc_high_fps_guard,
-                );
-                if !lock_preset_fps && source_fps >= 10.0 {
+                let effective_webrtc_cap_fps = if adaptive_cap_enabled {
+                    guarded_screen_share_webrtc_fps_cap(
+                        raw_webrtc_cap_fps,
+                        source_fps,
+                        max_fps_f64,
+                        guard_packet_loss_pct,
+                        guard_transport_path.as_deref(),
+                        guard_transport_rtt_ms,
+                        guard_quality_limitation_reason.as_deref(),
+                        dxgi_nvenc_high_fps_guard,
+                    )
+                } else {
+                    max_fps_f64
+                };
+                if adaptive_cap_enabled && !lock_preset_fps && source_fps >= 10.0 {
                     let source_cap_candidate = ADAPTIVE_FPS_LADDER
                         .iter()
                         .rev()
@@ -6694,7 +7286,10 @@ fn start_screen_capture(
                         source_cap_down_votes = 0;
                         source_cap_up_votes = 0;
                         let source_schedule_cap_fps =
-                            current_source_cap_fps.min(effective_webrtc_cap_fps);
+                            current_source_cap_fps
+                                .min(effective_webrtc_cap_fps)
+                                .max(min_schedule_fps)
+                                .min(max_fps_f64);
                         if current_fps > source_schedule_cap_fps {
                             apply_sender_fps(
                                 &mut current_fps,
@@ -6729,10 +7324,15 @@ fn start_screen_capture(
                             );
                         }
                     }
-                } else if lock_preset_fps {
+                } else if !adaptive_cap_enabled || lock_preset_fps {
                     current_source_cap_fps = max_fps_f64;
                 }
-                if locked_source_follow_enabled && lock_preset_fps && max_fps_f64 >= 90.0 && source_fps >= 10.0 {
+                if adaptive_cap_enabled
+                    && locked_source_follow_enabled
+                    && lock_preset_fps
+                    && max_fps_f64 >= 90.0
+                    && source_fps >= 10.0
+                {
                     let trigger_fps = (max_fps_f64 * 0.60).max(30.0);
                     let release_fps = (max_fps_f64 * 0.80).max(trigger_fps + 10.0);
                     let proposed_locked_cap_fps = (source_fps + 2.0).clamp(10.0, max_fps_f64);
@@ -6784,10 +7384,14 @@ fn start_screen_capture(
                     locked_source_follow_down_votes = 0;
                     locked_source_follow_up_votes = 0;
                 }
-                let startup_cap_fps = startup_transport_fps_cap(
-                    webrtc_target_bitrate_bps,
-                    enc_session_start.elapsed(),
-                );
+                let startup_cap_fps = if adaptive_cap_enabled {
+                    startup_transport_fps_cap(
+                        webrtc_target_bitrate_bps,
+                        enc_session_start.elapsed(),
+                    )
+                } else {
+                    max_fps_f64
+                };
                 let past_startup = frame_count >= STARTUP_ACCEPT_FRAMES;
                 if telemetry_enabled
                     && (startup_cap_fps - last_startup_transport_cap_fps).abs() >= 0.5
@@ -6802,7 +7406,9 @@ fn start_screen_capture(
                     last_startup_transport_cap_fps = startup_cap_fps;
                 }
                 let high_fps_locked_startup = lock_preset_fps && max_fps_f64 >= 90.0 && !past_startup;
-                let schedule_cap_fps = if high_fps_locked_startup {
+                let schedule_cap_fps = if !adaptive_cap_enabled {
+                    max_fps_f64
+                } else if high_fps_locked_startup {
                     current_source_cap_fps.min(startup_cap_fps)
                 } else {
                     current_source_cap_fps
@@ -6814,6 +7420,7 @@ fn start_screen_capture(
                 } else {
                     schedule_cap_fps
                 };
+                let schedule_cap_fps = schedule_cap_fps.max(min_schedule_fps).min(max_fps_f64);
                 if let Some(mut st) = stats_enc.try_lock() {
                     st.source_fps = (source_fps > 0.0).then_some(source_fps as f32);
                     st.source_cap_fps = Some(current_source_cap_fps as f32);
@@ -6853,12 +7460,12 @@ fn start_screen_capture(
                     );
                 } else if !lock_preset_fps
                     && past_startup
-                    && current_fps < 30.0
-                    && schedule_cap_fps >= 30.0
+                    && current_fps < min_schedule_fps.max(30.0)
+                    && schedule_cap_fps >= min_schedule_fps.max(30.0)
                 {
                     apply_sender_fps(
                         &mut current_fps,
-                        30.0_f64.min(schedule_cap_fps),
+                        min_schedule_fps.max(30.0).min(schedule_cap_fps),
                         max_fps_f64,
                         MAX_STATIC_INTERVAL_NS,
                         &mut current_frame_interval_ns,
@@ -8407,7 +9014,8 @@ fn start_screen_capture(
                                         >= nvenc_ring_for_backlog.saturating_sub(1).max(1);
                                 let now_adaptive = std::time::Instant::now();
                                 let in_flight_now = nvenc_in_flight_before.unwrap_or(0);
-                                let force_cap_60 = max_fps_f64 >= 120.0
+                                let force_cap_60 = adaptive_cap_enabled
+                                    && max_fps_f64 >= 120.0
                                     && (convert_avg_us_window > 12_000
                                         || in_flight_now >= 8
                                         || nvenc_ring_full);
@@ -8430,7 +9038,8 @@ fn start_screen_capture(
                                         nvenc_adaptive_submit_next_at = now_adaptive;
                                         nvenc_adaptive_last_cap_change = now_adaptive;
                                     }
-                                } else if max_fps_f64 >= 120.0
+                                } else if adaptive_cap_enabled
+                                    && max_fps_f64 >= 120.0
                                     && nvenc_adaptive_submit_cap_fps < max_fps_f64
                                 {
                                     let recover_ok =
@@ -8723,7 +9332,8 @@ fn start_screen_capture(
                                         }
                                     }
                                 }
-                                if submit_item.is_some()
+                                if adaptive_cap_enabled
+                                    && submit_item.is_some()
                                     && nvenc_adaptive_submit_cap_fps + 1.0 < max_fps_f64
                                 {
                                     let now_submit_cap = std::time::Instant::now();
@@ -9268,10 +9878,12 @@ fn start_screen_capture(
                                             keyframe_request_enc.store(true, Ordering::Relaxed);
                                             nvenc_soft_drain_until =
                                                 Some(now_nvenc_stall + Duration::from_millis(250));
-                                            nvenc_adaptive_submit_cap_fps =
-                                                nvenc_adaptive_submit_cap_fps.min(60.0);
-                                            nvenc_adaptive_submit_next_at =
-                                                now_nvenc_stall + Duration::from_millis(16);
+                                            if adaptive_cap_enabled {
+                                                nvenc_adaptive_submit_cap_fps =
+                                                    nvenc_adaptive_submit_cap_fps.min(60.0);
+                                                nvenc_adaptive_submit_next_at =
+                                                    now_nvenc_stall + Duration::from_millis(16);
+                                            }
 
                                             let mut drain_outputs = 0u64;
                                             let mut drain_errors = 0u64;
@@ -9497,13 +10109,20 @@ fn start_screen_capture(
                                     let encode_ms = encode_us as f64 / 1000.0;
                                     encode_avg_ms = if encode_avg_ms == 0.0 { encode_ms } else { encode_avg_ms * 0.9 + encode_ms * 0.1 };
                                     let budget_ms = 1000.0 / current_fps;
-                                    if !lock_preset_fps && past_startup && current_fps >= 30.0 {
+                                    if adaptive_cap_enabled
+                                        && !lock_preset_fps
+                                        && past_startup
+                                        && current_fps >= 30.0
+                                    {
                                         if encode_avg_ms > budget_ms * 0.8 {
                                             downgrade_frames += 1;
                                             upgrade_frames = 0;
-                                            if downgrade_frames >= current_fps as i64 {
+                                            if downgrade_frames >= current_fps as i64
+                                                && current_fps > min_schedule_fps + 0.5
+                                            {
                                                 let old_fps = current_fps;
-                                                current_fps = next_lower_fps(current_fps);
+                                                current_fps =
+                                                    next_lower_fps(current_fps).max(min_schedule_fps);
                                                 current_frame_interval_ns =
                                                     (1_000_000_000.0 / current_fps) as u64;
                                                 current_full_interval =

@@ -1,9 +1,9 @@
 //! Console output panel - captures and displays application console output.
 //! Uses a ring buffer to store recent log lines.
 
+use parking_lot::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::OnceLock;
-use parking_lot::Mutex;
 
 /// Maximum number of console lines to keep in memory
 const MAX_CONSOLE_LINES: usize = 1000;

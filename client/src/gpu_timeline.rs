@@ -15,8 +15,8 @@
 use std::fmt;
 
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11DeviceContext, ID3D11Query,
-    D3D11_QUERY_DATA_TIMESTAMP_DISJOINT, D3D11_QUERY_DESC,
+    ID3D11Device, ID3D11DeviceContext, ID3D11Query, D3D11_QUERY_DATA_TIMESTAMP_DISJOINT,
+    D3D11_QUERY_DESC,
 };
 
 /// GPU timestamp stages for pipeline profiling.
@@ -48,7 +48,7 @@ impl GpuStage {
     pub fn pix_color(&self) -> u32 {
         match self {
             Self::CaptureStart => 0xFF8080FF, // Light blue
-            Self::CopyDone => 0xFFFF80FF,    // Yellow
+            Self::CopyDone => 0xFFFF80FF,     // Yellow
             Self::ConvertDone => 0xFF80FF80,  // Green
             Self::EncodeSubmit => 0xFFFF4080, // Orange
             Self::EncodeDone => 0xFFFF8040,   // Red-orange
@@ -194,10 +194,18 @@ impl GpuTimeline {
         };
 
         if self.verbose {
-            let capture_us = self.entries[idx].timestamps.stage_us(GpuStage::CaptureStart, GpuStage::CopyDone);
-            let copy_us = self.entries[idx].timestamps.stage_us(GpuStage::CopyDone, GpuStage::ConvertDone);
-            let convert_us = self.entries[idx].timestamps.stage_us(GpuStage::ConvertDone, GpuStage::EncodeSubmit);
-            let encode_us = self.entries[idx].timestamps.stage_us(GpuStage::EncodeSubmit, GpuStage::EncodeDone);
+            let capture_us = self.entries[idx]
+                .timestamps
+                .stage_us(GpuStage::CaptureStart, GpuStage::CopyDone);
+            let copy_us = self.entries[idx]
+                .timestamps
+                .stage_us(GpuStage::CopyDone, GpuStage::ConvertDone);
+            let convert_us = self.entries[idx]
+                .timestamps
+                .stage_us(GpuStage::ConvertDone, GpuStage::EncodeSubmit);
+            let encode_us = self.entries[idx]
+                .timestamps
+                .stage_us(GpuStage::EncodeSubmit, GpuStage::EncodeDone);
             eprintln!(
                 "[gpu_timeline] frame {}: capture={}us copy={}us convert={}us encode={}us",
                 frame, capture_us, copy_us, convert_us, encode_us,
@@ -236,13 +244,15 @@ impl GpuTimeline {
             return GpuTiming::default();
         }
 
-        let sum = entries.iter().fold(GpuTiming::default(), |acc, e| GpuTiming {
-            ctx_wait_us: acc.ctx_wait_us + e.timing.ctx_wait_us,
-            submit_us: acc.submit_us + e.timing.submit_us,
-            copy_us: acc.copy_us + e.timing.copy_us,
-            blt_dispatch_us: acc.blt_dispatch_us + e.timing.blt_dispatch_us,
-            encode_us: acc.encode_us + e.timing.encode_us,
-        });
+        let sum = entries
+            .iter()
+            .fold(GpuTiming::default(), |acc, e| GpuTiming {
+                ctx_wait_us: acc.ctx_wait_us + e.timing.ctx_wait_us,
+                submit_us: acc.submit_us + e.timing.submit_us,
+                copy_us: acc.copy_us + e.timing.copy_us,
+                blt_dispatch_us: acc.blt_dispatch_us + e.timing.blt_dispatch_us,
+                encode_us: acc.encode_us + e.timing.encode_us,
+            });
 
         let n = entries.len() as u64;
         GpuTiming {
@@ -343,7 +353,9 @@ impl PixContext {
     }
 
     fn end_frame(&self, frame: u64, timing: &GpuTiming) {
-        let _count = self.marker_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let _count = self
+            .marker_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.set_marker(0xFF00FF00, &format!("frame_{}", frame));
         let _ = timing;
     }
@@ -416,11 +428,18 @@ impl D3d11TimestampQueries {
         context: &ID3D11DeviceContext,
         stage_count: usize,
     ) -> Result<Self, GpuQueryError> {
-        let disjoint_query = Self::create_query(device, windows::Win32::Graphics::Direct3D11::D3D11_QUERY_TIMESTAMP_DISJOINT).ok();
+        let disjoint_query = Self::create_query(
+            device,
+            windows::Win32::Graphics::Direct3D11::D3D11_QUERY_TIMESTAMP_DISJOINT,
+        )
+        .ok();
 
         let mut stage_queries = Vec::with_capacity(stage_count);
         for _ in 0..stage_count {
-            if let Ok(query) = Self::create_query(device, windows::Win32::Graphics::Direct3D11::D3D11_QUERY_TIMESTAMP) {
+            if let Ok(query) = Self::create_query(
+                device,
+                windows::Win32::Graphics::Direct3D11::D3D11_QUERY_TIMESTAMP,
+            ) {
                 stage_queries.push(query);
             }
         }
@@ -446,7 +465,9 @@ impl D3d11TimestampQueries {
         unsafe {
             device.CreateQuery(&desc, Some(&mut query))?;
         }
-        query.ok_or_else(|| GpuQueryError::CreateFailed(windows::core::Error::from(windows::core::HRESULT(-1))))
+        query.ok_or_else(|| {
+            GpuQueryError::CreateFailed(windows::core::Error::from(windows::core::HRESULT(-1)))
+        })
     }
 
     /// Begin timestamp collection with disjoint query.
@@ -466,9 +487,15 @@ impl D3d11TimestampQueries {
             }
             // Query disjoint data to get frequency
             let mut data = D3D11_QUERY_DATA_TIMESTAMP_DISJOINT::default();
-            let p_data = &mut data as *mut D3D11_QUERY_DATA_TIMESTAMP_DISJOINT as *mut std::ffi::c_void;
+            let p_data =
+                &mut data as *mut D3D11_QUERY_DATA_TIMESTAMP_DISJOINT as *mut std::ffi::c_void;
             unsafe {
-                match self.context.GetData(query, Some(p_data), std::mem::size_of::<D3D11_QUERY_DATA_TIMESTAMP_DISJOINT>() as u32, 0) {
+                match self.context.GetData(
+                    query,
+                    Some(p_data),
+                    std::mem::size_of::<D3D11_QUERY_DATA_TIMESTAMP_DISJOINT>() as u32,
+                    0,
+                ) {
                     Ok(()) => {
                         if !bool::from(data.Disjoint) {
                             self.frequency = data.Frequency;

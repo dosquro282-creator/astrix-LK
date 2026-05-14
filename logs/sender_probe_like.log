@@ -1,0 +1,843 @@
+[06:24:08.100] Astrix client starting...
+[06:24:08.100] Registering protocol handler...
+[06:25:53.684] [gpu_device] D3D11 multithread protection ENABLED
+[06:25:53.684] [gpu_device] Selected GPU: NVIDIA GeForce RTX 3080 (discrete; 12091 MB VRAM)
+[06:25:53.684] [mft_device] Shared D3D11 device initialized for hardware decode
+[06:25:53.684] [voice][livekit] connecting to ws://193.233.251.173:7880 ...
+[06:25:53.687] [Phase 3.5] WGL_NV_DX_interop2 initialized successfully
+[06:25:53.687] [Phase 3.5] WGL_NV_DX_interop2 ready — GPU zero-copy path enabled by default
+[06:25:55.108] [voice][livekit] connected to room
+[06:25:55.116] [voice][livekit] mic: 48000 Hz
+[06:25:55.213] [voice][livekit] speaker output at 48000 Hz
+[06:25:55.252] [voice][livekit] mic capture: 48000 Hz, 2 ch
+[06:25:55.360] [voice][livekit] speaker: 48000 Hz, 2 channel(s)
+[06:25:55.469] [denoise] DeepFilterNet active for sender-microphone using DeepFilterNet3_onnx.tar.gz (frame_len=480 @ 48000 Hz, atten_lim=42.0 dB, post_filter_beta=0.010, thresholds=[-15.0, 35.0, 35.0], reduce_mask=max)
+[06:26:14.085] [voice][screen] Astrix process priority: HIGH_PRIORITY_CLASS (screen pipeline start, ASTRIX_HIGH_PRIORITY_PIPELINE=<default:on>)
+[06:26:14.085] [voice][screen] capture backend default: dxgi
+[06:26:14.085] [voice][screen] DXGI build marker: hardfail-fallback-v2
+[06:26:14.085] [voice][screen] WARNING: P1080F120 is demanding (high res/fps). If FPS drops, consider lower preset (e.g. P1080F60 or P1440F30). Hardware encoder (NVENC/AMF) support is planned.
+[06:26:14.085] [voice][screen] WebRTC track mode: motion (is_screencast=false, content_hint=Fluid, ASTRIX_SCREEN_WEBRTC_MOTION_MODE=<default:on>)
+[06:26:14.085] [voice][screen] dxgi_latest_only=true (ASTRIX_DXGI_LATEST_ONLY=1) dxgi_probe_like=true (ASTRIX_DXGI_PROBE_LIKE=1)
+[06:26:14.085] [voice][screen] encode path: encoded GPU path (push_frame -> ExternalH264Encoder -> RTP)
+[06:26:14.085] [voice][screen] preset FPS lock: enabled (ASTRIX_DXGI_LOCK_PRESET_FPS=<default:on>, backend=dxgi)
+[06:26:14.085] [voice][screen] locked-source follow: disabled
+[06:26:14.085] [voice][screen] NVENC submit delay: 3 frame(s) (ASTRIX_DXGI_NVENC_SUBMIT_DELAY_FRAMES=<default:3>)
+[06:26:14.085] [voice][screen] NVENC direct RGB: enabled (ring 12 surface(s), ASTRIX_DXGI_NVENC_DIRECT_RGB=<default:on>, ASTRIX_DXGI_NVENC_RGB_RING=<default:12>)
+[06:26:14.085] [voice][screen] NV12 second D3D11 device: disabled (ASTRIX_DXGI_NV12_SECOND_DEVICE=<default:off>)
+[06:26:14.085] [voice][screen] NVENC send coalescing: disabled (ASTRIX_DXGI_NVENC_COALESCE_SEND=<default:off>)
+[06:26:14.085] [voice][screen] NVENC pre-encode leaky queue: enabled max_in_flight=8 (ASTRIX_DXGI_NVENC_LEAKY_PREENCODE=<default:on>, ASTRIX_DXGI_NVENC_LEAKY_MAX_IN_FLIGHT=<default:8>)
+[06:26:14.085] [voice][screen] NVENC starvation reset threshold: 1000ms (ASTRIX_DXGI_NVENC_STARVATION_RESET_MS=<default:1000>)
+[06:26:14.106] [gpu_device] D3D11 multithread protection ENABLED
+[06:26:14.106] [gpu_device] Selected GPU: NVIDIA GeForce RTX 3080 (discrete; 12091 MB VRAM)
+[06:26:14.106] [voice][screen] DXGI capturing monitor 0 '\\.\DISPLAY2' via adapter 0 'NVIDIA GeForce RTX 3080' / output 0 '\\.\DISPLAY2' (2560x1440 at 0,0)
+[06:26:14.110] [voice][screen] DXGI first frame acquired in probe-like latest-only mode
+[06:26:14.112] [voice][screen] DXGI probe-like private copy ring created: 2560x1440 format DXGI_FORMAT(87) (4 slots)
+[06:26:14.112] [voice][screen] DXGI latest-only texture pool created: 2560x1440 format DXGI_FORMAT(87) (6 slots)
+[06:26:14.118] [d3d11_nv12] Creating converter: 2560x1440 → 1920x1080 @ 120 fps
+[06:26:14.118] [d3d11_nv12] Flush policy: startup-only (3 frame(s)); ASTRIX_CONVERT_TELEMETRY_LIGHT=1
+[06:26:14.118] [d3d11_nv12] NV12 output ring: 16 surface(s)
+[06:26:14.118] [d3d11_nv12] VideoProcessor usage: optimal-speed (ASTRIX_DXGI_NV12_OPTIMAL_SPEED=<default:on>)
+[06:26:14.119] [d3d11_nv12] ContentDesc: 2560x1440 -> 1920x1080 fps=120/1
+[06:26:14.119] [d3d11_nv12] BGRA format flags: 0x3
+[06:26:14.119] [d3d11_nv12] RGBA format flags: 0x3
+[06:26:14.119] [d3d11_nv12] NV12 format flags: 0x3
+[06:26:14.119] [d3d11_nv12] VideoProcessorCaps: RateConversionCapsCount=1, MaxInputStreams=5, InputFormatCaps=0x4, FeatureCaps=0x3ef
+[06:26:14.119] [d3d11_nv12] Using rate conversion index: 0 (RateConversionCapsCount=1)
+[06:26:14.120] [d3d11_nv12] NV12Tex desc: 1920x1080 format=DXGI_FORMAT(103) mip=1 array=1 sample=1 bind=0x28 ring=16
+[06:26:14.120] [d3d11_nv12] Creating RGB scaler: 2560x1440 -> 1920x1080 @ 120 fps
+[06:26:14.120] [d3d11_nv12] RGB scaler usage: optimal-speed (ASTRIX_DXGI_NV12_OPTIMAL_SPEED=<default:on>, ASTRIX_DXGI_RGB_SCALE_PATH=compute, ASTRIX_CONVERT_TELEMETRY_LIGHT=1)
+[06:26:14.120] [d3d11_nv12] RGB scaler formats: BGRA=0x3 RGBA=0x3
+[06:26:14.124] [voice][screen] stream preview publisher disabled (headless/log-only)
+[06:26:14.124] [voice][screen][audio] process loopback activated for ExcludeCurrentProcessTree
+[06:26:14.124] [voice][screen][audio] process loopback format: 48000 Hz, 2 ch, 16-bit PCM
+[06:26:14.126] [d3d11_nv12] RGB scaler compute CB ring: 16 buffer(s)
+[06:26:14.126] [d3d11_nv12] RGB scaler path: compute bilinear BGRA (ASTRIX_DXGI_RGB_SCALE_COMPUTE=<default:on>)
+[06:26:14.126] [voice][screen] NVENC direct RGB scaler created: 2560x1440 -> 1920x1080 (16 surface(s))
+[06:26:14.130] [voice][screen][audio] excluding sibling Astrix processes from monitor stream: [4616]
+[06:26:14.130] [voice][screen][audio] process loopback activated for IncludeProcessTree(4616)
+[06:26:14.130] [voice][screen][audio] process loopback format: 48000 Hz, 2 ch, 16-bit PCM
+[06:26:14.133] [nvenc_d11] GIR enabled: period=120 frames, duration=60 frames
+[06:26:14.158] [nvenc_d11] init: custom async p1 (fps=120, async=on, low_latency=prefer-fast, input=ARGB/BGRA, h264_fast=on)
+[06:26:14.158] [nvenc_d11] config: label=custom async p1 tuning=3 preset_p1=1 preset_p4=0 rc=2 multipass=0 lookahead=0 depth=0 aq=0 aq_strength=0 temporal_aq=0 zero_reorder=1 non_ref_p=1 strict_gop=1 frame_interval_p=1 gop=4294967295 idr=4294967295 vbv=8750000/4375000 h264_fast profile_baseline=1 entropy=2 adaptive_transform=1 deblock=2 b_ref=0 bdirect=1 hier_p=0 hier_b=0 temporal_svc=0 intra_refresh=1 ltr=0 refs_l0=1 refs_l1=0 max_ref=1 async=1
+[06:26:14.207] [encoded_h264] selected NVENC D3D11 backend: NVIDIA GeForce RTX 3080
+[06:26:14.207] [voice][screen] Screen capture: NVENC D3D11 (NVIDIA GeForce RTX 3080, hardware)
+[06:26:14.207] [voice][screen] NVENC tuning: preset bitrate cap 35.0 Mbps, periodic IDR default 20s
+[06:26:14.207] [voice][screen] NVENC input path: direct RGB scale ring
+[06:26:14.207] [voice][screen] encoded backend steady-state: pipelined submit+collect mode
+[06:26:14.207] [voice][screen] async GPU convert worker: enabled (direct RGB scale)
+[06:26:14.207] [voice][screen] async GPU convert worker: waiting for first scaled frame
+[06:26:14.218] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=0
+[06:26:14.226] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 7795 us
+[06:26:14.226] [voice][screen] encoded backend startup: pushing first encoded frame bytes=8207 key=true
+[06:26:14.226] [voice][screen] encoded backend startup keyframe: first 3 frames as IDR
+[06:26:14.226] [voice][screen] NVENC active submit delay: 0 frame(s) (ring 16, rgb_scale=on)
+[06:26:15.094] [voice][screen][push][summary] tick=23420.3 slot_ready=23415.3 slot_miss=5.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=1 new_content=23589 reuse_content=28 static_reuse=0 empty=23567 sent=56.5 target=120 schedule=60 mode=pipelined
+[06:26:15.094] [voice][screen][push][timing] convert=25/0 avg=3714us ctx_avg=0us gpu_avg=3714us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=25/0 avg=159us ctx_avg=0us call_avg=159us ready=imm:0 wait:0 timeout:0 avg=0us submit=57/0 avg=2us map_avg=1115us pic_avg=4930us collect=some:56 none:50 err:0 frames=55.5 avg=234us encode=58/0 avg=567us send_calls=56.5 avg_send=1us
+[06:26:15.094] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=23387.6 convert_output_fps=24.8 nvenc_submit_fps=56.5 nvenc_collect_fps=55.5 send_fps=56.5
+[06:26:15.094] [voice][screen][push][burst] sent_frames=57 key=3 avg_frame=0KB max_frame=8KB gap_avg=15185us gap_max=33335us burst_gaps=7 stall_gaps=0
+[06:26:15.094] [voice][screen][push][nvenc] map_p95=4493us map_max=5841us pic_p95=9930us pic_max=11514us encode_time_p95=9739us encode_time_max=14365us in_flight_p95=3 in_flight_max=6 frame_p95=8KB frame_max=8KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:15.094] [voice][screen][startup] t=1s src=0.0 caps=120/120/60/60 bwe_req=2.50 enc=2.50 pre_rtp=0.20 rtp=0.13 avail=2.50 ql=none loss=- nack=0 pli=0 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=32ms
+[06:26:15.107] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=30 dropped_stale_frames=3 capture_fps=30.0 publish_fps=27.0
+[06:26:16.108] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=30 dropped_stale_frames=0 capture_fps=30.0 publish_fps=30.0
+[06:26:16.110] [voice][screen][push][summary] tick=15.7 slot_ready=15.7 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=12 reuse_content=4 static_reuse=0 empty=1 sent=15.7 target=120 schedule=10 mode=pipelined
+[06:26:16.110] [voice][screen][push][timing] convert=11/0 avg=3763us ctx_avg=0us gpu_avg=3763us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=16/0 avg=4us map_avg=1095us pic_avg=4545us collect=some:16 none:15 err:0 frames=15.7 avg=3us encode=16/0 avg=15us send_calls=15.7 avg_send=2us
+[06:26:16.110] [voice][screen][push][fps] dxgi_capture_fps=30.0 convert_input_fps=11.8 convert_output_fps=10.8 nvenc_submit_fps=15.7 nvenc_collect_fps=15.7 send_fps=15.7
+[06:26:16.110] [voice][screen][push][burst] sent_frames=16 key=2 avg_frame=1KB max_frame=8KB gap_avg=58333us gap_max=100034us burst_gaps=2 stall_gaps=0
+[06:26:16.110] [voice][screen][push][nvenc] map_p95=6281us map_max=6281us pic_p95=8510us pic_max=8510us encode_time_p95=8575us encode_time_max=8575us in_flight_p95=1 in_flight_max=2 frame_p95=8KB frame_max=8KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:16.110] [voice][screen][startup] t=2s src=30.0 caps=120/10/60/10 bwe_req=2.50 enc=2.50 pre_rtp=0.13 rtp=0.07 avail=2.50 ql=none loss=0.00 nack=0 pli=0 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=32ms
+[06:26:17.108] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=31 dropped_stale_frames=0 capture_fps=31.0 publish_fps=31.0
+[06:26:17.210] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:17.210] [voice][screen][push][timing] convert=11/0 avg=2492us ctx_avg=0us gpu_avg=2492us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=3us map_avg=949us pic_avg=4577us collect=some:11 none:11 err:0 frames=10.0 avg=0us encode=11/0 avg=10us send_calls=10.0 avg_send=2us
+[06:26:17.210] [voice][screen][push][fps] dxgi_capture_fps=31.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:17.210] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=100021us gap_max=100271us burst_gaps=0 stall_gaps=0
+[06:26:17.210] [voice][screen][push][nvenc] map_p95=4236us map_max=4236us pic_p95=7903us pic_max=7903us encode_time_p95=6555us encode_time_max=6555us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:17.210] [voice][screen][startup] t=3s src=31.0 caps=120/10/60/10 bwe_req=2.50 enc=2.50 pre_rtp=0.00 rtp=0.14 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=32ms
+[06:26:18.108] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=29 dropped_stale_frames=0 capture_fps=29.0 publish_fps=29.0
+[06:26:18.310] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:18.310] [voice][screen][push][timing] convert=11/0 avg=3139us ctx_avg=0us gpu_avg=3139us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=4us map_avg=1471us pic_avg=4833us collect=some:11 none:11 err:0 frames=10.0 avg=1us encode=11/0 avg=11us send_calls=10.0 avg_send=2us
+[06:26:18.310] [voice][screen][push][fps] dxgi_capture_fps=29.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:18.310] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99977us gap_max=100296us burst_gaps=0 stall_gaps=0
+[06:26:18.310] [voice][screen][push][nvenc] map_p95=4788us map_max=4788us pic_p95=8761us pic_max=8761us encode_time_p95=8077us encode_time_max=8077us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:18.310] [voice][screen][startup] t=4s src=29.0 caps=120/10/120/10 bwe_req=2.50 enc=2.50 pre_rtp=0.00 rtp=0.00 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=32ms
+[06:26:19.109] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=30 dropped_stale_frames=0 capture_fps=30.0 publish_fps=30.0
+[06:26:19.410] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:19.410] [voice][screen][push][timing] convert=11/0 avg=3612us ctx_avg=0us gpu_avg=3612us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=3us map_avg=2122us pic_avg=5002us collect=some:11 none:11 err:0 frames=10.0 avg=1us encode=11/0 avg=11us send_calls=10.0 avg_send=3us
+[06:26:19.410] [voice][screen][push][fps] dxgi_capture_fps=30.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:19.410] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100326us burst_gaps=0 stall_gaps=0
+[06:26:19.410] [voice][screen][push][nvenc] map_p95=7149us map_max=7149us pic_p95=8506us pic_max=8506us encode_time_p95=6120us encode_time_max=6120us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:19.410] [voice][screen][startup] t=5s src=30.0 caps=120/10/120/10 bwe_req=2.50 enc=2.50 pre_rtp=0.00 rtp=0.00 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=33ms
+[06:26:20.109] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=31 dropped_stale_frames=0 capture_fps=31.0 publish_fps=31.0
+[06:26:20.510] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:20.510] [voice][screen][push][timing] convert=11/0 avg=1893us ctx_avg=0us gpu_avg=1893us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=4us map_avg=1067us pic_avg=4579us collect=some:11 none:11 err:0 frames=10.0 avg=1us encode=11/0 avg=11us send_calls=10.0 avg_send=3us
+[06:26:20.510] [voice][screen][push][fps] dxgi_capture_fps=31.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:20.510] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100271us burst_gaps=0 stall_gaps=0
+[06:26:20.510] [voice][screen][push][nvenc] map_p95=4222us map_max=4222us pic_p95=9270us pic_max=9270us encode_time_p95=7045us encode_time_max=7045us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:20.510] [voice][screen][startup] t=6s src=31.0 caps=120/10/120/10 bwe_req=2.50 enc=2.50 pre_rtp=0.00 rtp=0.00 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=33ms
+[06:26:21.109] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=32 dropped_stale_frames=0 capture_fps=32.0 publish_fps=32.0
+[06:26:21.610] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:21.610] [voice][screen][push][timing] convert=11/0 avg=2445us ctx_avg=0us gpu_avg=2445us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=3us map_avg=1065us pic_avg=4887us collect=some:11 none:11 err:0 frames=10.0 avg=1us encode=11/0 avg=12us send_calls=10.0 avg_send=2us
+[06:26:21.610] [voice][screen][push][fps] dxgi_capture_fps=32.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:21.610] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100292us burst_gaps=0 stall_gaps=0
+[06:26:21.610] [voice][screen][push][nvenc] map_p95=2740us map_max=2740us pic_p95=8938us pic_max=8938us encode_time_p95=7114us encode_time_max=7114us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:21.610] [voice][screen][startup] t=7s src=32.0 caps=120/10/120/10 bwe_req=2.50 enc=2.50 pre_rtp=0.01 rtp=0.01 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=33ms
+[06:26:22.110] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=32 dropped_stale_frames=0 capture_fps=32.0 publish_fps=32.0
+[06:26:22.710] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:22.710] [voice][screen][push][timing] convert=11/0 avg=1954us ctx_avg=0us gpu_avg=1954us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=5us map_avg=1263us pic_avg=4369us collect=some:11 none:11 err:0 frames=10.0 avg=1us encode=11/0 avg=13us send_calls=10.0 avg_send=2us
+[06:26:22.710] [voice][screen][push][fps] dxgi_capture_fps=32.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:22.710] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100377us burst_gaps=0 stall_gaps=0
+[06:26:22.710] [voice][screen][push][nvenc] map_p95=5504us map_max=5504us pic_p95=7372us pic_max=7372us encode_time_p95=10397us encode_time_max=10397us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:22.710] [voice][screen][startup] t=8s src=32.0 caps=120/10/120/10 bwe_req=2.50 enc=2.50 pre_rtp=0.01 rtp=0.02 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=33ms
+[06:26:23.110] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=33 dropped_stale_frames=0 capture_fps=33.0 publish_fps=33.0
+[06:26:23.810] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:23.810] [voice][screen][push][timing] convert=11/0 avg=2617us ctx_avg=0us gpu_avg=2617us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=3us map_avg=434us pic_avg=3500us collect=some:11 none:11 err:0 frames=10.0 avg=1us encode=11/0 avg=12us send_calls=10.0 avg_send=2us
+[06:26:23.810] [voice][screen][push][fps] dxgi_capture_fps=33.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:23.810] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100379us burst_gaps=0 stall_gaps=0
+[06:26:23.810] [voice][screen][push][nvenc] map_p95=1754us map_max=1754us pic_p95=6117us pic_max=6117us encode_time_p95=7332us encode_time_max=7332us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:23.810] [voice][screen][startup] t=9s src=33.0 caps=120/10/120/10 bwe_req=2.50 enc=2.50 pre_rtp=0.01 rtp=0.02 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=33ms
+[06:26:24.111] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=30 dropped_stale_frames=0 capture_fps=30.0 publish_fps=30.0
+[06:26:24.910] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:24.910] [voice][screen][push][timing] convert=11/0 avg=3324us ctx_avg=0us gpu_avg=3324us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=3us map_avg=1083us pic_avg=4837us collect=some:11 none:11 err:0 frames=10.0 avg=1us encode=11/0 avg=12us send_calls=10.0 avg_send=2us
+[06:26:24.910] [voice][screen][push][fps] dxgi_capture_fps=30.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:24.910] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100336us burst_gaps=0 stall_gaps=0
+[06:26:24.910] [voice][screen][push][nvenc] map_p95=4273us map_max=4273us pic_p95=11066us pic_max=11066us encode_time_p95=11776us encode_time_max=11776us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:24.910] [voice][screen][startup] t=10s src=30.0 caps=120/10/120/10 bwe_req=2.50 enc=2.50 pre_rtp=0.01 rtp=0.02 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=38ms
+[06:26:25.112] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=30 dropped_stale_frames=0 capture_fps=30.0 publish_fps=30.0
+[06:26:26.010] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:26.010] [voice][screen][push][timing] convert=11/0 avg=2556us ctx_avg=0us gpu_avg=2556us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=3us map_avg=806us pic_avg=5197us collect=some:11 none:11 err:0 frames=10.0 avg=1us encode=11/0 avg=11us send_calls=10.0 avg_send=2us
+[06:26:26.010] [voice][screen][push][fps] dxgi_capture_fps=30.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:26.010] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100339us burst_gaps=0 stall_gaps=0
+[06:26:26.010] [voice][screen][push][nvenc] map_p95=1357us map_max=1357us pic_p95=8612us pic_max=8612us encode_time_p95=9139us encode_time_max=9139us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:26.010] [voice][screen][startup] t=11s src=30.0 caps=120/10/120/10 bwe_req=2.50 enc=2.50 pre_rtp=0.01 rtp=0.02 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=38ms
+[06:26:26.112] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=31 dropped_stale_frames=0 capture_fps=31.0 publish_fps=31.0
+[06:26:27.110] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:27.110] [voice][screen][push][timing] convert=11/0 avg=2899us ctx_avg=0us gpu_avg=2899us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=3us map_avg=2177us pic_avg=4031us collect=some:11 none:11 err:0 frames=10.0 avg=1us encode=11/0 avg=12us send_calls=10.0 avg_send=2us
+[06:26:27.110] [voice][screen][push][fps] dxgi_capture_fps=31.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:27.110] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100286us burst_gaps=0 stall_gaps=0
+[06:26:27.110] [voice][screen][push][nvenc] map_p95=5559us map_max=5559us pic_p95=11544us pic_max=11544us encode_time_p95=9581us encode_time_max=9581us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:27.110] [voice][screen][startup] t=13s src=31.0 caps=120/10/120/10 bwe_req=2.50 enc=2.50 pre_rtp=0.01 rtp=0.02 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=39ms
+[06:26:27.112] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=30 dropped_stale_frames=0 capture_fps=30.0 publish_fps=30.0
+[06:26:28.113] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=32 dropped_stale_frames=0 capture_fps=32.0 publish_fps=32.0
+[06:26:28.210] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:28.210] [voice][screen][push][timing] convert=11/0 avg=4088us ctx_avg=0us gpu_avg=4088us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=3us map_avg=1493us pic_avg=3765us collect=some:11 none:11 err:0 frames=10.0 avg=1us encode=11/0 avg=10us send_calls=10.0 avg_send=2us
+[06:26:28.210] [voice][screen][push][fps] dxgi_capture_fps=32.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:28.210] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100239us burst_gaps=0 stall_gaps=0
+[06:26:28.210] [voice][screen][push][nvenc] map_p95=5166us map_max=5166us pic_p95=6131us pic_max=6131us encode_time_p95=7706us encode_time_max=7706us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:28.210] [voice][screen][startup] t=14s src=32.0 caps=120/10/120/10 bwe_req=2.50 enc=2.50 pre_rtp=0.00 rtp=0.01 avail=2.50 ql=bandwidth loss=0.00 nack=0 pli=1 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=39ms
+[06:26:29.114] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=33 dropped_stale_frames=0 capture_fps=33.0 publish_fps=33.0
+[06:26:29.212] [voice][screen] async GPU convert worker stopped
+[06:26:29.212] [voice][screen] DXGI capture thread stopped
+[06:26:29.310] [voice][screen] encoder thread stopped
+[06:26:52.270] [voice][screen] capture backend default: dxgi
+[06:26:52.270] [voice][screen] DXGI build marker: hardfail-fallback-v2
+[06:26:52.270] [voice][screen] WARNING: P1080F120 is demanding (high res/fps). If FPS drops, consider lower preset (e.g. P1080F60 or P1440F30). Hardware encoder (NVENC/AMF) support is planned.
+[06:26:52.270] [voice][screen] WebRTC track mode: motion (is_screencast=false, content_hint=Fluid, ASTRIX_SCREEN_WEBRTC_MOTION_MODE=<default:on>)
+[06:26:52.270] [voice][screen] dxgi_latest_only=true (ASTRIX_DXGI_LATEST_ONLY=1) dxgi_probe_like=true (ASTRIX_DXGI_PROBE_LIKE=1)
+[06:26:52.270] [voice][screen] encode path: encoded GPU path (push_frame -> ExternalH264Encoder -> RTP)
+[06:26:52.270] [voice][screen] preset FPS lock: enabled (ASTRIX_DXGI_LOCK_PRESET_FPS=<default:on>, backend=dxgi)
+[06:26:52.270] [voice][screen] locked-source follow: disabled
+[06:26:52.270] [voice][screen] NVENC submit delay: 3 frame(s) (ASTRIX_DXGI_NVENC_SUBMIT_DELAY_FRAMES=<default:3>)
+[06:26:52.270] [voice][screen] NVENC direct RGB: enabled (ring 12 surface(s), ASTRIX_DXGI_NVENC_DIRECT_RGB=<default:on>, ASTRIX_DXGI_NVENC_RGB_RING=<default:12>)
+[06:26:52.270] [voice][screen] NV12 second D3D11 device: disabled (ASTRIX_DXGI_NV12_SECOND_DEVICE=<default:off>)
+[06:26:52.270] [voice][screen] NVENC send coalescing: disabled (ASTRIX_DXGI_NVENC_COALESCE_SEND=<default:off>)
+[06:26:52.270] [voice][screen] NVENC pre-encode leaky queue: enabled max_in_flight=8 (ASTRIX_DXGI_NVENC_LEAKY_PREENCODE=<default:on>, ASTRIX_DXGI_NVENC_LEAKY_MAX_IN_FLIGHT=<default:8>)
+[06:26:52.270] [voice][screen] NVENC starvation reset threshold: 1000ms (ASTRIX_DXGI_NVENC_STARVATION_RESET_MS=<default:1000>)
+[06:26:52.290] [gpu_device] D3D11 multithread protection ENABLED
+[06:26:52.290] [gpu_device] Selected GPU: NVIDIA GeForce RTX 3080 (discrete; 12091 MB VRAM)
+[06:26:52.291] [voice][screen] DXGI capturing monitor 0 '\\.\DISPLAY2' via adapter 0 'NVIDIA GeForce RTX 3080' / output 0 '\\.\DISPLAY2' (2560x1440 at 0,0)
+[06:26:52.298] [voice][screen] DXGI first frame acquired in probe-like latest-only mode
+[06:26:52.298] [voice][screen] DXGI probe-like private copy ring created: 2560x1440 format DXGI_FORMAT(87) (4 slots)
+[06:26:52.299] [voice][screen] DXGI latest-only texture pool created: 2560x1440 format DXGI_FORMAT(87) (6 slots)
+[06:26:52.304] [d3d11_nv12] Creating converter: 2560x1440 → 1920x1080 @ 120 fps
+[06:26:52.304] [d3d11_nv12] Flush policy: startup-only (3 frame(s)); ASTRIX_CONVERT_TELEMETRY_LIGHT=1
+[06:26:52.304] [d3d11_nv12] NV12 output ring: 16 surface(s)
+[06:26:52.304] [d3d11_nv12] VideoProcessor usage: optimal-speed (ASTRIX_DXGI_NV12_OPTIMAL_SPEED=<default:on>)
+[06:26:52.304] [d3d11_nv12] ContentDesc: 2560x1440 -> 1920x1080 fps=120/1
+[06:26:52.304] [d3d11_nv12] BGRA format flags: 0x3
+[06:26:52.304] [d3d11_nv12] RGBA format flags: 0x3
+[06:26:52.304] [d3d11_nv12] NV12 format flags: 0x3
+[06:26:52.304] [d3d11_nv12] VideoProcessorCaps: RateConversionCapsCount=1, MaxInputStreams=5, InputFormatCaps=0x4, FeatureCaps=0x3ef
+[06:26:52.304] [d3d11_nv12] Using rate conversion index: 0 (RateConversionCapsCount=1)
+[06:26:52.305] [d3d11_nv12] NV12Tex desc: 1920x1080 format=DXGI_FORMAT(103) mip=1 array=1 sample=1 bind=0x28 ring=16
+[06:26:52.305] [d3d11_nv12] Creating RGB scaler: 2560x1440 -> 1920x1080 @ 120 fps
+[06:26:52.305] [d3d11_nv12] RGB scaler usage: optimal-speed (ASTRIX_DXGI_NV12_OPTIMAL_SPEED=<default:on>, ASTRIX_DXGI_RGB_SCALE_PATH=compute, ASTRIX_CONVERT_TELEMETRY_LIGHT=1)
+[06:26:52.305] [d3d11_nv12] RGB scaler formats: BGRA=0x3 RGBA=0x3
+[06:26:52.310] [d3d11_nv12] RGB scaler compute CB ring: 16 buffer(s)
+[06:26:52.310] [d3d11_nv12] RGB scaler path: compute bilinear BGRA (ASTRIX_DXGI_RGB_SCALE_COMPUTE=<default:on>)
+[06:26:52.310] [voice][screen] NVENC direct RGB scaler created: 2560x1440 -> 1920x1080 (16 surface(s))
+[06:26:52.312] [voice][screen] stream preview publisher disabled (headless/log-only)
+[06:26:52.312] [voice][screen][audio] process loopback activated for ExcludeCurrentProcessTree
+[06:26:52.312] [voice][screen][audio] process loopback format: 48000 Hz, 2 ch, 16-bit PCM
+[06:26:52.318] [voice][screen][audio] excluding sibling Astrix processes from monitor stream: [4616]
+[06:26:52.318] [voice][screen][audio] process loopback activated for IncludeProcessTree(4616)
+[06:26:52.318] [voice][screen][audio] process loopback format: 48000 Hz, 2 ch, 16-bit PCM
+[06:26:52.319] [nvenc_d11] GIR enabled: period=120 frames, duration=60 frames
+[06:26:52.345] [nvenc_d11] init: custom async p1 (fps=120, async=on, low_latency=prefer-fast, input=ARGB/BGRA, h264_fast=on)
+[06:26:52.345] [nvenc_d11] config: label=custom async p1 tuning=3 preset_p1=1 preset_p4=0 rc=2 multipass=0 lookahead=0 depth=0 aq=0 aq_strength=0 temporal_aq=0 zero_reorder=1 non_ref_p=1 strict_gop=1 frame_interval_p=1 gop=4294967295 idr=4294967295 vbv=8750000/4375000 h264_fast profile_baseline=1 entropy=2 adaptive_transform=1 deblock=2 b_ref=0 bdirect=1 hier_p=0 hier_b=0 temporal_svc=0 intra_refresh=1 ltr=0 refs_l0=1 refs_l1=0 max_ref=1 async=1
+[06:26:52.384] [encoded_h264] selected NVENC D3D11 backend: NVIDIA GeForce RTX 3080
+[06:26:52.384] [voice][screen] Screen capture: NVENC D3D11 (NVIDIA GeForce RTX 3080, hardware)
+[06:26:52.384] [voice][screen] NVENC tuning: preset bitrate cap 35.0 Mbps, periodic IDR default 20s
+[06:26:52.384] [voice][screen] NVENC input path: direct RGB scale ring
+[06:26:52.384] [voice][screen] encoded backend steady-state: pipelined submit+collect mode
+[06:26:52.384] [voice][screen] async GPU convert worker: enabled (direct RGB scale)
+[06:26:52.384] [voice][screen] async GPU convert worker: waiting for first scaled frame
+[06:26:52.389] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=0
+[06:26:52.400] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11173 us
+[06:26:52.401] [voice][screen] encoded backend startup: pushing first encoded frame bytes=8208 key=true
+[06:26:52.401] [voice][screen] encoded backend startup keyframe: first 3 frames as IDR
+[06:26:52.401] [voice][screen] NVENC active submit delay: 0 frame(s) (ring 16, rgb_scale=on)
+[06:26:53.291] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=79 dropped_stale_frames=11 capture_fps=79.0 publish_fps=68.0
+[06:26:53.354] [voice][screen][push][summary] tick=20792.8 slot_ready=20788.2 slot_miss=4.6 pool_miss=0 late_ticks=0 drop_frames=0 need_init=1 new_content=22509 reuse_content=17 static_reuse=0 empty=22497 sent=35.1 target=120 schedule=10 mode=pipelined
+[06:26:53.354] [voice][screen][push][timing] convert=22/0 avg=2959us ctx_avg=0us gpu_avg=2959us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=22/0 avg=108us ctx_avg=0us call_avg=108us ready=imm:0 wait:0 timeout:0 avg=0us submit=38/0 avg=2us map_avg=1204us pic_avg=3671us collect=some:37 none:33 err:0 frames=34.1 avg=334us encode=43/0 avg=809us send_calls=35.1 avg_send=1us
+[06:26:53.354] [voice][screen][push][fps] dxgi_capture_fps=79.0 convert_input_fps=20772.5 convert_output_fps=20.3 nvenc_submit_fps=35.1 nvenc_collect_fps=34.1 send_fps=35.1
+[06:26:53.354] [voice][screen][push][burst] sent_frames=38 key=3 avg_frame=0KB max_frame=8KB gap_avg=23054us gap_max=100005us burst_gaps=11 stall_gaps=0
+[06:26:53.354] [voice][screen][push][nvenc] map_p95=5231us map_max=8017us pic_p95=7260us pic_max=10851us encode_time_p95=9913us encode_time_max=12935us in_flight_p95=8 in_flight_max=8 frame_p95=8KB frame_max=8KB pre_drop=4 pre_drop_key=0 leaky_ticks=4
+[06:26:53.354] [voice][screen][startup] t=1s src=79.0 caps=120/10/60/10 bwe_req=2.50 enc=2.50 pre_rtp=0.18 rtp=0.01 avail=2.50 ql=none loss=0.00 nack=0 pli=3 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=34ms
+[06:26:54.292] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=91 dropped_stale_frames=2 capture_fps=90.9 publish_fps=88.9
+[06:26:54.354] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=10 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:54.354] [voice][screen][push][timing] convert=10/0 avg=2217us ctx_avg=0us gpu_avg=2217us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=10/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=10/0 avg=4us map_avg=1080us pic_avg=3619us collect=some:10 none:10 err:0 frames=10.0 avg=1us encode=10/0 avg=11us send_calls=10.0 avg_send=2us
+[06:26:54.354] [voice][screen][push][fps] dxgi_capture_fps=90.9 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:54.354] [voice][screen][push][burst] sent_frames=10 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100294us burst_gaps=0 stall_gaps=0
+[06:26:54.354] [voice][screen][push][nvenc] map_p95=4301us map_max=4301us pic_p95=7579us pic_max=7579us encode_time_p95=7393us encode_time_max=7393us in_flight_p95=1 in_flight_max=1 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:54.354] [voice][screen][startup] t=2s src=90.9 caps=120/10/60/10 bwe_req=2.50 enc=2.50 pre_rtp=0.07 rtp=0.00 avail=2.50 ql=none loss=0.00 nack=0 pli=4 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=32ms
+[06:26:55.292] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=92 dropped_stale_frames=1 capture_fps=92.0 publish_fps=91.0
+[06:26:55.454] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=pipelined
+[06:26:55.454] [voice][screen][push][timing] convert=11/0 avg=2109us ctx_avg=0us gpu_avg=2109us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=3us map_avg=1794us pic_avg=3810us collect=some:11 none:11 err:0 frames=10.0 avg=5us encode=11/0 avg=19us send_calls=10.0 avg_send=2us
+[06:26:55.454] [voice][screen][push][fps] dxgi_capture_fps=92.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=10.0 nvenc_collect_fps=10.0 send_fps=10.0
+[06:26:55.454] [voice][screen][push][burst] sent_frames=11 key=2 avg_frame=1KB max_frame=8KB gap_avg=99999us gap_max=100452us burst_gaps=0 stall_gaps=0
+[06:26:55.454] [voice][screen][push][nvenc] map_p95=6023us map_max=6023us pic_p95=9307us pic_max=9307us encode_time_p95=6403us encode_time_max=6403us in_flight_p95=1 in_flight_max=1 frame_p95=8KB frame_max=8KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:55.454] [voice][screen][startup] t=3s src=92.0 caps=120/10/90/10 bwe_req=4.37 enc=4.37 pre_rtp=0.06 rtp=0.14 avail=4.44 ql=none loss=0.00 nack=0 pli=5 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=32ms
+[06:26:56.292] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=72 dropped_stale_frames=3 capture_fps=72.0 publish_fps=69.0
+[06:26:56.554] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=8 reuse_content=3 static_reuse=0 empty=3 sent=7.3 target=120 schedule=10 mode=pipelined
+[06:26:56.554] [voice][screen][push][timing] convert=8/0 avg=2606us ctx_avg=0us gpu_avg=2606us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=8/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=11/0 avg=3us map_avg=909us pic_avg=4343us collect=some:8 none:11 err:0 frames=7.3 avg=1us encode=11/0 avg=9us send_calls=7.3 avg_send=2us
+[06:26:56.554] [voice][screen][push][fps] dxgi_capture_fps=72.0 convert_input_fps=7.3 convert_output_fps=7.3 nvenc_submit_fps=10.0 nvenc_collect_fps=7.3 send_fps=7.3
+[06:26:56.554] [voice][screen][push][burst] sent_frames=8 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100364us burst_gaps=0 stall_gaps=0
+[06:26:56.554] [voice][screen][push][nvenc] map_p95=4542us map_max=4542us pic_p95=7830us pic_max=7830us encode_time_p95=10629us encode_time_max=10629us in_flight_p95=3 in_flight_max=4 frame_p95=0KB frame_max=0KB pre_drop=0 pre_drop_key=0 leaky_ticks=0
+[06:26:56.554] [voice][screen][startup] t=4s src=72.0 caps=120/10/120/10 bwe_req=4.37 enc=4.37 pre_rtp=0.00 rtp=0.00 avail=4.44 ql=none loss=0.00 nack=0 pli=5 path=tcp/passive prflx -> tcp/passive host (in-progress, nominated) rtt=32ms
+[06:26:56.954] [voice][screen] NVENC adaptive submit cap: 120 -> 60 fps (convert_avg=0.0ms in_flight=8/16, hold=3s)
+[06:26:57.293] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:26:57.654] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=11 static_reuse=0 empty=11 sent=0.0 target=120 schedule=10 mode=pipelined
+[06:26:57.654] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=4/0 avg=3us map_avg=862us pic_avg=5286us collect=some:0 none:11 err:0 frames=0.0 avg=1us encode=11/0 avg=3us send_calls=0.0 avg_send=0us
+[06:26:57.654] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=3.6 nvenc_collect_fps=0.0 send_fps=0.0
+[06:26:57.654] [voice][screen][push][nvenc] map_p95=1564us map_max=1564us pic_p95=7298us pic_max=7298us encode_time_p95=0us encode_time_max=0us in_flight_p95=8 in_flight_max=8 frame_p95=0KB frame_max=0KB pre_drop=7 pre_drop_key=0 leaky_ticks=7
+[06:26:57.654] [voice][screen][startup] t=5s src=0.0 caps=120/10/120/10 bwe_req=4.37 enc=4.37 pre_rtp=- rtp=0.00 avail=4.44 ql=none loss=0.00 nack=0 pli=5 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=32ms
+[06:26:57.954] [voice][screen] nvenc_soft_drain_start elapsed=1099ms threshold=1000ms in_flight_before=8 sent=0
+[06:26:58.294] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:26:58.659] [voice][screen][startup] t=6s src=0.0 caps=120/10/120/10 bwe_req=4.37 enc=4.37 pre_rtp=- rtp=0.00 avail=4.44 ql=none loss=0.00 nack=0 pli=5 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=32ms
+[06:26:58.754] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=11 static_reuse=0 empty=11 sent=0.0 target=120 schedule=10 mode=pipelined
+[06:26:58.754] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:11 err:0 frames=0.0 avg=1us encode=11/0 avg=2us send_calls=0.0 avg_send=0us
+[06:26:58.754] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:26:58.754] [voice][screen][push][nvenc] map_p95=0us map_max=0us pic_p95=0us pic_max=0us encode_time_p95=0us encode_time_max=0us in_flight_p95=8 in_flight_max=8 frame_p95=0KB frame_max=0KB pre_drop=11 pre_drop_key=0 leaky_ticks=11
+[06:26:59.294] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:26:59.760] [voice][screen][startup] t=7s src=0.0 caps=120/10/120/10 bwe_req=4.37 enc=4.37 pre_rtp=- rtp=0.00 avail=4.44 ql=none loss=0.00 nack=0 pli=6 path=tcp/passive prflx -> tcp/passive host (succeeded, nominated) rtt=33ms
+[06:26:59.854] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=11 static_reuse=0 empty=11 sent=0.0 target=120 schedule=10 mode=pipelined
+[06:26:59.854] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:11 err:0 frames=0.0 avg=1us encode=11/0 avg=3us send_calls=0.0 avg_send=0us
+[06:26:59.854] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:26:59.854] [voice][screen][push][nvenc] map_p95=0us map_max=0us pic_p95=0us pic_max=0us encode_time_p95=0us encode_time_max=0us in_flight_p95=8 in_flight_max=8 frame_p95=0KB frame_max=0KB pre_drop=11 pre_drop_key=0 leaky_ticks=11
+[06:27:00.295] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:00.459] [voice][screen] nvenc_controlled_reset reason=stuck_soft_drain in_flight_before=8 in_flight_after_drain=8 drain_ms=2500 drained_outputs=0 errors=0
+[06:27:14.392] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=1 dropped_stale_frames=0 capture_fps=0.1 publish_fps=0.1
+[06:27:14.409] [voice][screen][push][summary] tick=0.5 slot_ready=0.5 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=7 static_reuse=0 empty=7 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:14.409] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:7 err:0 frames=0.0 avg=1us encode=7/0 avg=2us send_calls=0.0 avg_send=0us
+[06:27:14.409] [voice][screen][push][fps] dxgi_capture_fps=0.1 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:14.409] [voice][screen][push][nvenc] map_p95=0us map_max=0us pic_p95=0us pic_max=0us encode_time_p95=0us encode_time_max=0us in_flight_p95=8 in_flight_max=8 frame_p95=0KB frame_max=0KB pre_drop=7 pre_drop_key=0 leaky_ticks=7
+[06:27:14.461] [nvenc_d11] GIR enabled: period=120 frames, duration=60 frames
+[06:27:14.470] [nvenc_d11] init: custom async p1 (fps=120, async=on, low_latency=prefer-fast, input=ARGB/BGRA, h264_fast=on)
+[06:27:14.470] [nvenc_d11] config: label=custom async p1 tuning=3 preset_p1=1 preset_p4=0 rc=2 multipass=0 lookahead=0 depth=0 aq=0 aq_strength=0 temporal_aq=0 zero_reorder=1 non_ref_p=1 strict_gop=1 frame_interval_p=1 gop=4294967295 idr=4294967295 vbv=909791/454895 h264_fast profile_baseline=1 entropy=2 adaptive_transform=1 deblock=2 b_ref=0 bdirect=1 hier_p=0 hier_b=0 temporal_svc=0 intra_refresh=1 ltr=0 refs_l0=1 refs_l1=0 max_ref=1 async=1
+[06:27:14.502] [encoded_h264] selected NVENC D3D11 backend: NVIDIA GeForce RTX 3080
+[06:27:14.502] [voice][screen] periodic IDR (GIR recovery, every 20s)
+[06:27:14.502] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=8333312
+[06:27:14.512] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 9956 us
+[06:27:14.512] [voice][screen] encoded backend startup: pushing first encoded frame bytes=8167 key=true
+[06:27:14.554] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=8433312
+[06:27:14.554] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 8 us
+[06:27:14.554] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:14.654] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=8533312
+[06:27:14.654] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 13 us
+[06:27:14.654] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:14.754] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=8633312
+[06:27:14.754] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 15 us
+[06:27:14.754] [voice][screen] encoded backend startup: pushing first encoded frame bytes=1002 key=false
+[06:27:14.854] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=8733312
+[06:27:14.854] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:14.854] [voice][screen] encoded backend startup: pushing first encoded frame bytes=25 key=false
+[06:27:14.954] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=8833312
+[06:27:14.954] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:14.954] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:15.054] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=8933312
+[06:27:15.054] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:15.054] [voice][screen] encoded backend startup: pushing first encoded frame bytes=30 key=false
+[06:27:15.154] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=9033312
+[06:27:15.154] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 13 us
+[06:27:15.154] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:15.254] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=9133312
+[06:27:15.254] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 9 us
+[06:27:15.254] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:15.354] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=9233312
+[06:27:15.354] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12 us
+[06:27:15.354] [voice][screen] encoded backend startup: pushing first encoded frame bytes=162 key=false
+[06:27:15.393] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=35 dropped_stale_frames=2 capture_fps=35.0 publish_fps=33.0
+[06:27:15.454] [voice][screen][push][summary] tick=10.5 slot_ready=10.5 slot_miss=0.0 pool_miss=0 late_ticks=1 drop_frames=140 need_init=1 new_content=10 reuse_content=0 static_reuse=0 empty=1 sent=8.6 target=120 schedule=10 mode=blocking
+[06:27:15.454] [voice][screen][push][timing] convert=10/0 avg=3273us ctx_avg=0us gpu_avg=3273us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=10/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=10/0 avg=1005us send_calls=9.6 avg_send=3us
+[06:27:15.454] [voice][screen][push][fps] dxgi_capture_fps=35.0 convert_input_fps=9.6 convert_output_fps=9.6 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=8.6
+[06:27:15.454] [voice][screen][push][burst] sent_frames=9 key=1 avg_frame=1KB max_frame=7KB gap_avg=2133333us gap_max=18358818us burst_gaps=0 stall_gaps=1
+[06:27:15.454] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=9333312
+[06:27:15.454] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 9 us
+[06:27:15.454] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:15.554] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=9433312
+[06:27:15.554] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 13 us
+[06:27:15.554] [voice][screen] encoded backend startup: pushing first encoded frame bytes=16 key=false
+[06:27:15.654] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=9533312
+[06:27:15.654] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:15.654] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:15.754] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=9633312
+[06:27:15.754] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:15.754] [voice][screen] encoded backend startup: pushing first encoded frame bytes=38 key=false
+[06:27:15.854] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=9733312
+[06:27:15.854] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:15.854] [voice][screen] encoded backend startup: pushing first encoded frame bytes=15 key=false
+[06:27:15.954] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=9833312
+[06:27:15.954] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:15.954] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:16.054] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=9933312
+[06:27:16.054] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 9 us
+[06:27:16.054] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:16.154] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=10033312
+[06:27:16.154] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12 us
+[06:27:16.154] [voice][screen] encoded backend startup: pushing first encoded frame bytes=184 key=false
+[06:27:16.254] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=10133312
+[06:27:16.254] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:16.254] [voice][screen] encoded backend startup: pushing first encoded frame bytes=26 key=false
+[06:27:16.354] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=10233312
+[06:27:16.354] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:16.354] [voice][screen] encoded backend startup: pushing first encoded frame bytes=14 key=false
+[06:27:16.393] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=33 dropped_stale_frames=0 capture_fps=33.0 publish_fps=33.0
+[06:27:16.454] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=10333312
+[06:27:16.454] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 9 us
+[06:27:16.454] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:16.554] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=11 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=blocking
+[06:27:16.554] [voice][screen][push][timing] convert=11/0 avg=2867us ctx_avg=0us gpu_avg=2867us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=11/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=11/0 avg=10us send_calls=10.0 avg_send=3us
+[06:27:16.554] [voice][screen][push][fps] dxgi_capture_fps=33.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=10.0
+[06:27:16.554] [voice][screen][push][burst] sent_frames=11 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100823us burst_gaps=0 stall_gaps=0
+[06:27:16.554] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=10433312
+[06:27:16.554] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 7 us
+[06:27:16.554] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:16.654] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=10533312
+[06:27:16.654] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 9 us
+[06:27:16.654] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:16.754] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=10633312
+[06:27:16.754] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:16.754] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:16.854] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=10733312
+[06:27:16.854] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:16.854] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:16.954] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=10833312
+[06:27:16.954] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 13 us
+[06:27:16.954] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:17.054] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=10933312
+[06:27:17.054] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:17.054] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:17.154] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=11033312
+[06:27:17.154] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12 us
+[06:27:17.154] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:17.254] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=11133312
+[06:27:17.254] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12 us
+[06:27:17.254] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:17.354] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=11233312
+[06:27:17.354] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:17.354] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:17.394] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=39 dropped_stale_frames=0 capture_fps=39.0 publish_fps=39.0
+[06:27:17.454] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=11333312
+[06:27:17.454] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12 us
+[06:27:17.454] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:17.554] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=10 reuse_content=0 static_reuse=0 empty=0 sent=10.0 target=120 schedule=10 mode=blocking
+[06:27:17.554] [voice][screen][push][timing] convert=10/0 avg=3398us ctx_avg=0us gpu_avg=3398us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=10/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=10/0 avg=10us send_calls=10.0 avg_send=3us
+[06:27:17.554] [voice][screen][push][fps] dxgi_capture_fps=39.0 convert_input_fps=10.0 convert_output_fps=10.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=10.0
+[06:27:17.554] [voice][screen][push][burst] sent_frames=10 key=0 avg_frame=0KB max_frame=0KB gap_avg=100000us gap_max=100296us burst_gaps=0 stall_gaps=0
+[06:27:17.554] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=11433312
+[06:27:17.554] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 9 us
+[06:27:17.554] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:17.654] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=11533312
+[06:27:17.654] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:17.654] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:17.754] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=11633312
+[06:27:17.754] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 9 us
+[06:27:17.754] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:17.854] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=11733312
+[06:27:17.854] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12 us
+[06:27:17.854] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:17.954] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=11833312
+[06:27:17.954] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 10 us
+[06:27:17.954] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:18.054] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=11933312
+[06:27:18.054] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 11 us
+[06:27:18.054] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:18.154] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=12033312
+[06:27:18.154] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 11 us
+[06:27:18.154] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:18.254] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=12133312
+[06:27:18.254] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 10 us
+[06:27:18.254] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:18.354] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=12233312
+[06:27:18.354] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 11 us
+[06:27:18.354] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:18.394] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=14 dropped_stale_frames=0 capture_fps=14.0 publish_fps=14.0
+[06:27:18.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=12333312
+[06:27:18.574] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 120424 us
+[06:27:18.574] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:18.574] [voice][screen][push][summary] tick=9.8 slot_ready=9.8 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=4 reuse_content=6 static_reuse=0 empty=6 sent=3.9 target=120 schedule=10 mode=blocking
+[06:27:18.574] [voice][screen][push][timing] convert=4/0 avg=2552us ctx_avg=0us gpu_avg=2552us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=4/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=10/0 avg=12051us send_calls=9.8 avg_send=1us
+[06:27:18.574] [voice][screen][push][fps] dxgi_capture_fps=14.0 convert_input_fps=3.9 convert_output_fps=3.9 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=3.9
+[06:27:18.574] [voice][screen][push][burst] sent_frames=4 key=0 avg_frame=0KB max_frame=0KB gap_avg=99999us gap_max=100361us burst_gaps=0 stall_gaps=0
+[06:27:18.574] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=12433312
+[06:27:18.694] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 120191 us
+[06:27:18.694] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:18.694] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=12533312
+[06:27:18.815] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 120443 us
+[06:27:18.815] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:18.815] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=12633312
+[06:27:18.935] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 120095 us
+[06:27:18.935] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:18.935] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=12733312
+[06:27:19.055] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 120121 us
+[06:27:19.055] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:19.055] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=12833312
+[06:27:19.175] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 120186 us
+[06:27:19.175] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:19.175] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=12933312
+[06:27:19.296] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 120204 us
+[06:27:19.296] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:19.296] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13033312
+[06:27:19.394] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:19.416] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 120033 us
+[06:27:19.416] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:19.416] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13133312
+[06:27:19.536] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 120043 us
+[06:27:19.536] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:19.536] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13233312
+[06:27:19.656] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 120245 us
+[06:27:19.656] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:19.656] [voice][screen][push][summary] tick=8.3 slot_ready=8.3 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=9 static_reuse=0 empty=9 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:19.656] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=9/0 avg=120173us send_calls=8.3 avg_send=0us
+[06:27:19.656] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:19.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:19.755] [voice][screen] encoded backend startup: encode() failed after 1934 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:19.755] [voice][screen] NVENC backpressure/stall (transient 1/120), dropping frame: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:19.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:19.855] [voice][screen] encoded backend startup: encode() failed after 1764 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:19.855] [voice][screen] NVENC backpressure/stall (transient 2/120), dropping frame: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:19.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:19.955] [voice][screen] encoded backend startup: encode() failed after 1579 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:19.955] [voice][screen] NVENC backpressure/stall (transient 3/120), dropping frame: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:20.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:20.055] [voice][screen] encoded backend startup: encode() failed after 1041 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:20.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:20.156] [voice][screen] encoded backend startup: encode() failed after 1966 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:20.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:20.255] [voice][screen] encoded backend startup: encode() failed after 1891 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:20.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:20.355] [voice][screen] encoded backend startup: encode() failed after 1218 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:20.395] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=1 dropped_stale_frames=0 capture_fps=1.0 publish_fps=1.0
+[06:27:20.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:20.455] [voice][screen] encoded backend startup: encode() failed after 1944 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:20.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:20.555] [voice][screen] encoded backend startup: encode() failed after 1197 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:20.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:20.656] [voice][screen] encoded backend startup: encode() failed after 2268 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:20.754] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=1 drop_frames=3 need_init=0 new_content=1 reuse_content=9 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:20.754] [voice][screen][push][timing] convert=1/0 avg=4us ctx_avg=0us gpu_avg=4us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=1/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/10 avg=1680us send_calls=0.0 avg_send=0us
+[06:27:20.754] [voice][screen][push][fps] dxgi_capture_fps=1.0 convert_input_fps=0.9 convert_output_fps=0.9 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:20.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:20.755] [voice][screen] encoded backend startup: encode() failed after 1191 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:20.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:20.856] [voice][screen] encoded backend startup: encode() failed after 1961 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:20.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:20.955] [voice][screen] encoded backend startup: encode() failed after 1486 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:21.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:21.056] [voice][screen] encoded backend startup: encode() failed after 2422 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:21.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:21.155] [voice][screen] encoded backend startup: encode() failed after 1488 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:21.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:21.256] [voice][screen] encoded backend startup: encode() failed after 2180 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:21.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:21.355] [voice][screen] encoded backend startup: encode() failed after 1588 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:21.395] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:21.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:21.455] [voice][screen] encoded backend startup: encode() failed after 1629 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:21.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:21.555] [voice][screen] encoded backend startup: encode() failed after 1388 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:21.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:21.655] [voice][screen] encoded backend startup: encode() failed after 1589 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:21.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:21.757] [voice][screen] encoded backend startup: encode() failed after 2060 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:21.854] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=11 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:21.854] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/11 avg=1725us send_calls=0.0 avg_send=0us
+[06:27:21.854] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:21.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:21.856] [voice][screen] encoded backend startup: encode() failed after 1590 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:21.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:21.955] [voice][screen] encoded backend startup: encode() failed after 1624 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:22.055] [voice][screen] encoded backend startup: encode() failed after 1748 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:22.155] [voice][screen] encoded backend startup: encode() failed after 1550 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:22.255] [voice][screen] encoded backend startup: encode() failed after 1895 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:22.355] [voice][screen] encoded backend startup: encode() failed after 1877 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.395] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:22.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:22.455] [voice][screen] encoded backend startup: encode() failed after 1432 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:22.555] [voice][screen] encoded backend startup: encode() failed after 1274 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:22.655] [voice][screen] encoded backend startup: encode() failed after 1054 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.655] [voice][screen] NVENC backpressure/stall (transient 30/120), dropping frame: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:22.755] [voice][screen] encoded backend startup: encode() failed after 1211 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:22.855] [voice][screen] encoded backend startup: encode() failed after 1108 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:22.954] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=11 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:22.954] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/11 avg=1487us send_calls=0.0 avg_send=0us
+[06:27:22.954] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:22.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:22.956] [voice][screen] encoded backend startup: encode() failed after 1699 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:23.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:23.055] [voice][screen] encoded backend startup: encode() failed after 1909 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:23.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:23.155] [voice][screen] encoded backend startup: encode() failed after 1769 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:23.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:23.256] [voice][screen] encoded backend startup: encode() failed after 2163 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:23.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:23.355] [voice][screen] encoded backend startup: encode() failed after 1414 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:23.395] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:23.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:23.455] [voice][screen] encoded backend startup: encode() failed after 1835 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:23.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:23.555] [voice][screen] encoded backend startup: encode() failed after 1616 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:23.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:23.656] [voice][screen] encoded backend startup: encode() failed after 2099 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:23.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:23.755] [voice][screen] encoded backend startup: encode() failed after 1174 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:23.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:23.856] [voice][screen] encoded backend startup: encode() failed after 1987 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:23.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:23.956] [voice][screen] encoded backend startup: encode() failed after 2064 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:24.054] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=11 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:24.054] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/11 avg=1793us send_calls=0.0 avg_send=0us
+[06:27:24.054] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:24.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:24.056] [voice][screen] encoded backend startup: encode() failed after 2060 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:24.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:24.155] [voice][screen] encoded backend startup: encode() failed after 1018 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:24.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:24.255] [voice][screen] encoded backend startup: encode() failed after 1561 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:24.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:24.355] [voice][screen] encoded backend startup: encode() failed after 1495 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:24.395] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:24.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:24.456] [voice][screen] encoded backend startup: encode() failed after 2149 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:24.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:24.555] [voice][screen] encoded backend startup: encode() failed after 1631 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:24.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:24.655] [voice][screen] encoded backend startup: encode() failed after 1214 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:24.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:24.756] [voice][screen] encoded backend startup: encode() failed after 2353 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:24.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:24.855] [voice][screen] encoded backend startup: encode() failed after 1025 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:24.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:24.955] [voice][screen] encoded backend startup: encode() failed after 1772 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.054] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=10 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:25.054] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/10 avg=1627us send_calls=0.0 avg_send=0us
+[06:27:25.054] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:25.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:25.055] [voice][screen] encoded backend startup: encode() failed after 1031 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:25.155] [voice][screen] encoded backend startup: encode() failed after 1637 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:25.255] [voice][screen] encoded backend startup: encode() failed after 1666 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:25.355] [voice][screen] encoded backend startup: encode() failed after 1837 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.396] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:25.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:25.455] [voice][screen] encoded backend startup: encode() failed after 1010 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:25.555] [voice][screen] encoded backend startup: encode() failed after 1456 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:25.655] [voice][screen] encoded backend startup: encode() failed after 1540 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.655] [voice][screen] NVENC backpressure/stall (transient 60/120), dropping frame: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:25.755] [voice][screen] encoded backend startup: encode() failed after 1162 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:25.855] [voice][screen] encoded backend startup: encode() failed after 1581 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:25.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:25.955] [voice][screen] encoded backend startup: encode() failed after 1742 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:26.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:26.055] [voice][screen] encoded backend startup: encode() failed after 1711 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:26.154] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=11 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:26.154] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/11 avg=1488us send_calls=0.0 avg_send=0us
+[06:27:26.154] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:26.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:26.155] [voice][screen] encoded backend startup: encode() failed after 1643 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:26.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:26.255] [voice][screen] encoded backend startup: encode() failed after 1697 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:26.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:26.355] [voice][screen] encoded backend startup: encode() failed after 1625 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:26.397] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:26.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:26.455] [voice][screen] encoded backend startup: encode() failed after 1930 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:26.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:26.555] [voice][screen] encoded backend startup: encode() failed after 1785 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:26.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:26.655] [voice][screen] encoded backend startup: encode() failed after 1774 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:26.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:26.755] [voice][screen] encoded backend startup: encode() failed after 1325 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:26.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:26.855] [voice][screen] encoded backend startup: encode() failed after 1660 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:26.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:26.955] [voice][screen] encoded backend startup: encode() failed after 1139 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:27.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:27.056] [voice][screen] encoded backend startup: encode() failed after 2423 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:27.154] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=10 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:27.154] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/10 avg=1700us send_calls=0.0 avg_send=0us
+[06:27:27.154] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:27.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:27.156] [voice][screen] encoded backend startup: encode() failed after 1916 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:27.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:27.255] [voice][screen] encoded backend startup: encode() failed after 1849 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:27.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:27.355] [voice][screen] encoded backend startup: encode() failed after 1563 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:27.397] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:27.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:27.455] [voice][screen] encoded backend startup: encode() failed after 1795 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:27.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:27.555] [voice][screen] encoded backend startup: encode() failed after 1141 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:27.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:27.655] [voice][screen] encoded backend startup: encode() failed after 1471 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:27.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:27.755] [voice][screen] encoded backend startup: encode() failed after 1533 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:27.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:27.855] [voice][screen] encoded backend startup: encode() failed after 1614 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:27.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:27.955] [voice][screen] encoded backend startup: encode() failed after 1621 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:28.055] [voice][screen] encoded backend startup: encode() failed after 1714 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:28.156] [voice][screen] encoded backend startup: encode() failed after 2468 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.254] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=11 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:28.254] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/11 avg=1698us send_calls=0.0 avg_send=0us
+[06:27:28.254] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:28.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:28.256] [voice][screen] encoded backend startup: encode() failed after 2313 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:28.356] [voice][screen] encoded backend startup: encode() failed after 2013 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.398] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:28.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:28.455] [voice][screen] encoded backend startup: encode() failed after 1019 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:28.555] [voice][screen] encoded backend startup: encode() failed after 1338 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:28.655] [voice][screen] encoded backend startup: encode() failed after 1913 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.655] [voice][screen] NVENC backpressure/stall (transient 90/120), dropping frame: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:28.755] [voice][screen] encoded backend startup: encode() failed after 1802 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:28.855] [voice][screen] encoded backend startup: encode() failed after 1820 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:28.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:28.956] [voice][screen] encoded backend startup: encode() failed after 1967 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:29.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:29.055] [voice][screen] encoded backend startup: encode() failed after 1390 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:29.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:29.156] [voice][screen] encoded backend startup: encode() failed after 2424 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:29.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:29.256] [voice][screen] encoded backend startup: encode() failed after 2101 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:29.354] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=11 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:29.354] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/11 avg=1827us send_calls=0.0 avg_send=0us
+[06:27:29.354] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:29.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:29.356] [voice][screen] encoded backend startup: encode() failed after 2017 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:29.398] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:29.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:29.455] [voice][screen] encoded backend startup: encode() failed after 1271 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:29.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:29.556] [voice][screen] encoded backend startup: encode() failed after 2478 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:29.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:29.656] [voice][screen] encoded backend startup: encode() failed after 2030 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:29.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:29.756] [voice][screen] encoded backend startup: encode() failed after 2280 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:29.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:29.855] [voice][screen] encoded backend startup: encode() failed after 1383 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:29.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:29.955] [voice][screen] encoded backend startup: encode() failed after 1075 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:30.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:30.056] [voice][screen] encoded backend startup: encode() failed after 2512 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:30.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:30.155] [voice][screen] encoded backend startup: encode() failed after 1043 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:30.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:30.255] [voice][screen] encoded backend startup: encode() failed after 1058 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:30.354] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=10 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:30.354] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/10 avg=1714us send_calls=0.0 avg_send=0us
+[06:27:30.354] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:30.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:30.356] [voice][screen] encoded backend startup: encode() failed after 2229 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:30.398] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:30.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:30.455] [voice][screen] encoded backend startup: encode() failed after 1204 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:30.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:30.555] [voice][screen] encoded backend startup: encode() failed after 1893 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:30.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:30.655] [voice][screen] encoded backend startup: encode() failed after 1221 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:30.754] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:30.755] [voice][screen] encoded backend startup: encode() failed after 1695 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:30.854] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:30.855] [voice][screen] encoded backend startup: encode() failed after 1234 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:30.954] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:30.955] [voice][screen] encoded backend startup: encode() failed after 1119 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:31.054] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:31.055] [voice][screen] encoded backend startup: encode() failed after 1323 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:31.154] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:31.155] [voice][screen] encoded backend startup: encode() failed after 1935 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:31.254] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:31.255] [voice][screen] encoded backend startup: encode() failed after 1922 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:31.354] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:31.355] [voice][screen] encoded backend startup: encode() failed after 1739 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:31.399] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:31.454] [voice][screen][push][summary] tick=10.0 slot_ready=10.0 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=11 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:31.454] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/11 avg=1592us send_calls=0.0 avg_send=0us
+[06:27:31.454] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:31.454] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:31.456] [voice][screen] encoded backend startup: encode() failed after 1886 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:31.554] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:31.555] [voice][screen] encoded backend startup: encode() failed after 1714 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:31.654] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:31.655] [voice][screen] encoded backend startup: encode() failed after 1666 us: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:31.655] [voice][screen] NVENC backpressure/stall (transient 120/120), dropping frame: Nvenc(QueueFull { pending: 16, ring_size: 16 })
+[06:27:31.655] [voice][screen] NVENC backpressure persisted for 120 frames, falling back
+[06:27:31.655] [voice][screen] DXGI+MFT: retrying encoder path after reset
+[06:27:37.628] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=0 dropped_stale_frames=0 capture_fps=0.0 publish_fps=0.0
+[06:27:37.645] [voice][screen][push][summary] tick=0.5 slot_ready=0.5 slot_miss=0.0 pool_miss=0 late_ticks=0 drop_frames=0 need_init=0 new_content=0 reuse_content=3 static_reuse=0 empty=0 sent=0.0 target=120 schedule=10 mode=blocking
+[06:27:37.645] [voice][screen][push][timing] convert=0/0 avg=0us ctx_avg=0us gpu_avg=0us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=0/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=0/3 avg=1755us send_calls=0.0 avg_send=0us
+[06:27:37.645] [voice][screen][push][fps] dxgi_capture_fps=0.0 convert_input_fps=0.0 convert_output_fps=0.0 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=0.0
+[06:27:37.645] [d3d11_nv12] Creating converter: 2560x1440 → 1920x1080 @ 120 fps
+[06:27:37.645] [d3d11_nv12] Flush policy: startup-only (3 frame(s)); ASTRIX_CONVERT_TELEMETRY_LIGHT=1
+[06:27:37.645] [d3d11_nv12] NV12 output ring: 16 surface(s)
+[06:27:37.645] [d3d11_nv12] VideoProcessor usage: optimal-speed (ASTRIX_DXGI_NV12_OPTIMAL_SPEED=<default:on>)
+[06:27:37.645] [d3d11_nv12] ContentDesc: 2560x1440 -> 1920x1080 fps=120/1
+[06:27:37.645] [d3d11_nv12] BGRA format flags: 0x3
+[06:27:37.645] [d3d11_nv12] RGBA format flags: 0x3
+[06:27:37.645] [d3d11_nv12] NV12 format flags: 0x3
+[06:27:37.645] [d3d11_nv12] VideoProcessorCaps: RateConversionCapsCount=1, MaxInputStreams=5, InputFormatCaps=0x4, FeatureCaps=0x3ef
+[06:27:37.645] [d3d11_nv12] Using rate conversion index: 0 (RateConversionCapsCount=1)
+[06:27:37.645] [d3d11_nv12] NV12Tex desc: 1920x1080 format=DXGI_FORMAT(103) mip=1 array=1 sample=1 bind=0x28 ring=16
+[06:27:37.648] [nvenc_d11] GIR enabled: period=120 frames, duration=60 frames
+[06:27:37.657] [nvenc_d11] init: custom async p1 (fps=120, async=on, low_latency=prefer-fast, input=ARGB/BGRA, h264_fast=on)
+[06:27:37.657] [nvenc_d11] config: label=custom async p1 tuning=3 preset_p1=1 preset_p4=0 rc=2 multipass=0 lookahead=0 depth=0 aq=0 aq_strength=0 temporal_aq=0 zero_reorder=1 non_ref_p=1 strict_gop=1 frame_interval_p=1 gop=4294967295 idr=4294967295 vbv=1169375/584687 h264_fast profile_baseline=1 entropy=2 adaptive_transform=1 deblock=2 b_ref=0 bdirect=1 hier_p=0 hier_b=0 temporal_svc=0 intra_refresh=1 ltr=0 refs_l0=1 refs_l1=0 max_ref=1 async=1
+[06:27:37.682] [encoded_h264] selected NVENC D3D11 backend: NVIDIA GeForce RTX 3080
+[06:27:37.682] [voice][screen] periodic IDR (GIR recovery, every 20s)
+[06:27:37.682] [voice][screen] encoded backend startup: calling encode() key_frame=true ts_us=13333312
+[06:27:37.694] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12016 us
+[06:27:37.694] [voice][screen] encoded backend startup: pushing first encoded frame bytes=8210 key=true
+[06:27:37.754] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=13433312
+[06:27:37.754] [voice][screen] encoded backend startup: encode() returned 0 frame(s) in 8 us
+[06:27:37.754] [voice][screen] encoded backend startup: input accepted, still waiting for first encoded frame
+[06:27:37.854] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=13533312
+[06:27:37.854] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:37.854] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:37.954] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=13633312
+[06:27:37.954] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:37.954] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:38.054] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=13733312
+[06:27:38.054] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 14 us
+[06:27:38.054] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:38.154] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=13833312
+[06:27:38.154] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:38.154] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:38.254] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=13933312
+[06:27:38.254] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12 us
+[06:27:38.254] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:38.354] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=14033312
+[06:27:38.354] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 13 us
+[06:27:38.354] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:38.454] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=14133312
+[06:27:38.454] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 81 us
+[06:27:38.454] [voice][screen] encoded backend startup: pushing first encoded frame bytes=11229 key=false
+[06:27:38.554] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=14233312
+[06:27:38.554] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12 us
+[06:27:38.554] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:38.629] [voice][screen] dxgi_latest_only=true probe_like=true copied_frames=40 dropped_stale_frames=5 capture_fps=40.0 publish_fps=35.0
+[06:27:38.654] [voice][screen][push][summary] tick=10.9 slot_ready=10.9 slot_miss=0.0 pool_miss=0 late_ticks=1 drop_frames=60 need_init=1 new_content=10 reuse_content=0 static_reuse=0 empty=1 sent=8.9 target=120 schedule=10 mode=blocking
+[06:27:38.654] [voice][screen][push][timing] convert=10/0 avg=3603us ctx_avg=0us gpu_avg=3603us copy_avg=0us srv_avg=0us cb_avg=0us bind_avg=0us state_avg=0us shader_avg=0us cb_bind_avg=0us sampler_avg=0us srv_bind_avg=0us uav_bind_avg=0us dispatch_avg=0us unbind_avg=0us query_avg=0us blt_avg=0us bp_skip=0 flush=10/0 avg=0us ctx_avg=0us call_avg=0us ready=imm:0 wait:0 timeout:0 avg=0us submit=0/0 avg=0us map_avg=0us pic_avg=0us collect=some:0 none:0 err:0 frames=0.0 avg=0us encode=10/0 avg=1218us send_calls=9.9 avg_send=3us
+[06:27:38.654] [voice][screen][push][fps] dxgi_capture_fps=40.0 convert_input_fps=9.9 convert_output_fps=9.9 nvenc_submit_fps=0.0 nvenc_collect_fps=0.0 send_fps=8.9
+[06:27:38.654] [voice][screen][push][burst] sent_frames=9 key=1 avg_frame=2KB max_frame=10KB gap_avg=2300091us gap_max=19840339us burst_gaps=0 stall_gaps=1
+[06:27:38.654] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=14333312
+[06:27:38.654] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 7 us
+[06:27:38.654] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:38.754] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=14433312
+[06:27:38.754] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:38.754] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:38.854] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=14533312
+[06:27:38.854] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:38.854] [voice][screen] encoded backend startup: pushing first encoded frame bytes=14 key=false
+[06:27:38.954] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=14633312
+[06:27:38.954] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12 us
+[06:27:38.954] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:39.054] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=14733312
+[06:27:39.054] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:39.054] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:39.154] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=14833312
+[06:27:39.154] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 11 us
+[06:27:39.154] [voice][screen] encoded backend startup: pushing first encoded frame bytes=11 key=false
+[06:27:39.254] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=14933312
+[06:27:39.254] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:39.254] [voice][screen] encoded backend startup: pushing first encoded frame bytes=11 key=false
+[06:27:39.354] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=15033312
+[06:27:39.354] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 10 us
+[06:27:39.354] [voice][screen] encoded backend startup: pushing first encoded frame bytes=11 key=false
+[06:27:39.454] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=15133312
+[06:27:39.454] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 12 us
+[06:27:39.454] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:39.554] [voice][screen] encoded backend startup: calling encode() key_frame=false ts_us=15233312
+[06:27:39.554] [voice][screen] encoded backend startup: encode() returned 1 frame(s) in 13 us
+[06:27:39.554] [voice][screen] encoded backend startup: pushing first encoded frame bytes=12 key=false
+[06:27:39.625] [voice][screen] DXGI capture thread stopped
+[06:27:39.625] [voice][screen] async GPU convert worker stopped
+[06:27:39.654] [voice][screen] encoder thread stopped

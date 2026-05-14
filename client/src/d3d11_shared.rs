@@ -3,8 +3,7 @@
 use thiserror::Error;
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11Texture2D, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
-    D3D11_TEXTURE2D_DESC,
+    ID3D11Device, ID3D11Texture2D, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_TEXTURE2D_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{IDXGIKeyedMutex, IDXGIResource};
 
@@ -41,11 +40,7 @@ pub fn create_shared_keyed_texture_ring<const N: usize>(
 
         let mut owner_tex = None;
         unsafe {
-            owner_device.CreateTexture2D(
-                &desc,
-                None,
-                Some(std::ptr::from_mut(&mut owner_tex)),
-            )?;
+            owner_device.CreateTexture2D(&desc, None, Some(std::ptr::from_mut(&mut owner_tex)))?;
         }
         let owner_tex = owner_tex.ok_or(D3d11SharedTextureError::CreateTextureNull)?;
         let owner_mutex: IDXGIKeyedMutex = owner_tex.cast()?;

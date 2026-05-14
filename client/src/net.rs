@@ -572,7 +572,10 @@ impl ApiClient {
         server_id: i64,
         user_id: i64,
     ) -> Result<(), ApiError> {
-        let url = format!("{}/members/ban/{}?server_id={}", self.base, user_id, server_id);
+        let url = format!(
+            "{}/members/ban/{}?server_id={}",
+            self.base, user_id, server_id
+        );
         self.http
             .delete(url)
             .header("Authorization", Self::auth_header(token))

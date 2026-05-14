@@ -126,12 +126,23 @@ async fn run_headless_screen_share_from_env() -> bool {
     true
 }
 
-#[tokio::main]
-async fn main() -> eframe::Result<()> {
+fn main() -> eframe::Result<()> {
     // Initialize console logging
     astrix_client::console_panel::init();
     astrix_client::console_panel::log("Astrix client starting...");
 
+    if astrix_client::minimal_dxgi_process::run_from_env_if_requested() {
+        return Ok(());
+    }
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to create Tokio runtime")
+        .block_on(async_main())
+}
+
+async fn async_main() -> eframe::Result<()> {
     if run_headless_screen_share_from_env().await {
         return Ok(());
     }

@@ -41,10 +41,7 @@ pub fn register_protocol_handler() {
     if let Ok((icon, _)) = classes.create_subkey("DefaultIcon") {
         let _ = icon.set_value("", &format!("\"{}\",0", exe));
     }
-    if let Ok((command, _)) = classes.create_subkey_with_flags(
-        "shell\\open\\command",
-        KEY_WRITE,
-    ) {
+    if let Ok((command, _)) = classes.create_subkey_with_flags("shell\\open\\command", KEY_WRITE) {
         let _ = command.set_value("", &format!("\"{}\" \"%1\"", exe));
     }
 }

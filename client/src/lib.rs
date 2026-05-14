@@ -37,6 +37,7 @@ pub mod deep_links;
 pub mod denoise;
 pub mod guild_panel;
 pub mod member_panel;
+pub mod minimal_dxgi_process;
 pub mod net;
 pub mod raw_frame;
 pub mod screen_encoder;
@@ -55,9 +56,9 @@ pub mod d3d11_i420;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod d3d11_nv12;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
-pub mod d3d11_shared;
-#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod d3d11_rgba;
+#[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+pub mod d3d11_shared;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 pub mod dxgi_duplication;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]

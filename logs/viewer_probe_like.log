@@ -1,0 +1,63 @@
+[06:25:03.085] Astrix client starting...
+[06:25:03.085] Registering protocol handler...
+[06:25:54.453] [gpu_device] D3D11 multithread protection ENABLED
+[06:25:54.453] [gpu_device] Selected GPU: NVIDIA GeForce RTX 3080 (discrete; 12091 MB VRAM)
+[06:25:54.453] [mft_device] Shared D3D11 device initialized for hardware decode
+[06:25:54.453] [voice][livekit] connecting to ws://193.233.251.173:7880 ...
+[06:25:54.456] [Phase 3.5] WGL_NV_DX_interop2 initialized successfully
+[06:25:54.456] [Phase 3.5] WGL_NV_DX_interop2 ready — GPU zero-copy path enabled by default
+[06:25:55.932] [voice][livekit] connected to room
+[06:25:55.939] [voice][livekit] mic: 48000 Hz
+[06:25:56.037] [voice][livekit] speaker output at 48000 Hz
+[06:25:56.077] [voice][livekit] mic capture: 48000 Hz, 2 ch
+[06:25:56.168] [voice][livekit] speaker: 48000 Hz, 2 channel(s)
+[06:25:56.299] [denoise] DeepFilterNet active for sender-microphone using DeepFilterNet3_onnx.tar.gz (frame_len=480 @ 48000 Hz, atten_lim=42.0 dB, post_filter_beta=0.010, thresholds=[-15.0, 35.0, 35.0], reduce_mask=max)
+[06:26:15.408] [voice][stream] requested keyframe from 1 (subscription)
+[06:26:15.466] [voice][screen][viewer] TrackSubscribed: screenshare from identity=1
+[06:26:15.466] [voice][screen][viewer] converter thread started (no pacing)
+[06:26:15.466] [voice][screen][viewer] receive task started, waiting for first frame...
+[06:26:15.875] [voice][screen][viewer] first raw frame 1920x1088
+[06:26:15.882] [voice][screen][viewer] first frame converted 1920x1088 path=GPU zero-copy (WGL)
+[06:26:16.554] [voice][screen][viewer] STALL recv_wait_ms=111 expected_us=100000 network_us=11259 ts_delta=100000
+[06:26:16.752] [voice][screen][viewer] STALL recv_wait_ms=110 expected_us=291000 network_us=0 ts_delta=291000
+[06:26:17.645] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=100000 network_us=1153 ts_delta=100000
+[06:26:17.845] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=101000 network_us=19 ts_delta=101000
+[06:26:18.348] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=100000 network_us=1025 ts_delta=100000
+[06:26:18.449] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=99000 network_us=2035 ts_delta=99000
+[06:26:19.854] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=101000 network_us=124 ts_delta=101000
+[06:26:19.955] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=101000 network_us=587 ts_delta=101000
+[06:26:22.556] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=101000 network_us=386 ts_delta=101000
+[06:26:26.456] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=101000 network_us=193 ts_delta=101000
+[06:26:26.657] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=101000 network_us=467 ts_delta=101000
+[06:26:29.382] [voice][screen][viewer] STALL recv_wait_ms=127 expected_us=100000 network_us=27655 ts_delta=100000
+[06:26:29.539] [voice][screen][viewer] converter thread ended after 137 frames
+[06:26:52.482] [voice][screen][viewer] TrackSubscribed: screenshare from identity=1
+[06:26:52.482] [voice][screen][viewer] receive task started, waiting for first frame...
+[06:26:52.482] [voice][screen][viewer] converter thread started (no pacing)
+[06:26:54.192] [voice][stream] requested keyframe from 1 (subscription)
+[06:26:54.600] [voice][screen][viewer] first raw frame 1920x1088
+[06:26:54.600] [voice][screen][viewer] first frame converted 1920x1088 path=GPU zero-copy (WGL)
+[06:26:54.996] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=99000 network_us=2416 ts_delta=99000
+[06:26:55.297] [voice][screen][viewer] STALL recv_wait_ms=111 expected_us=100000 network_us=11502 ts_delta=100000
+[06:26:56.087] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=100000 network_us=1044 ts_delta=100000
+[06:26:56.684] [voice][stream] requested keyframe from 1 (viewer stall 497ms)
+[06:27:14.559] [voice][screen][viewer] LONG_STALL recv_wait_ms=18372 expected_us=100000 network_us=18272172 ts_delta=100000
+[06:27:14.686] [voice][screen][viewer] STALL recv_wait_ms=126 expected_us=100000 network_us=26471 ts_delta=100000
+[06:27:14.797] [voice][screen][viewer] STALL recv_wait_ms=111 expected_us=18373000 network_us=0 ts_delta=18373000
+[06:27:14.997] [voice][screen][viewer] STALL recv_wait_ms=200 expected_us=37000 network_us=163647 ts_delta=37000
+[06:27:15.397] [voice][screen][viewer] STALL recv_wait_ms=110 expected_us=100000 network_us=10967 ts_delta=100000
+[06:27:15.987] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=101000 network_us=393 ts_delta=101000
+[06:27:16.194] [voice][screen][viewer] STALL recv_wait_ms=107 expected_us=100000 network_us=7630 ts_delta=100000
+[06:27:16.387] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=100000 network_us=1289 ts_delta=100000
+[06:27:17.090] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=101000 network_us=151 ts_delta=101000
+[06:27:17.390] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=100000 network_us=1358 ts_delta=100000
+[06:27:17.692] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=101000 network_us=429 ts_delta=101000
+[06:27:18.384] [voice][stream] requested keyframe from 1 (viewer stall 492ms)
+[06:27:37.739] [voice][screen][viewer] LONG_STALL recv_wait_ms=19848 expected_us=100000 network_us=19748251 ts_delta=100000
+[06:27:37.886] [voice][screen][viewer] STALL recv_wait_ms=146 expected_us=101000 network_us=45098 ts_delta=101000
+[06:27:37.997] [voice][screen][viewer] STALL recv_wait_ms=111 expected_us=19848000 network_us=0 ts_delta=19848000
+[06:27:38.196] [voice][screen][viewer] STALL recv_wait_ms=199 expected_us=56000 network_us=143038 ts_delta=56000
+[06:27:38.398] [voice][screen][viewer] STALL recv_wait_ms=101 expected_us=99000 network_us=2322 ts_delta=99000
+[06:27:38.501] [voice][screen][viewer] STALL recv_wait_ms=102 expected_us=101000 network_us=1859 ts_delta=101000
+[06:27:38.799] [voice][screen][viewer] STALL recv_wait_ms=102 expected_us=294000 network_us=0 ts_delta=294000
+[06:27:39.966] [voice][screen][viewer] converter thread ended after 68 frames

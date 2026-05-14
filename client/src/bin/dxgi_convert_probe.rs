@@ -1,4 +1,7 @@
-#![cfg_attr(not(all(target_os = "windows", feature = "wgc-capture")), allow(dead_code))]
+#![cfg_attr(
+    not(all(target_os = "windows", feature = "wgc-capture")),
+    allow(dead_code)
+)]
 
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 #[path = "../gpu_device.rs"]
@@ -47,17 +50,17 @@ mod app {
         ID3D11Device, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
         D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     };
-    use windows::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, HBRUSH};
     use windows::Win32::Graphics::Dxgi::Common::{
         DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
     };
+    use windows::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, HBRUSH};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
         PostThreadMessageW, RegisterClassW, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-        HTTRANSPARENT, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_NCHITTEST, WM_QUIT,
-        WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        HTTRANSPARENT, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_NCHITTEST, WM_QUIT, WNDCLASSW,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
 
     #[derive(Debug, Clone)]
@@ -399,7 +402,10 @@ mod app {
             summary.frame_total.push(frame_total_us);
 
             if frame_index == 0 {
-                log_texture_desc("[dxgi_convert_probe] scaler output texture", &output_texture);
+                log_texture_desc(
+                    "[dxgi_convert_probe] scaler output texture",
+                    &output_texture,
+                );
             }
 
             eprintln!(
@@ -741,8 +747,7 @@ mod app {
             let _ = RegisterClassW(&class);
         }
 
-        let ex_style =
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+        let ex_style = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
         let style = WS_POPUP | WS_VISIBLE;
         let windows = [
             unsafe { create_overlay_window(ex_style, style, x, y, width, thickness)? },

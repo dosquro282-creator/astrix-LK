@@ -114,7 +114,15 @@ pub fn show(ui: &mut egui::Ui, params: BottomPanelParams<'_>) {
 
     ui.allocate_ui_at_rect(base_row_rect, |ui| {
         ui.set_width(base_row_rect.width());
-        base_user_row(ui, theme, user_display, user_id, &voice, avatar_texture, on_action);
+        base_user_row(
+            ui,
+            theme,
+            user_display,
+            user_id,
+            &voice,
+            avatar_texture,
+            on_action,
+        );
     });
 
     if voice.in_voice_channel {
