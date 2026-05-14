@@ -28,6 +28,7 @@ class NvencD3D11Session {
   bool is_async() const;
   std::uint32_t input_ring_size() const;
   std::uint32_t in_flight_count() const;
+  std::uint32_t take_no_output_count();
   rust::Vec<std::uint8_t> collect(std::uint32_t timeout_ms);
   std::uint64_t last_encode_time_us() const;
   std::uint64_t last_submit_map_us() const;

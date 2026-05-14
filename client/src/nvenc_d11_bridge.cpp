@@ -368,6 +368,13 @@ struct NvencD3D11Session::Impl {
     return static_cast<std::uint32_t>(submit_queue_.size() + in_flight_.size());
   }
 
+  std::uint32_t take_no_output_count() {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    const auto count = no_output_count_;
+    no_output_count_ = 0;
+    return count;
+  }
+
   std::uint64_t last_encode_time_us() const {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     return last_encode_time_us_;
@@ -455,6 +462,7 @@ struct NvencD3D11Session::Impl {
             std::chrono::milliseconds(timeout_ms),
             [&] {
               return stop_requested_ || !completed_.empty() ||
+                     no_output_count_ > 0 ||
                      !worker_error_.empty();
             });
       }
@@ -987,7 +995,12 @@ struct NvencD3D11Session::Impl {
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now() - encode_started_at)
                     .count());
-            if (status != NV_ENC_SUCCESS && status != NV_ENC_ERR_NEED_MORE_INPUT) {
+            if (status == NV_ENC_ERR_NEED_MORE_INPUT) {
+              if (mapped_input != nullptr) {
+                api_.nvEncUnmapInputResource(encoder_, mapped_input);
+                mapped_input = nullptr;
+              }
+            } else if (status != NV_ENC_SUCCESS) {
               if (mapped_input != nullptr) {
                 api_.nvEncUnmapInputResource(encoder_, mapped_input);
                 mapped_input = nullptr;
@@ -1003,6 +1016,13 @@ struct NvencD3D11Session::Impl {
             if (!out.reserved) {
               throw std::runtime_error(
                   "NVENC D3D11 output slot lost reservation before submit");
+            }
+            if (mapped_input == nullptr) {
+              out.mapped_input = nullptr;
+              out.reserved = false;
+              no_output_count_++;
+              completed_cv_.notify_one();
+              continue;
             }
             if (out.mapped_input != nullptr) {
               throw std::runtime_error(
@@ -1152,6 +1172,7 @@ struct NvencD3D11Session::Impl {
   std::deque<PendingSubmission> submit_queue_;
   std::deque<PendingSubmission> in_flight_;
   std::deque<CompletedPacket> completed_;
+  std::uint32_t no_output_count_ = 0;
   std::string worker_error_;
   std::size_t next_submit_index_ = 0;
   bool stop_requested_ = false;
@@ -1198,6 +1219,10 @@ std::uint32_t NvencD3D11Session::input_ring_size() const {
 
 std::uint32_t NvencD3D11Session::in_flight_count() const {
   return impl_->in_flight_count();
+}
+
+std::uint32_t NvencD3D11Session::take_no_output_count() {
+  return impl_->take_no_output_count();
 }
 
 rust::Vec<std::uint8_t> NvencD3D11Session::collect(std::uint32_t timeout_ms) {

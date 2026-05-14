@@ -14,9 +14,7 @@ use cxx::UniquePtr;
 use thiserror::Error;
 use windows::core::{w, Interface};
 use windows::Win32::Foundation::FreeLibrary;
-use windows::Win32::Graphics::Direct3D11::{
-    D3D11_TEXTURE2D_DESC, ID3D11Device, ID3D11Texture2D,
-};
+use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D, D3D11_TEXTURE2D_DESC};
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
 };
@@ -319,7 +317,11 @@ impl NvencD3d11Encoder {
             }
         }
 
-        if let Err(err) = self.session.pin_mut().submit(texture_raw_ptr(texture), key_frame) {
+        if let Err(err) = self
+            .session
+            .pin_mut()
+            .submit(texture_raw_ptr(texture), key_frame)
+        {
             if is_nvenc_backpressure_message(&err.to_string()) {
                 return Err(NvencD3d11Error::QueueFull {
                     pending: self.meta_queue.len(),
@@ -381,7 +383,11 @@ impl NvencD3d11Encoder {
     }
 
     fn collect_impl(&mut self, timeout_ms: u32) -> Result<Option<PendingOutput>, NvencD3d11Error> {
+        if self.discard_no_output_metas() > 0 && timeout_ms == 0 {
+            return Ok(None);
+        }
         let data = self.session.pin_mut().collect(timeout_ms)?;
+        self.discard_no_output_metas();
         if data.is_empty() {
             return Ok(None);
         }
@@ -406,6 +412,20 @@ impl NvencD3d11Encoder {
             capture_us: meta.capture_us,
             encode_us,
         }))
+    }
+
+    fn discard_no_output_metas(&mut self) -> u32 {
+        let dropped = ffi::NvencD3D11Session::take_no_output_count(self.session.pin_mut());
+        for _ in 0..dropped {
+            let _ = self.meta_queue.pop_front();
+        }
+        if dropped > 0 {
+            eprintln!(
+                "[nvenc_d11] dropped {} no-output submission(s) after NV_ENC_ERR_NEED_MORE_INPUT",
+                dropped
+            );
+        }
+        dropped
     }
 
     fn output_timeout_ms(&self, key_frame: bool) -> u32 {

@@ -4,13 +4,17 @@
 //! Phase 3.1: receiver stats (network min/max/avg, frame_delta, stall_count, recv_fps).
 //! Phase 6: env var cached via OnceLock; output batched into single write.
 
+use std::fs::OpenOptions;
+use std::io::Write as IoWrite;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::RwLock;
 
 static TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
+static HEARTBEAT_LOG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 /// Check if ASTRIX_TELEMETRY=1. Cached on first call (process-lifetime).
 pub fn is_telemetry_enabled() -> bool {
@@ -19,6 +23,70 @@ pub fn is_telemetry_enabled() -> bool {
             .map(|v| v == "1")
             .unwrap_or(false)
     })
+}
+
+fn heartbeat_enabled() -> bool {
+    std::env::var("ASTRIX_SCREEN_HEARTBEAT")
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off")))
+        .unwrap_or(true)
+}
+
+fn heartbeat_log_path() -> Option<&'static PathBuf> {
+    HEARTBEAT_LOG_PATH
+        .get_or_init(|| {
+            if !heartbeat_enabled() {
+                return None;
+            }
+            Some(
+                std::env::var("ASTRIX_SCREEN_HEARTBEAT_LOG")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| {
+                        PathBuf::from("logs").join("screen_pipeline_heartbeat.log")
+                    }),
+            )
+        })
+        .as_ref()
+}
+
+pub fn log_pipeline_heartbeat(stage: &str, message: &str) {
+    let Some(path) = heartbeat_log_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let ts_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{} [{}] {}", ts_ms, stage, message);
+    }
+}
+
+pub struct PipelineHeartbeat {
+    stage: &'static str,
+    last: Instant,
+}
+
+impl PipelineHeartbeat {
+    pub fn new(stage: &'static str) -> Self {
+        Self {
+            stage,
+            last: Instant::now() - Duration::from_secs(1),
+        }
+    }
+
+    pub fn tick<F>(&mut self, make_message: F)
+    where
+        F: FnOnce() -> String,
+    {
+        if self.last.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.last = Instant::now();
+        log_pipeline_heartbeat(self.stage, &make_message());
+    }
 }
 
 /// Last measured duration per stage (microseconds). 0 = not yet measured.
@@ -96,9 +164,38 @@ pub struct PipelineTelemetry {
     sender_rtp_pending_peak: AtomicU64,
 }
 
+#[derive(Debug, Clone)]
+pub struct PipelineTelemetrySnapshot {
+    pub capture_us: u64,
+    pub convert_us: u64,
+    pub encode_us: u64,
+    pub encode_avg_us: u64,
+    pub send_us: u64,
+    pub network_us: u64,
+    pub decode_us: u64,
+    pub render_us: u64,
+    pub gui_draw_us: u64,
+    pub encoder_type: Option<String>,
+}
+
 impl PipelineTelemetry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn snapshot(&self) -> PipelineTelemetrySnapshot {
+        PipelineTelemetrySnapshot {
+            capture_us: self.capture_us.load(Ordering::Acquire),
+            convert_us: self.convert_us.load(Ordering::Acquire),
+            encode_us: self.encode_us.load(Ordering::Acquire),
+            encode_avg_us: self.encode_avg_us.load(Ordering::Acquire),
+            send_us: self.send_us.load(Ordering::Acquire),
+            network_us: self.network_us.load(Ordering::Acquire),
+            decode_us: self.decode_us.load(Ordering::Acquire),
+            render_us: self.render_us.load(Ordering::Acquire),
+            gui_draw_us: self.gui_draw_us.load(Ordering::Acquire),
+            encoder_type: self.encoder_type.read().clone(),
+        }
     }
 
     pub fn set_capture(&self, us: u64) {
@@ -207,24 +304,36 @@ impl PipelineTelemetry {
         encoded_pending: u64,
         rtp_pending: u64,
     ) {
-        self.sender_outgoing_queue_cur.store(outgoing_queue, Ordering::Release);
-        self.sender_outgoing_queue_peak.fetch_max(outgoing_queue, Ordering::Relaxed);
+        self.sender_outgoing_queue_cur
+            .store(outgoing_queue, Ordering::Release);
+        self.sender_outgoing_queue_peak
+            .fetch_max(outgoing_queue, Ordering::Relaxed);
         // EMA: avg = avg*0.9 + val*0.1
         let _: u64 = self
             .sender_outgoing_queue_avg
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
-                Some(if old == 0 { outgoing_queue } else { (old * 9 + outgoing_queue) / 10 })
+                Some(if old == 0 {
+                    outgoing_queue
+                } else {
+                    (old * 9 + outgoing_queue) / 10
+                })
             })
             .unwrap_or(0);
 
-        self.sender_pacer_queue_cur.store(pacer_queue, Ordering::Release);
-        self.sender_pacer_queue_peak.fetch_max(pacer_queue, Ordering::Relaxed);
+        self.sender_pacer_queue_cur
+            .store(pacer_queue, Ordering::Release);
+        self.sender_pacer_queue_peak
+            .fetch_max(pacer_queue, Ordering::Relaxed);
 
-        self.sender_encoded_pending_cur.store(encoded_pending, Ordering::Release);
-        self.sender_encoded_pending_peak.fetch_max(encoded_pending, Ordering::Relaxed);
+        self.sender_encoded_pending_cur
+            .store(encoded_pending, Ordering::Release);
+        self.sender_encoded_pending_peak
+            .fetch_max(encoded_pending, Ordering::Relaxed);
 
-        self.sender_rtp_pending_cur.store(rtp_pending, Ordering::Release);
-        self.sender_rtp_pending_peak.fetch_max(rtp_pending, Ordering::Relaxed);
+        self.sender_rtp_pending_cur
+            .store(rtp_pending, Ordering::Release);
+        self.sender_rtp_pending_peak
+            .fetch_max(rtp_pending, Ordering::Relaxed);
     }
 
     /// Reset receiver window stats (call at start of print for receiver).
@@ -346,10 +455,26 @@ impl PipelineTelemetry {
             let rtp_cur = self.sender_rtp_pending_cur.load(Ordering::Acquire);
             let rtp_peak = self.sender_rtp_pending_peak.swap(0, Ordering::AcqRel);
             let _ = writeln!(buf, "  --- sender queue stats ---");
-            let _ = writeln!(buf, "  out_queue:    {} (current), peak={}, avg={:.1}", out_cur, out_peak, out_avg as f64);
-            let _ = writeln!(buf, "  pacer_queue:  {} (current), peak={}", pacer_cur, pacer_peak);
-            let _ = writeln!(buf, "  encoded_pend: {} (current), peak={}", enc_cur, enc_peak);
-            let _ = writeln!(buf, "  rtp_pending:  {} (current), peak={}", rtp_cur, rtp_peak);
+            let _ = writeln!(
+                buf,
+                "  out_queue:    {} (current), peak={}, avg={:.1}",
+                out_cur, out_peak, out_avg as f64
+            );
+            let _ = writeln!(
+                buf,
+                "  pacer_queue:  {} (current), peak={}",
+                pacer_cur, pacer_peak
+            );
+            let _ = writeln!(
+                buf,
+                "  encoded_pend: {} (current), peak={}",
+                enc_cur, enc_peak
+            );
+            let _ = writeln!(
+                buf,
+                "  rtp_pending:  {} (current), peak={}",
+                rtp_cur, rtp_peak
+            );
         }
 
         if prefix == "receiver" {

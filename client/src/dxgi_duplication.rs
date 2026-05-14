@@ -7,8 +7,7 @@ use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1,
     IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_INVALID_CALL,
-    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_MOVE_RECT,
-    DXGI_OUTPUT_DESC,
+    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_MOVE_RECT, DXGI_OUTPUT_DESC,
 };
 use xcap::Monitor;
 
@@ -139,8 +138,7 @@ impl DxgiDuplicationCapture {
                 .AcquireNextFrame(timeout_ms, &mut info, &mut resource)
         } {
             Ok(()) => {
-                let (dirty_rects, move_rects) =
-                    collect_frame_metadata(&self.duplication, &info)?;
+                let (dirty_rects, move_rects) = collect_frame_metadata(&self.duplication, &info)?;
                 Ok(Some(AcquiredDesktopFrame {
                     duplication: self.duplication.clone(),
                     resource,
@@ -150,6 +148,30 @@ impl DxgiDuplicationCapture {
                     move_rects,
                 }))
             }
+            Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => Ok(None),
+            Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => Err(DxgiDuplicationError::AccessLost),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn acquire_next_frame_without_metadata(
+        &self,
+        timeout_ms: u32,
+    ) -> Result<Option<AcquiredDesktopFrame>, DxgiDuplicationError> {
+        let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
+        let mut resource = None;
+        match unsafe {
+            self.duplication
+                .AcquireNextFrame(timeout_ms, &mut info, &mut resource)
+        } {
+            Ok(()) => Ok(Some(AcquiredDesktopFrame {
+                duplication: self.duplication.clone(),
+                resource,
+                released: false,
+                info,
+                dirty_rects: Vec::new(),
+                move_rects: Vec::new(),
+            })),
             Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => Ok(None),
             Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => Err(DxgiDuplicationError::AccessLost),
             Err(e) => Err(e.into()),
@@ -177,9 +199,7 @@ fn collect_frame_metadata(
             &mut move_rect_bytes,
         )?;
     }
-    move_rects.truncate(
-        (move_rect_bytes as usize) / std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>(),
-    );
+    move_rects.truncate((move_rect_bytes as usize) / std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>());
 
     let dirty_rect_capacity = (metadata_capacity as usize) / std::mem::size_of::<RECT>();
     let mut dirty_rects = vec![RECT::default(); dirty_rect_capacity];

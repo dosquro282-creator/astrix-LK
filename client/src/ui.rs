@@ -3,8 +3,8 @@ use std::fmt;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, TryRecvError};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 use std::sync::OnceLock;
@@ -982,7 +982,8 @@ const SCREEN_SOURCE_PREVIEW_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const SCREEN_SOURCE_PICKER_HORIZONTAL_MARGIN: f32 = 100.0;
 const SCREEN_SOURCE_PICKER_VERTICAL_MARGIN: f32 = 50.0;
 const SCREEN_SOURCE_LABEL_SCREEN: &str = "\u{42d}\u{43a}\u{440}\u{430}\u{43d}";
-const SCREEN_SOURCE_LABEL_PRIMARY: &str = "\u{43e}\u{441}\u{43d}\u{43e}\u{432}\u{43d}\u{43e}\u{439}";
+const SCREEN_SOURCE_LABEL_PRIMARY: &str =
+    "\u{43e}\u{441}\u{43d}\u{43e}\u{432}\u{43d}\u{43e}\u{439}";
 const SCREEN_SOURCE_LABEL_UNNAMED_WINDOW: &str =
     "\u{41e}\u{43a}\u{43d}\u{43e} \u{431}\u{435}\u{437} \u{43d}\u{430}\u{437}\u{432}\u{430}\u{43d}\u{438}\u{44f}";
 const SCREEN_SOURCE_LABEL_LOADING_PREVIEW: &str =
@@ -1007,10 +1008,8 @@ const SCREEN_SOURCE_ACTION_BUTTON_LABEL_SHORT: &str =
     "\u{41f}\u{43e}\u{43a}\u{430}\u{437}\u{430}\u{442}\u{44c} \u{44d}\u{43a}\u{440}\u{430}\u{43d}";
 const SCREEN_SOURCE_ACTION_BUTTON_LABEL_COMPACT: &str =
     "\u{41f}\u{43e}\u{43a}\u{430}\u{437}\u{430}\u{442}\u{44c}";
-const SCREEN_SOURCE_ACTION_BUTTON_LABEL_MINIMAL: &str =
-    "\u{421}\u{442}\u{430}\u{440}\u{442}";
-const SCREEN_SOURCE_CANCEL_LABEL: &str =
-    "\u{41e}\u{442}\u{43c}\u{435}\u{43d}\u{430}";
+const SCREEN_SOURCE_ACTION_BUTTON_LABEL_MINIMAL: &str = "\u{421}\u{442}\u{430}\u{440}\u{442}";
+const SCREEN_SOURCE_CANCEL_LABEL: &str = "\u{41e}\u{442}\u{43c}\u{435}\u{43d}\u{430}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScreenSourceTab {
@@ -1140,8 +1139,7 @@ pub(crate) struct MainState {
     pub(crate) selected_stream_source: Option<ScreenSourceEntry>,
     pub(crate) start_stream_after_source_pick: bool,
     pub(crate) screen_source_tab: ScreenSourceTab,
-    pub(crate) screen_source_preview_textures:
-        HashMap<StreamSourceTarget, egui::TextureHandle>,
+    pub(crate) screen_source_preview_textures: HashMap<StreamSourceTarget, egui::TextureHandle>,
     pub(crate) screen_source_preview_rx: Option<mpsc::Receiver<Vec<ScreenSourcePreviewFrame>>>,
     pub(crate) screen_source_preview_inflight: bool,
     pub(crate) screen_source_preview_requested_tab: Option<ScreenSourceTab>,
@@ -1680,7 +1678,11 @@ fn show_modal_backdrop(ctx: &egui::Context, id: impl std::hash::Hash, rect: egui
         });
 }
 
-fn window_inner_size_for_outer(ctx: &egui::Context, outer_size: egui::Vec2, frame: &egui::Frame) -> egui::Vec2 {
+fn window_inner_size_for_outer(
+    ctx: &egui::Context,
+    outer_size: egui::Vec2,
+    frame: &egui::Frame,
+) -> egui::Vec2 {
     let window_margin = frame.inner_margin;
     let window_border_padding = frame.stroke.width / 2.0;
     let mut window_inner_margin = window_margin;
@@ -1710,7 +1712,10 @@ fn inset_modal_rect(
     let available_height = (rect.height() - bottom_reserved).max(1.0);
     let vertical_margin = vertical_margin.min(((available_height - 1.0) * 0.5).max(0.0));
     egui::Rect::from_min_max(
-        egui::pos2(rect.left() + horizontal_margin, rect.top() + vertical_margin),
+        egui::pos2(
+            rect.left() + horizontal_margin,
+            rect.top() + vertical_margin,
+        ),
         egui::pos2(
             rect.right() - horizontal_margin,
             rect.bottom() - bottom_reserved - vertical_margin,
@@ -2206,7 +2211,10 @@ fn refresh_screen_share_sources(state: &mut State) {
         .enumerate()
         .map(|(i, monitor)| ScreenSourceEntry {
             label: if monitor.is_primary() {
-                format!("{SCREEN_SOURCE_LABEL_SCREEN} {} ({SCREEN_SOURCE_LABEL_PRIMARY})", i + 1)
+                format!(
+                    "{SCREEN_SOURCE_LABEL_SCREEN} {} ({SCREEN_SOURCE_LABEL_PRIMARY})",
+                    i + 1
+                )
             } else {
                 format!("{SCREEN_SOURCE_LABEL_SCREEN} {}", i + 1)
             },
@@ -2335,7 +2343,11 @@ fn poll_screen_source_preview_updates(ctx: &egui::Context, state: &mut State) {
                 let size = [preview.width as usize, preview.height as usize];
                 let image = egui::ColorImage::from_rgba_unmultiplied(size, &preview.rgba);
                 let texture_name = screen_source_texture_name(&preview.target);
-                match state.main.screen_source_preview_textures.get_mut(&preview.target) {
+                match state
+                    .main
+                    .screen_source_preview_textures
+                    .get_mut(&preview.target)
+                {
                     Some(texture) => {
                         texture.set(image, egui::TextureOptions::LINEAR);
                     }
@@ -2598,11 +2610,8 @@ fn show_screen_source_tile(
     ui.painter().rect_stroke(preview_rect, rounding, stroke);
 
     if hovered {
-        ui.painter().rect_filled(
-            preview_rect,
-            rounding,
-            egui::Color32::from_black_alpha(92),
-        );
+        ui.painter()
+            .rect_filled(preview_rect, rounding, egui::Color32::from_black_alpha(92));
         let button_width = (preview_rect.width() - 24.0)
             .min(220.0)
             .max(48.0)
@@ -3249,17 +3258,23 @@ pub(crate) fn main_screen(
             if any_frame_processed {
                 tel.set_gui_draw(gui_draw_start.elapsed().as_micros() as u64);
             }
-            // Print from UI so gui_draw is fresh. Only print when frames are actively
-            // being received so the log starts with the stream, not on idle voice chat.
+            let _snapshot = tel.snapshot();
             if any_frame_processed {
-                let should_print = state
-                    .main
-                    .voice_telemetry_print_at
-                    .map(|t| t.elapsed() >= Duration::from_secs(1))
-                    .unwrap_or(true);
-                if should_print {
-                    tel.print("receiver");
-                    state.main.voice_telemetry_print_at = Some(Instant::now());
+                let ui_print_enabled = std::env::var("ASTRIX_UI_TELEMETRY_PRINT")
+                    .map(|v| {
+                        v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on")
+                    })
+                    .unwrap_or(false);
+                if ui_print_enabled {
+                    let should_print = state
+                        .main
+                        .voice_telemetry_print_at
+                        .map(|t| t.elapsed() >= Duration::from_secs(1))
+                        .unwrap_or(true);
+                    if should_print {
+                        tel.print("receiver");
+                        state.main.voice_telemetry_print_at = Some(Instant::now());
+                    }
                 }
             }
         }
@@ -4711,13 +4726,9 @@ pub(crate) fn main_screen(
                                 egui::Color32::GRAY
                             };
                             ui.label(
-                                egui::RichText::new(format!(
-                                    "[{}] {}",
-                                    line.timestamp,
-                                    line.text
-                                ))
-                                .monospace()
-                                .color(color),
+                                egui::RichText::new(format!("[{}] {}", line.timestamp, line.text))
+                                    .monospace()
+                                    .color(color),
                             );
                         }
                     });
@@ -5733,10 +5744,14 @@ pub(crate) fn main_screen(
                                                             egui::Color32::from_black_alpha(140),
                                                         );
                                                         // LIVE badge
-                                                        let live_badge_rect = egui::Rect::from_min_size(
-                                                            egui::pos2(avatar_rect.left() + 6.0, avatar_rect.top() + 6.0),
-                                                            egui::vec2(40.0, 18.0),
-                                                        );
+                                                        let live_badge_rect =
+                                                            egui::Rect::from_min_size(
+                                                                egui::pos2(
+                                                                    avatar_rect.left() + 6.0,
+                                                                    avatar_rect.top() + 6.0,
+                                                                ),
+                                                                egui::vec2(40.0, 18.0),
+                                                            );
                                                         ui.painter().rect_filled(
                                                             live_badge_rect,
                                                             egui::Rounding::same(4.0),
@@ -5750,7 +5765,12 @@ pub(crate) fn main_screen(
                                                             egui::Color32::WHITE,
                                                         );
                                                         // Nickname
-                                                        let name_text: String = if p.username.is_empty() { "Гость".to_string() } else { p.username.clone() };
+                                                        let name_text: String =
+                                                            if p.username.is_empty() {
+                                                                "Гость".to_string()
+                                                            } else {
+                                                                p.username.clone()
+                                                            };
                                                         let galley = ui.painter().layout(
                                                             name_text,
                                                             egui::FontId::proportional(14.0),
@@ -5758,10 +5778,15 @@ pub(crate) fn main_screen(
                                                             f32::INFINITY,
                                                         );
                                                         let name_pos = egui::pos2(
-                                                            avatar_rect.center().x - galley.size().x / 2.0,
+                                                            avatar_rect.center().x
+                                                                - galley.size().x / 2.0,
                                                             avatar_rect.center().y + 4.0,
                                                         );
-                                                        ui.painter().galley(name_pos, galley, egui::Color32::WHITE);
+                                                        ui.painter().galley(
+                                                            name_pos,
+                                                            galley,
+                                                            egui::Color32::WHITE,
+                                                        );
                                                     }
                                                     if show_stream_preview {
                                                         ui.painter().rect_filled(
@@ -5808,7 +5833,8 @@ pub(crate) fn main_screen(
                                                             egui::Rect::from_min_size(
                                                                 corner
                                                                     - egui::vec2(
-                                                                        btn_size.x * 3.0 + btn_gap * 2.0,
+                                                                        btn_size.x * 3.0
+                                                                            + btn_gap * 2.0,
                                                                         0.0,
                                                                     ),
                                                                 btn_size,
@@ -5831,12 +5857,14 @@ pub(crate) fn main_screen(
                                                             |ui| {
                                                                 if ui
                                                                     .button("✕")
-                                                                    .on_hover_text("Отключиться от трансляции")
+                                                                    .on_hover_text(
+                                                                        "Отключиться от трансляции",
+                                                                    )
                                                                     .clicked()
                                                                 {
                                                                     set_stream_subscription(
-                                                                        state, engine_tx, p.user_id,
-                                                                        false,
+                                                                        state, engine_tx,
+                                                                        p.user_id, false,
                                                                     );
                                                                 }
                                                             },
@@ -5912,10 +5940,14 @@ pub(crate) fn main_screen(
                                                             egui::Color32::from_black_alpha(140),
                                                         );
                                                         // LIVE badge
-                                                        let live_badge_rect = egui::Rect::from_min_size(
-                                                            egui::pos2(avatar_rect.left() + 6.0, avatar_rect.top() + 6.0),
-                                                            egui::vec2(40.0, 18.0),
-                                                        );
+                                                        let live_badge_rect =
+                                                            egui::Rect::from_min_size(
+                                                                egui::pos2(
+                                                                    avatar_rect.left() + 6.0,
+                                                                    avatar_rect.top() + 6.0,
+                                                                ),
+                                                                egui::vec2(40.0, 18.0),
+                                                            );
                                                         ui.painter().rect_filled(
                                                             live_badge_rect,
                                                             egui::Rounding::same(4.0),
@@ -5929,7 +5961,12 @@ pub(crate) fn main_screen(
                                                             egui::Color32::WHITE,
                                                         );
                                                         // Nickname
-                                                        let name_text: String = if p.username.is_empty() { "Гость".to_string() } else { p.username.clone() };
+                                                        let name_text: String =
+                                                            if p.username.is_empty() {
+                                                                "Гость".to_string()
+                                                            } else {
+                                                                p.username.clone()
+                                                            };
                                                         let galley = ui.painter().layout(
                                                             name_text,
                                                             egui::FontId::proportional(14.0),
@@ -5937,10 +5974,15 @@ pub(crate) fn main_screen(
                                                             f32::INFINITY,
                                                         );
                                                         let name_pos = egui::pos2(
-                                                            avatar_rect.center().x - galley.size().x / 2.0,
+                                                            avatar_rect.center().x
+                                                                - galley.size().x / 2.0,
                                                             avatar_rect.center().y + 4.0,
                                                         );
-                                                        ui.painter().galley(name_pos, galley, egui::Color32::WHITE);
+                                                        ui.painter().galley(
+                                                            name_pos,
+                                                            galley,
+                                                            egui::Color32::WHITE,
+                                                        );
                                                     }
                                                     if show_stream_preview {
                                                         ui.painter().rect_filled(
@@ -6041,7 +6083,8 @@ pub(crate) fn main_screen(
                                                     );
                                                 }
 
-                                                if in_this_voice && Some(p.user_id) != state.user_id {
+                                                if in_this_voice && Some(p.user_id) != state.user_id
+                                                {
                                                     resp.context_menu(|ui| {
                                                         let mute_label = if is_locally_muted {
                                                             "Снять локальный мут"
@@ -6233,9 +6276,10 @@ pub(crate) fn main_screen(
                             egui::ScrollArea::vertical()
                                 .max_height(grid_max_height)
                                 .show(ui, |ui| {
-                                    let previews_loading = state.main.screen_source_preview_inflight
-                                        && state.main.screen_source_preview_requested_tab
-                                            == Some(ScreenSourceTab::Applications);
+                                    let previews_loading =
+                                        state.main.screen_source_preview_inflight
+                                            && state.main.screen_source_preview_requested_tab
+                                                == Some(ScreenSourceTab::Applications);
                                     if let Some(source) = show_screen_source_tile_grid(
                                         ui,
                                         theme,
@@ -6257,9 +6301,10 @@ pub(crate) fn main_screen(
                             egui::ScrollArea::vertical()
                                 .max_height(grid_max_height)
                                 .show(ui, |ui| {
-                                    let previews_loading = state.main.screen_source_preview_inflight
-                                        && state.main.screen_source_preview_requested_tab
-                                            == Some(ScreenSourceTab::EntireScreen);
+                                    let previews_loading =
+                                        state.main.screen_source_preview_inflight
+                                            && state.main.screen_source_preview_requested_tab
+                                                == Some(ScreenSourceTab::EntireScreen);
                                     if let Some(source) = show_screen_source_tile_grid(
                                         ui,
                                         theme,
@@ -6368,8 +6413,7 @@ pub(crate) fn main_screen(
                 ui.allocate_ui_at_rect(controls_rect, |ui| {
                     ui.horizontal(|ui| {
                         show_stream_audio_button(ui, state, engine_tx, uid);
-                        if ui.button("✕ Отключиться").clicked()
-                        {
+                        if ui.button("✕ Отключиться").clicked() {
                             set_stream_subscription(state, engine_tx, uid, false);
                             state.main.fullscreen_stream_user = None;
                         }

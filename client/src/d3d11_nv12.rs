@@ -22,25 +22,23 @@ use windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext, ID3D11Query,
     ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11UnorderedAccessView,
-    ID3D11VideoContext,
-    ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
+    ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
     ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView, D3D11_BIND_CONSTANT_BUFFER,
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS,
     D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
-    D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ,
-    D3D11_MAP_WRITE, D3D11_MAP_WRITE_DISCARD, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
-    D3D11_SAMPLER_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0,
-    D3D11_SUBRESOURCE_DATA,
-    D3D11_TEX2D_SRV, D3D11_TEX2D_UAV, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV,
-    D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_UAV_DIMENSION_TEXTURE2D,
-    D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC_0,
-    D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE, D3D11_USAGE_STAGING,
-    D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CAPS,
-    D3D11_VIDEO_PROCESSOR_COLOR_SPACE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
-    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
-    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
-    D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE, D3D11_VIDEO_USAGE_OPTIMAL_QUALITY,
-    D3D11_VIDEO_USAGE_OPTIMAL_SPEED, D3D11_VPIV_DIMENSION, D3D11_VPOV_DIMENSION,
+    D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_MAP_WRITE,
+    D3D11_MAP_WRITE_DISCARD, D3D11_QUERY_DESC, D3D11_QUERY_EVENT, D3D11_SAMPLER_DESC,
+    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
+    D3D11_TEX2D_SRV, D3D11_TEX2D_UAV, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC,
+    D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_UAV_DIMENSION_TEXTURE2D, D3D11_UNORDERED_ACCESS_VIEW_DESC,
+    D3D11_UNORDERED_ACCESS_VIEW_DESC_0, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
+    D3D11_USAGE_IMMUTABLE, D3D11_USAGE_STAGING, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+    D3D11_VIDEO_PROCESSOR_CAPS, D3D11_VIDEO_PROCESSOR_COLOR_SPACE,
+    D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE,
+    D3D11_VIDEO_USAGE_OPTIMAL_QUALITY, D3D11_VIDEO_USAGE_OPTIMAL_SPEED, D3D11_VPIV_DIMENSION,
+    D3D11_VPOV_DIMENSION,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_NV12,
@@ -58,6 +56,25 @@ const E_INVALIDARG: u32 = 0x80070057;
 const NV12_RING_ENV: &str = "ASTRIX_DXGI_NV12_RING";
 const NV12_SPEED_ENV: &str = "ASTRIX_DXGI_NV12_OPTIMAL_SPEED";
 const RGB_SCALE_CS_ENV: &str = "ASTRIX_DXGI_RGB_SCALE_COMPUTE";
+const RGB_SCALE_PATH_ENV: &str = "ASTRIX_DXGI_RGB_SCALE_PATH";
+const CONVERT_TELEMETRY_LIGHT_ENV: &str = "ASTRIX_CONVERT_TELEMETRY_LIGHT";
+
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
+        .unwrap_or(false)
+}
+
+fn convert_telemetry_light_enabled() -> bool {
+    env_truthy(CONVERT_TELEMETRY_LIGHT_ENV)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RgbScalePath {
+    Compute,
+    VideoProcessor,
+    CopyOnly,
+}
 
 #[derive(Debug, Clone)]
 pub struct D3d11ConvertTextureTiming {
@@ -228,6 +245,7 @@ pub struct D3d11BgraToNv12 {
     last_output_index: AtomicU32,
     /// GPU fence for diagnosing whether submit waits on VP/CS completion.
     ready_query: ID3D11Query,
+    telemetry_light: bool,
     /// Per-frame Flush() serializes the GPU queue. Keep only a small startup window so
     /// NVENC sees the first converted surfaces without stalling forever after that.
     flush_frames_remaining: AtomicU32,
@@ -313,10 +331,13 @@ impl D3d11BgraToNv12 {
             "[d3d11_nv12] Creating converter: {}x{} → {}x{} @ {} fps",
             input_width, input_height, output_width, output_height, fps
         );
+        let telemetry_light = convert_telemetry_light_enabled();
         let startup_flush_frames = Self::startup_flush_frames();
         eprintln!(
-            "[d3d11_nv12] Flush policy: startup-only ({} frame(s))",
-            startup_flush_frames
+            "[d3d11_nv12] Flush policy: startup-only ({} frame(s)); {}={}",
+            startup_flush_frames,
+            CONVERT_TELEMETRY_LIGHT_ENV,
+            if telemetry_light { "1" } else { "0" }
         );
         let output_ring_size = Self::output_ring_size(fps);
         eprintln!(
@@ -444,6 +465,7 @@ impl D3d11BgraToNv12 {
             output_ring_cursor: AtomicU32::new(0),
             last_output_index: AtomicU32::new(0),
             ready_query,
+            telemetry_light,
             flush_frames_remaining: AtomicU32::new(startup_flush_frames),
         })
     }
@@ -695,8 +717,11 @@ impl D3d11BgraToNv12 {
                 let color_space = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
                     _bitfield: 0b0001_0100,
                 };
-                self.video_context
-                    .VideoProcessorSetStreamColorSpace(&self.processor, 0, &color_space);
+                self.video_context.VideoProcessorSetStreamColorSpace(
+                    &self.processor,
+                    0,
+                    &color_space,
+                );
                 self.video_context
                     .VideoProcessorSetOutputColorSpace(&self.processor, &color_space);
             }
@@ -714,9 +739,11 @@ impl D3d11BgraToNv12 {
             self.vp_logged_once.store(true, Ordering::Relaxed);
         }
 
-        let ctx = self.immediate_context()?;
-        unsafe {
-            ctx.End(&self.ready_query);
+        if !self.telemetry_light {
+            let ctx = self.immediate_context()?;
+            unsafe {
+                ctx.End(&self.ready_query);
+            }
         }
         self.last_output_index
             .store(output_index as u32, Ordering::Relaxed);
@@ -761,8 +788,10 @@ impl D3d11BgraToNv12 {
         let output_index = self.next_output_index();
         let output_texture = &self.output_textures[output_index];
         cs.convert(&self._device, context, input, output_texture)?;
-        unsafe {
-            context.End(&self.ready_query);
+        if !self.telemetry_light {
+            unsafe {
+                context.End(&self.ready_query);
+            }
         }
         self.last_output_index
             .store(output_index as u32, Ordering::Relaxed);
@@ -847,6 +876,7 @@ impl D3d11BgraToNv12 {
         self.output_ring_cursor.store(0, Ordering::Relaxed);
         self.last_output_index.store(0, Ordering::Relaxed);
         self.ready_query = ready_query;
+        self.telemetry_light = convert_telemetry_light_enabled();
         self.flush_frames_remaining
             .store(Self::startup_flush_frames(), Ordering::Relaxed);
 
@@ -868,6 +898,9 @@ impl D3d11BgraToNv12 {
     }
 
     pub fn poll_output_ready(&self) -> Result<bool, D3d11Nv12Error> {
+        if self.telemetry_light {
+            return Ok(true);
+        }
         let ctx = self.immediate_context()?;
         unsafe {
             match ctx.GetData(&self.ready_query, None, 0, 0) {
@@ -878,6 +911,9 @@ impl D3d11BgraToNv12 {
     }
 
     pub fn wait_output_ready(&self, timeout_ms: u32) -> Result<u64, D3d11Nv12Error> {
+        if self.telemetry_light {
+            return Ok(0);
+        }
         let ctx = self.immediate_context()?;
         let start = std::time::Instant::now();
         let deadline = start + std::time::Duration::from_millis(timeout_ms as u64);
@@ -966,6 +1002,8 @@ pub struct D3d11BgraScale {
     vp_logged_once: AtomicBool,
     vp_state_initialized: AtomicBool,
     use_cs_scale: AtomicBool,
+    copy_only: bool,
+    telemetry_light: bool,
     cs_scale: Option<D3d11BgraScaleCs>,
     output_ring_cursor: AtomicU32,
     last_output_index: AtomicU32,
@@ -996,16 +1034,56 @@ impl D3d11BgraScale {
             "[d3d11_nv12] Creating RGB scaler: {}x{} -> {}x{} @ {} fps",
             input_width, input_height, output_width, output_height, fps
         );
-        let prefer_cs_scale = std::env::var(RGB_SCALE_CS_ENV)
+        let requested_path = std::env::var(RGB_SCALE_PATH_ENV)
+            .map(|v| v.to_ascii_lowercase())
+            .unwrap_or_else(|_| "compute".to_string());
+        let legacy_prefer_cs_scale = std::env::var(RGB_SCALE_CS_ENV)
             .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
             .unwrap_or(true);
+        let path = match requested_path.as_str() {
+            "vp" | "video" | "video_processor" | "videoprocessor" => RgbScalePath::VideoProcessor,
+            "copy" | "direct" | "no-scale" | "noscale"
+                if input_width == output_width && input_height == output_height =>
+            {
+                RgbScalePath::CopyOnly
+            }
+            "copy" | "direct" | "no-scale" | "noscale" => {
+                eprintln!(
+                    "[d3d11_nv12] RGB scaler path copy/no-scale requested but dimensions differ ({}x{} -> {}x{}), using compute",
+                    input_width, input_height, output_width, output_height
+                );
+                RgbScalePath::Compute
+            }
+            "auto" | "compute" | "cs" => {
+                if legacy_prefer_cs_scale {
+                    RgbScalePath::Compute
+                } else {
+                    RgbScalePath::VideoProcessor
+                }
+            }
+            other => {
+                eprintln!(
+                    "[d3d11_nv12] unknown {}='{}', using compute",
+                    RGB_SCALE_PATH_ENV, other
+                );
+                RgbScalePath::Compute
+            }
+        };
+        let prefer_cs_scale = path == RgbScalePath::Compute;
+        let telemetry_light = convert_telemetry_light_enabled();
         let startup_flush_frames = D3d11BgraToNv12::startup_flush_frames();
         let output_ring_size = D3d11BgraToNv12::output_ring_size(fps);
         let (video_usage, video_usage_label, video_usage_env) =
             D3d11BgraToNv12::video_usage_for_fps(fps);
         eprintln!(
-            "[d3d11_nv12] RGB scaler usage: {} ({}={})",
-            video_usage_label, NV12_SPEED_ENV, video_usage_env
+            "[d3d11_nv12] RGB scaler usage: {} ({}={}, {}={}, {}={})",
+            video_usage_label,
+            NV12_SPEED_ENV,
+            video_usage_env,
+            RGB_SCALE_PATH_ENV,
+            requested_path,
+            CONVERT_TELEMETRY_LIGHT_ENV,
+            if telemetry_light { "1" } else { "0" }
         );
         let video_device: ID3D11VideoDevice =
             device.cast().map_err(|_| D3d11Nv12Error::NoVideoDevice)?;
@@ -1059,7 +1137,10 @@ impl D3d11BgraScale {
             output_format,
             prefer_cs_scale,
         )?;
-        let cs_scale = if prefer_cs_scale {
+        let cs_scale = if path == RgbScalePath::CopyOnly {
+            eprintln!("[d3d11_nv12] RGB scaler path: copy-only no-scale");
+            None
+        } else if prefer_cs_scale {
             match D3d11BgraScaleCs::new(
                 device,
                 &output_textures,
@@ -1111,6 +1192,8 @@ impl D3d11BgraScale {
             vp_logged_once: AtomicBool::new(false),
             vp_state_initialized: AtomicBool::new(false),
             use_cs_scale: AtomicBool::new(cs_scale.is_some()),
+            copy_only: path == RgbScalePath::CopyOnly,
+            telemetry_light,
             cs_scale,
             output_ring_cursor: AtomicU32::new(0),
             last_output_index: AtomicU32::new(0),
@@ -1152,53 +1235,62 @@ impl D3d11BgraScale {
             unbind_us,
             query_us,
             blt_us,
-        ) = if self.use_cs_scale.load(Ordering::Relaxed) {
-                match self.convert_cs(input) {
-                    Ok((
-                        texture,
-                        srv_us,
-                        cb_us,
-                        bind_us,
-                        bind_state_us,
-                        bind_shader_us,
-                        bind_cb_us,
-                        bind_sampler_us,
-                        bind_srv_us,
-                        bind_uav_us,
-                        dispatch_us,
-                        unbind_us,
-                        query_us,
-                    )) => (
-                        texture,
-                        0,
-                        srv_us,
-                        cb_us,
-                        bind_us,
-                        bind_state_us,
-                        bind_shader_us,
-                        bind_cb_us,
-                        bind_sampler_us,
-                        bind_srv_us,
-                        bind_uav_us,
-                        dispatch_us,
-                        unbind_us,
-                        query_us,
-                        0,
-                    ),
-                    Err(err) => {
-                        self.use_cs_scale.store(false, Ordering::Relaxed);
-                        eprintln!(
+        ) = if self.copy_only {
+            let (texture, copy_us, query_us) = self.convert_copy(input)?;
+            (
+                texture, copy_us, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, query_us, 0,
+            )
+        } else if self.use_cs_scale.load(Ordering::Relaxed) {
+            match self.convert_cs(input) {
+                Ok((
+                    texture,
+                    srv_us,
+                    cb_us,
+                    bind_us,
+                    bind_state_us,
+                    bind_shader_us,
+                    bind_cb_us,
+                    bind_sampler_us,
+                    bind_srv_us,
+                    bind_uav_us,
+                    dispatch_us,
+                    unbind_us,
+                    query_us,
+                )) => (
+                    texture,
+                    0,
+                    srv_us,
+                    cb_us,
+                    bind_us,
+                    bind_state_us,
+                    bind_shader_us,
+                    bind_cb_us,
+                    bind_sampler_us,
+                    bind_srv_us,
+                    bind_uav_us,
+                    dispatch_us,
+                    unbind_us,
+                    query_us,
+                    0,
+                ),
+                Err(err) => {
+                    self.use_cs_scale.store(false, Ordering::Relaxed);
+                    eprintln!(
                             "[d3d11_nv12] RGB scaler compute failed, falling back to VideoProcessor: {:?}",
                             err
                         );
-                        let (texture, copy_us, query_us, blt_us) = self.convert_vp(input)?;
-                        (texture, copy_us, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, query_us, blt_us)
-                    }
+                    let (texture, copy_us, query_us, blt_us) = self.convert_vp(input)?;
+                    (
+                        texture, copy_us, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, query_us, blt_us,
+                    )
                 }
-            } else {
-                let (texture, copy_us, query_us, blt_us) = self.convert_vp(input)?;
-                (texture, copy_us, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, query_us, blt_us)
-            };
+            }
+        } else {
+            let (texture, copy_us, query_us, blt_us) = self.convert_vp(input)?;
+            (
+                texture, copy_us, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, query_us, blt_us,
+            )
+        };
         let submit_us = submit_start.elapsed().as_micros() as u64;
         Ok(D3d11ConvertTextureTiming {
             texture,
@@ -1219,6 +1311,32 @@ impl D3d11BgraScale {
             query_us,
             blt_us,
         })
+    }
+
+    fn convert_copy(
+        &self,
+        input: &ID3D11Texture2D,
+    ) -> Result<(ID3D11Texture2D, u64, u64), D3d11Nv12Error> {
+        let output_index = self.next_output_index();
+        let output_texture = &self.output_textures[output_index];
+        let ctx = self.immediate_context()?;
+        let copy_start = std::time::Instant::now();
+        unsafe {
+            ctx.CopyResource(output_texture, input);
+        }
+        let copy_us = copy_start.elapsed().as_micros() as u64;
+        let query_us = if self.telemetry_light {
+            0
+        } else {
+            let query_start = std::time::Instant::now();
+            unsafe {
+                ctx.End(&self.ready_query);
+            }
+            query_start.elapsed().as_micros() as u64
+        };
+        self.last_output_index
+            .store(output_index as u32, Ordering::Relaxed);
+        Ok((output_texture.clone(), copy_us, query_us))
     }
 
     fn convert_vp(
@@ -1330,8 +1448,11 @@ impl D3d11BgraScale {
                     Some(&dst_rect),
                 );
                 let color_space = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: 0 };
-                self.video_context
-                    .VideoProcessorSetStreamColorSpace(&self.processor, 0, &color_space);
+                self.video_context.VideoProcessorSetStreamColorSpace(
+                    &self.processor,
+                    0,
+                    &color_space,
+                );
                 self.video_context
                     .VideoProcessorSetOutputColorSpace(&self.processor, &color_space);
             }
@@ -1348,11 +1469,15 @@ impl D3d11BgraScale {
             self.vp_logged_once.store(true, Ordering::Relaxed);
         }
         let ctx = self.immediate_context()?;
-        let query_start = std::time::Instant::now();
-        unsafe {
-            ctx.End(&self.ready_query);
-        }
-        let query_us = query_start.elapsed().as_micros() as u64;
+        let query_us = if self.telemetry_light {
+            0
+        } else {
+            let query_start = std::time::Instant::now();
+            unsafe {
+                ctx.End(&self.ready_query);
+            }
+            query_start.elapsed().as_micros() as u64
+        };
         self.last_output_index
             .store(output_index as u32, Ordering::Relaxed);
         Ok((output_texture.clone(), copy_us, query_us, blt_us))
@@ -1361,21 +1486,48 @@ impl D3d11BgraScale {
     fn convert_cs(
         &self,
         input: &ID3D11Texture2D,
-    ) -> Result<(ID3D11Texture2D, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64), D3d11Nv12Error> {
+    ) -> Result<
+        (
+            ID3D11Texture2D,
+            u64,
+            u64,
+            u64,
+            u64,
+            u64,
+            u64,
+            u64,
+            u64,
+            u64,
+            u64,
+            u64,
+            u64,
+        ),
+        D3d11Nv12Error,
+    > {
         let Some(cs) = self.cs_scale.as_ref() else {
-            return self
-                .convert_vp(input)
-                .map(|(texture, _, query_us, _)| (texture, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, query_us));
+            return self.convert_vp(input).map(|(texture, _, query_us, _)| {
+                (texture, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, query_us)
+            });
         };
         let ctx = self.immediate_context()?;
         let output_index = self.next_output_index();
         let output_texture = &self.output_textures[output_index];
-        let cs_timing = cs.convert(&self._device, &ctx, input, output_index)?;
-        let query_start = std::time::Instant::now();
-        unsafe {
-            ctx.End(&self.ready_query);
-        }
-        let query_us = query_start.elapsed().as_micros() as u64;
+        let cs_timing = cs.convert(
+            &self._device,
+            &ctx,
+            input,
+            output_index,
+            self.telemetry_light,
+        )?;
+        let query_us = if self.telemetry_light {
+            0
+        } else {
+            let query_start = std::time::Instant::now();
+            unsafe {
+                ctx.End(&self.ready_query);
+            }
+            query_start.elapsed().as_micros() as u64
+        };
         self.last_output_index
             .store(output_index as u32, Ordering::Relaxed);
         Ok((
@@ -1400,6 +1552,9 @@ impl D3d11BgraScale {
     }
 
     pub fn poll_output_ready(&self) -> Result<bool, D3d11Nv12Error> {
+        if self.telemetry_light {
+            return Ok(true);
+        }
         let ctx = self.immediate_context()?;
         unsafe {
             match ctx.GetData(&self.ready_query, None, 0, 0) {
@@ -1410,6 +1565,9 @@ impl D3d11BgraScale {
     }
 
     pub fn wait_output_ready(&self, timeout_ms: u32) -> Result<u64, D3d11Nv12Error> {
+        if self.telemetry_light {
+            return Ok(0);
+        }
         let ctx = self.immediate_context()?;
         let start = std::time::Instant::now();
         let deadline = start + std::time::Duration::from_millis(timeout_ms as u64);
@@ -1481,6 +1639,7 @@ struct D3d11BgraScaleCs {
     sampler: ID3D11SamplerState,
     output_uavs: Vec<ID3D11UnorderedAccessView>,
     input_srvs: parking_lot::Mutex<HashMap<usize, ID3D11ShaderResourceView>>,
+    state_bound: AtomicBool,
     input_width: u32,
     input_height: u32,
     output_width: u32,
@@ -1548,6 +1707,7 @@ impl D3d11BgraScaleCs {
             sampler,
             output_uavs,
             input_srvs: parking_lot::Mutex::new(HashMap::new()),
+            state_bound: AtomicBool::new(false),
             input_width,
             input_height,
             output_width,
@@ -1561,65 +1721,68 @@ impl D3d11BgraScaleCs {
         context: &ID3D11DeviceContext,
         input: &ID3D11Texture2D,
         output_index: usize,
+        telemetry_light: bool,
     ) -> Result<D3d11BgraScaleCsTiming, D3d11Nv12Error> {
-        let srv_start = std::time::Instant::now();
+        let srv_start = (!telemetry_light).then(std::time::Instant::now);
         let srv = self.cached_input_srv(device, input)?;
-        let srv_us = srv_start.elapsed().as_micros() as u64;
-        let mut input_desc = D3D11_TEXTURE2D_DESC::default();
-        unsafe { input.GetDesc(&mut input_desc) };
-        if input_desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM.into() {
-            return Err(D3d11Nv12Error::ComputeShaderFallback(format!(
-                "RGB compute scaler supports only BGRA input, got {:?}",
-                input_desc.Format
-            )));
-        }
-        if input_desc.Width != self.input_width || input_desc.Height != self.input_height {
-            return Err(D3d11Nv12Error::ComputeShaderFallback(format!(
-                "RGB compute scaler input size mismatch: got {}x{}, expected {}x{}",
-                input_desc.Width, input_desc.Height, self.input_width, self.input_height
-            )));
-        }
+        let srv_us = srv_start
+            .map(|start| start.elapsed().as_micros() as u64)
+            .unwrap_or(0);
         let uavs = [Some(self.output_uavs[output_index].clone())];
         let uav_counts = [u32::MAX];
         let uavs_clear = [None];
         let counts_clear = [0u32];
-        let cb_params = self.cb_params_ring[output_index % self.cb_params_ring.len()].clone();
+        let cb_params = self.cb_params_ring[0].clone();
         let cb_us = 0;
         unsafe {
-            let bind_shader_start = std::time::Instant::now();
-            context.CSSetShader(Some(&self.cs), None);
-            let bind_shader_us = bind_shader_start.elapsed().as_micros() as u64;
-            let bind_cb_start = std::time::Instant::now();
-            context.CSSetConstantBuffers(0, Some(&[Some(cb_params)]));
-            let bind_cb_us = bind_cb_start.elapsed().as_micros() as u64;
-            let bind_sampler_start = std::time::Instant::now();
-            context.CSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
-            let bind_sampler_us = bind_sampler_start.elapsed().as_micros() as u64;
+            let bind_static_state = !self.state_bound.swap(true, Ordering::Relaxed);
+            let bind_shader_start =
+                (!telemetry_light && bind_static_state).then(std::time::Instant::now);
+            let mut bind_shader_us = 0;
+            let mut bind_cb_us = 0;
+            let mut bind_sampler_us = 0;
+            if bind_static_state {
+                context.CSSetShader(Some(&self.cs), None);
+                bind_shader_us = bind_shader_start
+                    .map(|start| start.elapsed().as_micros() as u64)
+                    .unwrap_or(0);
+                let bind_cb_start = (!telemetry_light).then(std::time::Instant::now);
+                context.CSSetConstantBuffers(0, Some(&[Some(cb_params)]));
+                bind_cb_us = bind_cb_start
+                    .map(|start| start.elapsed().as_micros() as u64)
+                    .unwrap_or(0);
+                let bind_sampler_start = (!telemetry_light).then(std::time::Instant::now);
+                context.CSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+                bind_sampler_us = bind_sampler_start
+                    .map(|start| start.elapsed().as_micros() as u64)
+                    .unwrap_or(0);
+            }
             let bind_state_us = bind_shader_us
                 .saturating_add(bind_cb_us)
                 .saturating_add(bind_sampler_us);
-            let bind_srv_start = std::time::Instant::now();
+            let bind_srv_start = (!telemetry_light).then(std::time::Instant::now);
             context.CSSetShaderResources(0, Some(&[Some(srv)]));
-            let bind_srv_us = bind_srv_start.elapsed().as_micros() as u64;
-            let bind_uav_start = std::time::Instant::now();
-            context.CSSetUnorderedAccessViews(
-                0,
-                1,
-                Some(uavs.as_ptr()),
-                Some(uav_counts.as_ptr()),
-            );
-            let bind_uav_us = bind_uav_start.elapsed().as_micros() as u64;
+            let bind_srv_us = bind_srv_start
+                .map(|start| start.elapsed().as_micros() as u64)
+                .unwrap_or(0);
+            let bind_uav_start = (!telemetry_light).then(std::time::Instant::now);
+            context.CSSetUnorderedAccessViews(0, 1, Some(uavs.as_ptr()), Some(uav_counts.as_ptr()));
+            let bind_uav_us = bind_uav_start
+                .map(|start| start.elapsed().as_micros() as u64)
+                .unwrap_or(0);
             let bind_us = bind_state_us
                 .saturating_add(bind_srv_us)
                 .saturating_add(bind_uav_us);
-            let dispatch_start = std::time::Instant::now();
+            let dispatch_start = (!telemetry_light).then(std::time::Instant::now);
             context.Dispatch(
                 (self.output_width + 15) / 16,
                 (self.output_height + 15) / 16,
                 1,
             );
-            let dispatch_us = dispatch_start.elapsed().as_micros() as u64;
-            let unbind_start = std::time::Instant::now();
+            let dispatch_us = dispatch_start
+                .map(|start| start.elapsed().as_micros() as u64)
+                .unwrap_or(0);
+            let unbind_start = (!telemetry_light).then(std::time::Instant::now);
             context.CSSetUnorderedAccessViews(
                 0,
                 1,
@@ -1627,9 +1790,9 @@ impl D3d11BgraScaleCs {
                 Some(counts_clear.as_ptr()),
             );
             context.CSSetShaderResources(0, Some(&[None]));
-            context.CSSetSamplers(0, Some(&[None]));
-            context.CSSetShader(None, None);
-            let unbind_us = unbind_start.elapsed().as_micros() as u64;
+            let unbind_us = unbind_start
+                .map(|start| start.elapsed().as_micros() as u64)
+                .unwrap_or(0);
             return Ok(D3d11BgraScaleCsTiming {
                 srv_us,
                 cb_us,
@@ -1654,6 +1817,20 @@ impl D3d11BgraScaleCs {
         let key = texture.as_raw() as usize;
         if let Some(view) = self.input_srvs.lock().get(&key).cloned() {
             return Ok(view);
+        }
+        let mut input_desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { texture.GetDesc(&mut input_desc) };
+        if input_desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM.into() {
+            return Err(D3d11Nv12Error::ComputeShaderFallback(format!(
+                "RGB compute scaler supports only BGRA input, got {:?}",
+                input_desc.Format
+            )));
+        }
+        if input_desc.Width != self.input_width || input_desc.Height != self.input_height {
+            return Err(D3d11Nv12Error::ComputeShaderFallback(format!(
+                "RGB compute scaler input size mismatch: got {}x{}, expected {}x{}",
+                input_desc.Width, input_desc.Height, self.input_width, self.input_height
+            )));
         }
         let view = create_srv_for_texture(device, texture)?;
         self.input_srvs.lock().insert(key, view.clone());
@@ -2355,8 +2532,7 @@ fn create_rgb_texture(
     format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
     allow_uav: bool,
 ) -> Result<ID3D11Texture2D, D3d11Nv12Error> {
-    let mut bind_flags =
-        D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32;
+    let mut bind_flags = D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32;
     if allow_uav {
         bind_flags |= D3D11_BIND_UNORDERED_ACCESS.0 as u32;
     }
